@@ -61,6 +61,7 @@ The initial product includes all currently planned functionality.
 * Contribution history
 * "I parked here" verification
 * Basic moderation
+* Moderation dashboard (photo/contribution review queue)
 * Privacy/data-subject functionality
 * Account deletion/anonymization
 * Personal-data export
@@ -293,9 +294,11 @@ The implementation plan MUST document:
 * PostGIS indexes;
 * transaction boundaries.
 
-All timestamps MUST be stored consistently, preferably as UTC timestamps.
+Event timestamps (creation, update, verification, review, and similar point-in-time values) MUST be stored consistently as UTC timestamps.
 
-User-facing dates/times SHOULD be rendered according to the relevant location/user timezone.
+User-facing event timestamps SHOULD be rendered in the viewer's timezone.
+
+Opening hours are NOT event timestamps and MUST NOT be stored as UTC — see section 29.
 
 ---
 
@@ -640,6 +643,13 @@ Authorization MUST be enforced in the application layer rather than relying excl
 
 The implementation SHOULD use deny-by-default authorization.
 
+Role assignment MUST be an explicit, audited operation:
+
+* The initial ADMIN account is seeded (for example via an idempotent CLI command or migration driven by an environment-provided credential), never created through an unauthenticated public endpoint.
+* ADMIN users MAY grant and revoke the MODERATOR and ADMIN roles on other accounts.
+* Role changes MUST be denied by default, MUST require an ADMIN principal, and MUST create an audit event (see section 47).
+* Role changes MUST NOT be possible through self-service account settings.
+
 ---
 
 # 20. Account lifecycle
@@ -753,6 +763,7 @@ Each location MUST support:
 
 * name;
 * coordinates;
+* timezone (IANA identifier, derived from coordinates; see section 29);
 * address;
 * description;
 * parking type;
@@ -879,7 +890,13 @@ The model SHOULD support:
 * unknown hours;
 * 24-hour operation.
 
-Opening hours MUST be associated with the parking location's relevant timezone.
+Opening hours MUST be associated with the parking location's relevant timezone (the timezone of the physical location, NOT the timezone of the contributor's browser).
+
+Opening hours MUST be stored as wall-clock time ranges together with the location's IANA timezone identifier. They MUST NOT be converted to UTC: a wall-clock schedule ("opens at 07:00 every day") is fixed in local time and shifts relative to UTC across DST transitions.
+
+The location's timezone SHOULD be derived from its coordinates (latitude/longitude → IANA timezone) and MAY be confirmable/overridable by the contributor. The "currently open" computation MUST convert the current UTC instant into the location's timezone and compare it against the stored wall-clock ranges.
+
+Opening hours SHOULD be displayed in the location's timezone (with that timezone made visible to the viewer), not silently shifted into the viewer's timezone.
 
 The implementation should avoid storing opening hours as opaque free-form text when structured data is possible.
 
@@ -925,6 +942,18 @@ Moderate
  ↓
 Publish
 ```
+
+Photos MUST have an explicit moderation lifecycle:
+
+```text
+PENDING_REVIEW
+      ↓
+APPROVED
+      ↓
+REJECTED
+```
+
+Newly uploaded photos start in `PENDING_REVIEW` and are NOT publicly visible until `APPROVED`. Moderators/administrators review the moderation queue (see section 2 "Moderation dashboard") to approve or reject photos. Approved photos MAY later be hidden again via moderation (see section 44).
 
 The original upload SHOULD NOT be publicly accessible by default.
 
@@ -3057,3 +3086,21 @@ Provider-specific
 The application should remain a relatively small, understandable Rust web application.
 
 Do not introduce infrastructure, frameworks, abstractions or services without a concrete requirement or measurable benefit.
+
+---
+
+# 116. Resolved decisions (addendum)
+
+The following decisions were resolved during requirements review. They are the single source of truth for these points and are reflected in the sections noted.
+
+1. **Initial data source** — There is NO seed/imported parking dataset. Production starts empty and is populated entirely by user contributions. Consequence: search-over-empty MUST degrade gracefully with an explicit "no results near here — add the first parking location" call-to-action. For development/testing milestones, temporary mock data MAY be introduced; every such dataset MUST be tracked in `PLAN.md`'s ledger and removed or gated behind a dev flag before production. (See sections 2 and 21.)
+
+2. **Photo moderation** — Photos are reviewed by moderators/administrators through a moderation dashboard before publication. Photos therefore have a `PENDING_REVIEW → APPROVED → REJECTED` lifecycle and are not publicly visible until approved. (See sections 2 and 30.)
+
+3. **Role bootstrap and assignment** — The initial ADMIN account is seeded (CLI command or idempotent migration). ADMIN users grant/revoke MODERATOR and ADMIN roles. Role changes are audited and deny-by-default. (See section 19.)
+
+4. **Timezone handling** — Event timestamps are stored as UTC and rendered in the viewer's timezone. Opening hours are stored as wall-clock ranges with the parking location's IANA timezone (derived from coordinates), never converted to UTC, and "open now" is computed in the location's timezone. (See sections 8, 24 and 29.)
+
+5. **Expected scale/volume** — Not yet defined. Performance targets in section 99 remain the operating constraints; volume assumptions are left TBD and MUST be revisited before capacity planning.
+
+6. **HTMX version** — HTMX 4 is the target (https://four.htmx.org/docs/whats-new-in-htmx-4). Note that htmx 4 swaps `4xx`/`5xx` error responses by default; error-handling fragments MUST be designed accordingly (see section 85).
