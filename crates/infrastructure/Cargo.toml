@@ -1,0 +1,20 @@
+[package]
+name = "bikenest-infrastructure"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+bikenest-application = { version = "0.1.0", path = "../application" }
+bikenest-domain = { version = "0.1.0", path = "../domain" }
+chrono = "0.4"
+chrono-tz = "0.10"
+hmac = "0.13.0"
+sha2 = "0.11.0"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "migrate", "chrono"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs"] }
+tracing = "0.1"
+
+[dev-dependencies]
+bikenest-test-support = { path = "../test-support" }

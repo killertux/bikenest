@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BikeNest UI Kit — Cards &amp; tables</title>
+<link rel="stylesheet" href="../../../colors_and_type.css">
+<style>
+  body{font-family:var(--font-body)}
+  .wrap{max-width:72rem;margin:0 auto;padding:40px 32px}
+  h2{margin:40px 0 16px}
+  .demo{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-card);padding:24px}
+  .spot{overflow:hidden}
+  .spot img{display:block;width:100%;aspect-ratio:3/2;object-fit:cover}
+  .spot .body{padding:16px 20px 20px}
+  .spot h3{margin:0 0 4px;font-size:18px}
+  .meta{font-size:13px;color:var(--muted);margin:0}
+  .tile-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+  .icon-tile{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;background:var(--accent-soft);color:var(--accent-strong);margin-bottom:12px}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:10px 16px;border-bottom:1px solid var(--border);background:oklch(20% 0.02 240 / 0.02)}
+  td{padding:12px 16px;border-bottom:1px solid var(--border)}
+  tr:last-child td{border-bottom:none}
+  .mono{font-family:var(--font-mono);font-size:12.5px;color:var(--muted)}
+  .btn-sm2{height:36px;padding:0 12px;font-size:13px;display:inline-flex;align-items:center}
+  .decision{border-left:none}
+  .btn-xs{height:32px;padding:0 10px;font-size:12px}
+</style>
+</head>
+<body data-od-id="kit-cards">
+<main class="wrap">
+  <a href="../index.html" style="color:var(--accent-strong);font-size:14px;text-decoration:none;font-weight:600">← Overview</a>
+  <h1 class="type-title" style="margin:12px 0 8px">Cards &amp; tables</h1>
+  <p class="type-body" style="color:var(--muted);margin:0">Parking spot cards, moderation decision cards, and queue tables — shapes lifted from p3, m2 and m3.</p>
+
+  <h2 class="type-section">Parking spot card</h2>
+  <div class="tile-row" data-od-id="spot-cards">
+    <article class="card spot" data-od-id="spot-card-market">
+      <div style="position:relative">
+        <img src="../../../assets/imagery/street-rack-mint-bike.jpg" width="1200" height="800" alt="Street rack with a mint bike">
+        <span style="position:absolute;left:12px;top:12px;display:inline-flex;align-items:center;gap:6px;border-radius:9999px;background:oklch(18% 0.015 240 / 0.78);color:#fff;padding:4px 10px;font-size:11px;font-weight:600">Fresh · 2 days</span>
+      </div>
+      <div class="body">
+        <h3>Market Square shelter</h3>
+        <p class="meta">Covered · 12 spaces · 0.3 km away</p>
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <span class="badge badge-fresh">Fresh</span><span class="badge badge-accent">Secure</span>
+        </div>
+      </div>
+    </article>
+    <article class="card spot" data-od-id="spot-card-library">
+      <div style="position:relative">
+        <img src="../../../assets/imagery/square-bike-rows.jpg" width="795" height="1200" alt="Indoor bike parking rows">
+        <span style="position:absolute;left:12px;top:12px;display:inline-flex;align-items:center;gap:6px;border-radius:9999px;background:oklch(18% 0.015 240 / 0.78);color:#fff;padding:4px 10px;font-size:11px;font-weight:600">Verified 8 months ago</span>
+      </div>
+      <div class="body">
+        <h3>Station indoor room</h3>
+        <p class="meta">Indoor · 40 spaces · 1.1 km away</p>
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <span class="badge" style="background:oklch(55% 0.16 35 / 0.10);color:var(--stale)">Stale</span>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <h2 class="type-section">Moderation decision card</h2>
+  <div class="card demo decision" style="max-width:520px" data-od-id="decision-card">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <div>
+        <p class="type-card" style="margin:0">Photo · Market Square shelter</p>
+        <p class="meta" style="margin:4px 0 0">Submitted 08:42 · contributor <span class="mono">u-2231</span></p>
+      </div>
+      <span class="badge badge-aging">Open</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn-primary btn-xs" style="flex:1">Approve</button>
+      <button class="btn-danger btn-xs" style="flex:1">Reject</button>
+      <button class="btn-secondary btn-xs" style="flex:1">Ask for retake</button>
+    </div>
+  </div>
+
+  <h2 class="type-section">Queue table</h2>
+  <div class="card" style="overflow:hidden" data-od-id="queue-table">
+    <table>
+      <thead><tr><th>Report</th><th>Spot</th><th>Reason</th><th>Filed</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        <tr><td class="mono">RPT-1042</td><td>Library railing</td><td>Rack removed</td><td class="mono">Today 09:12</td><td><span class="badge badge-aging">Open</span></td><td style="text-align:right"><button class="btn-secondary btn-sm2">Review</button></td></tr>
+        <tr><td class="mono">RPT-1041</td><td>Market Square shelter</td><td>Full at peak times</td><td class="mono">Today 08:55</td><td><span class="badge badge-accent">Under review</span></td><td style="text-align:right"><button class="btn-secondary btn-sm2">Review</button></td></tr>
+        <tr><td class="mono">RPT-1039</td><td>Canal towpath posts</td><td>Spam link in notes</td><td class="mono">Yesterday</td><td><span class="badge badge-fresh">Resolved</span></td><td style="text-align:right"><button class="btn-secondary btn-sm2">View log</button></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 class="type-section">Icon tiles</h2>
+  <div class="tile-row" data-od-id="icon-tiles">
+    <div class="card" style="padding:24px"><span class="icon-tile"><svg viewBox="0 0 24 24" style="width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></svg></span><p class="type-card" style="margin:0">Moderation overview</p><p class="meta" style="margin:6px 0 0">5 items pending review</p></div>
+    <div class="card" style="padding:24px"><span class="icon-tile"><svg viewBox="0 0 24 24" style="width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-4-4-8 10"/></svg></span><p class="type-card" style="margin:0">Photo queue</p><p class="meta" style="margin:6px 0 0">Oldest submission: 3 days</p></div>
+  </div>
+</main>
+</body>
+</html>

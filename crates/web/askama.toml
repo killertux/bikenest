@@ -1,0 +1,3 @@
+[general]
+# Templates live at the workspace root, shared across potential frontends.
+dirs = ["../../templates"]

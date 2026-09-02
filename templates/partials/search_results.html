@@ -1,0 +1,40 @@
+<script type="application/json" id="search-data">{{ results.map_json|safe }}</script>
+
+{% if let Some(err) = results.error %}
+  <div class="rounded-2xl border border-border bg-surface p-8 text-center text-muted">{{ err }}</div>
+{% else %}
+  {% if results.items.is_empty() %}
+    <!-- Empty state (P2) -->
+    <div class="rounded-2xl border border-dashed border-border bg-surface px-6 py-14 text-center">
+      <span class="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-accent/10 text-accent-strong">
+        <svg aria-hidden="true" class="h-6 w-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg>
+      </span>
+      <h2 class="font-display mt-4 text-xl font-semibold">{{ tr.t("search.empty.title") }}</h2>
+      <p class="mx-auto mt-2 max-w-sm text-[15px] text-muted">{{ tr.t("search.empty.body") }}</p>
+      <div class="mt-6 flex flex-wrap items-center justify-center gap-3">
+        <a href="/search" class="rounded-xl border border-border bg-surface px-5 py-2.5 text-sm font-medium text-fg transition-colors hover:border-fg">{{ tr.t("search.filters.clear") }}</a>
+      </div>
+    </div>
+  {% else %}
+    <div class="space-y-4">
+      {% for item in results.items %}
+        {% include "components/parking_card.html" %}
+      {% endfor %}
+    </div>
+
+    {% if let Some(url) = results.cursor_url %}
+      <nav class="mt-7 flex items-center justify-end" aria-label="Results pages">
+        <button
+          hx-get="{{ url }}"
+          hx-target="#results"
+          hx-swap="innerHTML"
+          hx-push-url="true"
+          class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-4 py-2 text-sm font-medium text-fg transition-colors hover:border-fg"
+        >
+          {{ tr.t("search.next") }}
+          <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
+        </button>
+      </nav>
+    {% endif %}
+  {% endif %}
+{% endif %}

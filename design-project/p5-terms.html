@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Terms of service · BikeNest</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    /* Design tokens — direction: human-approachable. Raw values live only here. */
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg:      'oklch(98% 0.004 240)',
+            surface: 'oklch(100% 0 0)',
+            fg:      'oklch(20% 0.02 240)',
+            muted:   'oklch(50% 0.018 240)',
+            line:    'oklch(90% 0.006 240)',
+            accent:  'oklch(56% 0.12 170)',
+            'accent-strong': 'oklch(45% 0.11 170)',
+            'accent-dark':   'oklch(40% 0.10 170)',
+            'accent-soft':   'oklch(56% 0.12 170 / 0.12)',
+            'scrim': 'oklch(18% 0.015 240)',
+            fresh:   'oklch(58% 0.13 155)',
+            aging:   'oklch(68% 0.12 75)',
+            stale:   'oklch(55% 0.16 35)',
+          },
+          fontFamily: {
+            display: ['"Avenir Next"', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
+            body:    ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', 'system-ui', 'sans-serif'],
+            mono:    ['ui-monospace', '"SF Mono"', 'Menlo', 'monospace'],
+          },
+          boxShadow: {
+            card: '0 1px 2px oklch(20% 0.02 240 / 0.06), 0 8px 24px oklch(20% 0.02 240 / 0.08)',
+            pop:  '0 2px 6px oklch(20% 0.02 240 / 0.10), 0 16px 40px oklch(20% 0.02 240 / 0.16)',
+          },
+          maxWidth: { shell: '72rem' },
+        }
+      }
+    }
+  </script>
+  <style type="text/tailwindcss">
+    @layer base {
+      html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+      body { text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
+      p { text-wrap: pretty; }
+      h1, h2, h3 { text-wrap: balance; }
+      :focus-visible { outline: 2px solid oklch(45% 0.11 170); outline-offset: 2px; border-radius: 4px; }
+    }
+  </style>
+</head>
+<body class="bg-bg font-body text-fg">
+
+  <!-- ============ Header (global layout, UI_DESIGN §Global) ============ -->
+  <header id="top" data-od-id="topnav" class="sticky top-0 z-40 border-b border-line bg-[oklch(98%_0.004_240_/_0.9)] backdrop-blur">
+    <div class="mx-auto flex h-16 max-w-shell items-center justify-between gap-6 px-5 lg:px-8">
+      <a href="p1-landing.html" class="flex items-center gap-2.5" aria-label="BikeNest — home">
+        <span class="grid h-9 w-9 place-items-center rounded-xl bg-accent text-white">
+          <svg aria-hidden="true" class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18.5" cy="17.5" r="3.5"/><circle cx="5.5" cy="17.5" r="3.5"/><circle cx="15" cy="5" r="1"/><path d="M12 17.5V14l-3-3 4-3 2 3h2"/></svg>
+        </span>
+        <span class="font-display text-lg font-bold tracking-tight">BikeNest</span>
+      </a>
+
+      <nav class="hidden items-center gap-7 md:flex" aria-label="Primary">
+        <a href="p1-landing.html#how-it-works" class="text-sm text-muted hover:text-fg">How it works</a>
+        <a href="p1-landing.html#featured" class="text-sm text-muted hover:text-fg">Parking spots</a>
+        <a href="p1-landing.html#community" class="text-sm text-muted hover:text-fg">Community</a>
+      </nav>
+
+      <div class="hidden items-center gap-4 md:flex">
+        <div class="flex items-center rounded-lg border border-line p-0.5 font-mono text-xs" role="group" aria-label="Language">
+          <a href="#" lang="pt-BR" class="rounded-md px-2 py-1 text-muted hover:text-fg" aria-label="Português (Brasil)">PT</a>
+          <a href="#" lang="en" aria-current="true" class="rounded-md bg-fg px-2 py-1 font-medium text-bg" aria-label="English">EN</a>
+        </div>
+        <a href="#" class="rounded-lg px-3 py-2 text-sm font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]">Log in</a>
+        <a href="#" class="rounded-lg bg-accent-strong px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-dark">Sign up</a>
+      </div>
+
+      <button id="menu-btn" class="grid h-10 w-10 place-items-center rounded-lg text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)] md:hidden" aria-expanded="false" aria-controls="mobile-menu" aria-label="Open menu">
+        <svg aria-hidden="true" class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16"/><path d="M4 12h16"/><path d="M4 19h16"/></svg>
+      </button>
+    </div>
+
+    <!-- Mobile menu -->
+    <div id="mobile-menu" class="hidden border-t border-line bg-surface px-5 py-4 md:hidden">
+      <nav class="flex flex-col gap-1" aria-label="Mobile">
+        <a href="p1-landing.html#how-it-works" class="rounded-lg px-3 py-2.5 text-sm hover:bg-[oklch(20%_0.02_240_/_0.05)]">How it works</a>
+        <a href="p1-landing.html#featured" class="rounded-lg px-3 py-2.5 text-sm hover:bg-[oklch(20%_0.02_240_/_0.05)]">Parking spots</a>
+        <a href="p1-landing.html#community" class="rounded-lg px-3 py-2.5 text-sm hover:bg-[oklch(20%_0.02_240_/_0.05)]">Community</a>
+        <hr class="my-2 border-line" />
+        <a href="#" class="rounded-lg px-3 py-2.5 text-sm hover:bg-[oklch(20%_0.02_240_/_0.05)]">Log in</a>
+        <a href="#" class="rounded-lg bg-accent-strong px-3 py-2.5 text-center text-sm font-medium text-white hover:bg-accent-dark">Sign up</a>
+        <div class="mt-2 flex items-center gap-2 px-3">
+          <svg aria-hidden="true" class="h-4 w-4 text-muted" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
+          <a href="#" lang="pt-BR" class="font-mono text-xs text-muted">PT-BR</a>
+          <span class="font-mono text-xs text-muted">/</span>
+          <span class="font-mono text-xs font-medium text-fg">EN</span>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <main id="content">
+
+    <!-- ============ Page header: breadcrumb, title, version + effective date (P5) ============ -->
+    <section data-od-id="page-header" class="border-b border-line bg-surface">
+      <div class="mx-auto max-w-shell px-5 pb-10 pt-8 lg:px-8">
+        <nav class="mb-5 flex items-center gap-2 font-mono text-xs text-muted" aria-label="Breadcrumb">
+          <a href="p1-landing.html" class="inline-flex items-center gap-1.5 hover:text-fg">
+            <svg aria-hidden="true" class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+            Home
+          </a>
+          <span aria-hidden="true">/</span>
+          <span class="text-fg" aria-current="page">Terms of service</span>
+        </nav>
+
+        <div class="flex flex-wrap items-end justify-between gap-x-8 gap-y-4">
+          <div class="max-w-2xl">
+            <h1 class="font-display text-3xl font-bold tracking-tight sm:text-4xl">Terms of service</h1>
+            <p class="mt-3 text-base leading-relaxed text-muted">
+              The agreement between you and BikeNest when you search, contribute or maintain an account. Written to be read, not just accepted.
+            </p>
+          </div>
+          <dl class="flex shrink-0 gap-6 font-mono text-xs">
+            <div>
+              <dt class="text-muted">Version</dt>
+              <dd class="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg px-2.5 py-1.5 font-medium text-fg">
+                <svg aria-hidden="true" class="h-3.5 w-3.5 text-accent-strong" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.78 4.78 4 4 0 0 1-6.74 0 4 4 0 0 1-4.78-4.78 4 4 0 0 1 0-6.74Z"/><path d="m9 12 2 2 4-4"/></svg>
+                0.2 — draft
+              </dd>
+            </div>
+            <div>
+              <dt class="text-muted">Effective date</dt>
+              <dd class="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg px-2.5 py-1.5 font-medium text-fg">
+                <svg aria-hidden="true" class="h-3.5 w-3.5 text-muted" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+                TBD at launch
+              </dd>
+            </div>
+          </dl>
+        </div>
+
+        <p class="mt-6 flex max-w-3xl items-start gap-2.5 rounded-xl border border-line bg-bg px-4 py-3 text-sm leading-relaxed text-muted">
+          <svg aria-hidden="true" class="mt-0.5 h-4 w-4 shrink-0 text-aging" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          <span><strong class="font-medium text-fg">Draft for design review.</strong> This prototype uses structure and sample wording that follow the product's requirements. Final legal text is supplied by legal counsel before launch, and this page is versioned so the system can always tell which version a user accepted.</span>
+        </p>
+      </div>
+    </section>
+
+    <!-- ============ Body: sticky TOC + article ============ -->
+    <div class="mx-auto max-w-shell px-5 py-12 lg:px-8">
+      <div class="lg:grid lg:grid-cols-[16rem_minmax(0,1fr)] lg:gap-14">
+
+        <!-- TOC (desktop: sticky; mobile: collapsible) -->
+        <aside data-od-id="toc" class="mb-10 lg:mb-0">
+          <div class="lg:sticky lg:top-24">
+            <p class="mb-3 font-mono text-xs uppercase tracking-[0.14em] text-muted">On this page</p>
+            <nav id="toc-desktop" class="hidden border-l border-line text-sm lg:block" aria-label="Terms sections">
+              <a href="#agreement" class="toc-link -ml-px block border-l-2 border-transparent py-1.5 pl-4 text-muted hover:text-fg">The agreement</a>
+              <a href="#accounts" class="toc-link -ml-px block border-l-2 border-transparent py-1.5 pl-4 text-muted hover:text-fg">Accounts</a>
+              <a href="#contributions" class="toc-link -ml-px block border-l-2 border-transparent py-1.5 pl-4 text-muted hover:text-fg">Contributions</a>
+              <a href="#verification" class="toc-link -ml-px block border-l-2 border-transparent py-1.5 pl-4 text-muted hover:text-fg">Verification &amp; freshness</a>
+              <a href="#acceptable-use" class="toc-link -ml-px block border-l-2 border-transparent py-1.5 pl-4 text-muted hover:text-fg">Acceptable use</a>
+              <a href="#moderation" class="toc-link -ml-px block border-l-2 border-transparent py-1.5 pl-4 text-muted hover:text-fg">Moderation &amp; suspension</a>
+              <a href="#liability" class="toc-link -ml-px block border-l-2 border-transparent py-1.5 pl-4 text-muted hover:text-fg">Disclaimers &amp; liability</a>
+              <a href="#general" class="toc-link -ml-px block border-l-2 border-transparent py-1.5 pl-4 text-muted hover:text-fg">General terms</a>
+              <a href="#changes" class="toc-link -ml-px block border-l-2 border-transparent py-1.5 pl-4 text-muted hover:text-fg">Changes &amp; history</a>
+            </nav>
+            <details class="rounded-xl border border-line bg-surface px-4 py-3 lg:hidden">
+              <summary class="cursor-pointer text-sm font-medium">Terms sections</summary>
+              <nav class="mt-3 flex flex-col gap-1 text-sm" aria-label="Terms sections (mobile)">
+                <a href="#agreement" class="py-1 text-muted hover:text-fg">The agreement</a>
+                <a href="#accounts" class="py-1 text-muted hover:text-fg">Accounts</a>
+                <a href="#contributions" class="py-1 text-muted hover:text-fg">Contributions</a>
+                <a href="#verification" class="py-1 text-muted hover:text-fg">Verification &amp; freshness</a>
+                <a href="#acceptable-use" class="py-1 text-muted hover:text-fg">Acceptable use</a>
+                <a href="#moderation" class="py-1 text-muted hover:text-fg">Moderation &amp; suspension</a>
+                <a href="#liability" class="py-1 text-muted hover:text-fg">Disclaimers &amp; liability</a>
+                <a href="#general" class="py-1 text-muted hover:text-fg">General terms</a>
+                <a href="#changes" class="py-1 text-muted hover:text-fg">Changes &amp; history</a>
+              </nav>
+            </details>
+          </div>
+        </aside>
+
+        <!-- Article -->
+        <article class="max-w-3xl">
+
+          <!-- §1 Agreement -->
+          <section id="agreement" data-od-id="sec-agreement" class="scroll-mt-24 border-b border-line pb-10">
+            <h2 class="font-display text-xl font-bold tracking-tight">1. The agreement</h2>
+            <div class="mt-4 space-y-4 text-[15px] leading-relaxed text-muted">
+              <p>These terms are an agreement between you and BikeNest, operated by <span class="text-fg">[Legal entity — to be defined]</span>. They govern your use of the BikeNest website and application, which together provide a community-maintained map of bicycle parking.</p>
+              <p>By creating an account or contributing content, you accept these terms. If you use BikeNest without an account, only the sections that apply to anonymous use (searching, viewing locations, this agreement generally) bind you.</p>
+              <p>BikeNest is also governed by our <a href="p4-privacy.html" class="font-medium text-accent-strong underline decoration-line underline-offset-2 hover:decoration-accent-strong">privacy policy</a> and <a href="p6-cookies.html" class="font-medium text-accent-strong underline decoration-line underline-offset-2 hover:decoration-accent-strong">cookie policy</a>, which explain how we handle personal data.</p>
+            </div>
+          </section>
+
+          <!-- §2 Accounts -->
+          <section id="accounts" data-od-id="sec-accounts" class="scroll-mt-24 border-b border-line py-10">
+            <h2 class="font-display text-xl font-bold tracking-tight">2. Accounts</h2>
+            <div class="mt-4 space-y-4 text-[15px] leading-relaxed text-muted">
+              <p>An account requires an email address and a password. You are responsible for keeping your credentials confidential and for activity that happens under your account. If you suspect unauthorized access, change your password immediately and contact us — sessions can be invalidated remotely.</p>
+              <p>You must give accurate information in your account profile and in any report or verification you submit. One person may hold one primary account; creating accounts to evade restrictions or to amplify verification signals is not allowed.</p>
+              <p>You can delete your account at any time from your account settings. Deletion removes your identity from the service; your past contributions remain as anonymous community content so that parking data stays useful to other cyclists.</p>
+            </div>
+          </section>
+
+          <!-- §3 Contributions -->
+          <section id="contributions" data-od-id="sec-contributions" class="scroll-mt-24 border-b border-line py-10">
+            <h2 class="font-display text-xl font-bold tracking-tight">3. Contributions</h2>
+            <div class="mt-4 space-y-4 text-[15px] leading-relaxed text-muted">
+              <p>Contributions include adding or editing parking locations, reviews, photos and verification signals such as "I parked here". You keep the rights to what you create. By contributing, you grant BikeNest a licence to store, adapt, display and distribute that content as part of the service — for example, resizing a photo or showing a review on a location page.</p>
+              <p>You confirm that you have the right to contribute what you submit, that photos you upload were taken by you and do not identify bystanders unnecessarily, and that information you add about a parking location is accurate to the best of your knowledge at the time you add it.</p>
+              <p>Contributions are reviewed before they become publicly visible, and remain subject to moderation afterwards. We may edit for clarity, hide or remove content that breaks these terms, and invalidate location data that no longer describes a real parking option.</p>
+            </div>
+          </section>
+
+          <!-- §4 Verification & freshness -->
+          <section id="verification" data-od-id="sec-verification" class="scroll-mt-24 border-b border-line py-10">
+            <h2 class="font-display text-xl font-bold tracking-tight">4. Verification &amp; freshness</h2>
+            <div class="mt-4 space-y-4 text-[15px] leading-relaxed text-muted">
+              <p>Much of the information on BikeNest comes from cyclists, not from the businesses or public bodies that operate parking. We label it accordingly:</p>
+              <ul class="space-y-2.5 pl-5" style="list-style: disc;">
+                <li><strong class="font-medium text-fg">"Verified" means a community signal.</strong> It records that users recently confirmed a detail — a parking type, a security feature, that they parked there. It is not an inspection by BikeNest and not a statement about how safe a location is.</li>
+                <li><strong class="font-medium text-fg">Freshness is a timestamp, not a promise.</strong> "Verified 2 days ago" tells you when information was last confirmed. Categories such as Fresh, Aging or Stale are product defaults for reading older data; they are not claims about factual validity today.</li>
+                <li><strong class="font-medium text-fg">Check before you rely on a spot.</strong> Openings, staffing and security can change at any time. BikeNest does not guarantee that a listed location exists, is open, is free or is secure when you arrive.</li>
+              </ul>
+              <p>Aggregated verification counts never identify individual users, and individual parking histories are never public. Details are in the <a href="p4-privacy.html" class="font-medium text-accent-strong underline decoration-line underline-offset-2 hover:decoration-accent-strong">privacy policy</a>.</p>
+            </div>
+          </section>
+
+          <!-- §5 Acceptable use -->
+          <section id="acceptable-use" data-od-id="sec-acceptable-use" class="scroll-mt-24 border-b border-line py-10">
+            <h2 class="font-display text-xl font-bold tracking-tight">5. Acceptable use</h2>
+            <div class="mt-4 space-y-4 text-[15px] leading-relaxed text-muted">
+              <p>You agree not to:</p>
+              <ul class="space-y-2.5 pl-5" style="list-style: disc;">
+                <li>add, verify or report information you know to be false, or submit verification signals for locations you have not used;</li>
+                <li>use the service to harass other contributors, or upload photos or reviews whose purpose is to identify or demean individuals;</li>
+                <li>scrape, bulk-download or reuse the dataset in ways that violate the privacy commitments described in the privacy policy — particularly attempts to reconstruct individuals' parking histories or identities;</li>
+                <li>interfere with the service, circumvent rate limits or abuse-prevention measures, or access data through undocumented interfaces;</li>
+                <li>use automated systems to create accounts or generate contributions.</li>
+              </ul>
+              <p>Reports submitted through the report feature must be made in good faith. Deliberately false reports waste moderator time and can hide useful parking from other cyclists.</p>
+            </div>
+          </section>
+
+          <!-- §6 Moderation & suspension -->
+          <section id="moderation" data-od-id="sec-moderation" class="scroll-mt-24 border-b border-line py-10">
+            <h2 class="font-display text-xl font-bold tracking-tight">6. Moderation &amp; suspension</h2>
+            <div class="mt-4 space-y-4 text-[15px] leading-relaxed text-muted">
+              <p>Moderators review reports and proposed changes, hide inappropriate reviews and photos, invalidate locations that no longer exist, and suspend accounts where authorized. Moderation actions are recorded in an audit trail that moderators cannot silently alter.</p>
+              <p>If your contribution is hidden or your account is suspended, we will tell you which rule was applied where practical. You can contest a decision by replying to the notification or contacting <span class="text-fg">[moderation contact — to be defined]</span>; contests are reviewed by a person, and content is restored where a decision was wrong.</p>
+            </div>
+          </section>
+
+          <!-- §7 Liability -->
+          <section id="liability" data-od-id="sec-liability" class="scroll-mt-24 border-b border-line py-10">
+            <h2 class="font-display text-xl font-bold tracking-tight">7. Disclaimers &amp; liability</h2>
+            <div class="mt-4 space-y-4 text-[15px] leading-relaxed text-muted">
+              <p>BikeNest is provided "as is". The map, verification signals, reviews and photos reflect community observations at particular points in time. To the extent permitted by law, BikeNest does not warrant that the information is complete, accurate or current, and is not liable for loss, damage or theft related to parking decisions made using the service.</p>
+              <p>Nothing in these terms limits liability that cannot be limited under applicable law — for example, liability for intent or gross negligence. Where mandatory consumer protections apply to you, they take precedence over these terms.</p>
+              <p>The service may be unavailable while we maintain it, and features may change as the product evolves. We aim to communicate significant changes on the site in advance.</p>
+            </div>
+          </section>
+
+          <!-- §8 General -->
+          <section id="general" data-od-id="sec-general" class="scroll-mt-24 border-b border-line py-10">
+            <h2 class="font-display text-xl font-bold tracking-tight">8. General terms</h2>
+            <div class="mt-4 space-y-4 text-[15px] leading-relaxed text-muted">
+              <p>If a provision of these terms is unenforceable, the rest stays in force and the unenforceable part is replaced by the closest enforceable equivalent.</p>
+              <p>Map imagery and geocoding are provided by third-party providers under their own terms; their use is described in the privacy policy. The BikeNest name and logo belong to <span class="text-fg">[Legal entity — to be defined]</span> and may not be used without permission.</p>
+              <p>Questions about these terms: <span class="text-fg">[Contact email — to be defined]</span>.</p>
+            </div>
+          </section>
+
+          <!-- §9 Changes & history -->
+          <section id="changes" data-od-id="sec-changes" class="scroll-mt-24 pt-10">
+            <h2 class="font-display text-xl font-bold tracking-tight">9. Changes &amp; version history</h2>
+            <div class="mt-4 space-y-4 text-[15px] leading-relaxed text-muted">
+              <p>These terms are versioned. When they change materially, we announce the change in the app and, where required, ask for explicit acceptance before you continue using signed-in features. The table below records published versions.</p>
+              <div class="overflow-x-auto rounded-xl border border-line bg-surface shadow-card">
+                <table class="w-full text-left text-sm">
+                  <thead>
+                    <tr class="border-b border-line font-mono text-xs uppercase tracking-[0.1em] text-muted">
+                      <th scope="col" class="px-4 py-3 font-medium">Version</th>
+                      <th scope="col" class="px-4 py-3 font-medium">Status</th>
+                      <th scope="col" class="px-4 py-3 font-medium">Summary</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-line">
+                    <tr>
+                      <td class="px-4 py-3.5 font-mono">0.2</td>
+                      <td class="px-4 py-3.5"><span class="inline-flex items-center rounded-md px-2 py-0.5 font-mono text-xs" style="background: oklch(56% 0.12 170 / 0.12); color: oklch(45% 0.11 170);">Draft</span></td>
+                      <td class="px-4 py-3.5">Structure and sample wording prepared for design review; effective date pending legal review.</td>
+                    </tr>
+                    <tr>
+                      <td class="px-4 py-3.5 font-mono">0.1</td>
+                      <td class="px-4 py-3.5"><span class="inline-flex items-center rounded-md px-2 py-0.5 font-mono text-xs" style="background: oklch(20% 0.02 240 / 0.06); color: oklch(50% 0.018 240);">Internal</span></td>
+                      <td class="px-4 py-3.5">Initial outline of required sections.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- Cross-links to sibling policies -->
+          <section data-od-id="related-policies" class="mt-12 grid gap-4 sm:grid-cols-2">
+            <a href="p4-privacy.html" class="group rounded-2xl border border-line bg-surface p-5 shadow-card transition-shadow hover:shadow-pop">
+              <p class="font-mono text-xs uppercase tracking-[0.14em] text-muted">Related policy</p>
+              <p class="mt-2 flex items-center justify-between gap-3 font-display text-base font-bold tracking-tight text-fg">
+                Privacy policy
+                <svg aria-hidden="true" class="h-4 w-4 shrink-0 text-muted transition-colors group-hover:text-accent-strong" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+              </p>
+              <p class="mt-1.5 text-sm leading-relaxed text-muted">What data we process, why, and the rights you have over it.</p>
+            </a>
+            <a href="p6-cookies.html" class="group rounded-2xl border border-line bg-surface p-5 shadow-card transition-shadow hover:shadow-pop">
+              <p class="font-mono text-xs uppercase tracking-[0.14em] text-muted">Related policy</p>
+              <p class="mt-2 flex items-center justify-between gap-3 font-display text-base font-bold tracking-tight text-fg">
+                Cookie policy
+                <svg aria-hidden="true" class="h-4 w-4 shrink-0 text-muted transition-colors group-hover:text-accent-strong" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+              </p>
+              <p class="mt-1.5 text-sm leading-relaxed text-muted">Every cookie the app sets, with purpose, lifetime and security flags.</p>
+            </a>
+          </section>
+        </article>
+      </div>
+    </div>
+  </main>
+
+  <footer data-od-id="footer" class="border-t border-line bg-surface">
+    <div class="mx-auto max-w-shell px-5 py-12 lg:px-8">
+      <div class="flex flex-col gap-10 md:flex-row md:items-start md:justify-between">
+        <div class="max-w-xs">
+          <a href="p1-landing.html" class="flex items-center gap-2.5" aria-label="BikeNest — home">
+            <span class="grid h-8 w-8 place-items-center rounded-lg bg-accent text-white">
+              <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18.5" cy="17.5" r="3.5"/><circle cx="5.5" cy="17.5" r="3.5"/><circle cx="15" cy="5" r="1"/><path d="M12 17.5V14l-3-3 4-3 2 3h2"/></svg>
+            </span>
+            <span class="font-display text-base font-bold tracking-tight">BikeNest</span>
+          </a>
+          <p class="mt-3 text-sm leading-relaxed text-muted">A community-maintained map of bicycle parking, built by and for cyclists.</p>
+        </div>
+
+        <nav class="grid grid-cols-2 gap-x-12 gap-y-2 text-sm" aria-label="Footer">
+          <a href="p7-about.html" class="py-1 text-muted hover:text-fg">About</a>
+          <a href="#" class="py-1 text-muted hover:text-fg">Contact</a>
+          <a href="p4-privacy.html" class="py-1 text-muted hover:text-fg">Privacy policy</a>
+          <a href="p5-terms.html" class="py-1 font-medium text-fg" aria-current="page">Terms of service</a>
+          <a href="p6-cookies.html" class="py-1 text-muted hover:text-fg">Cookie policy</a>
+          <a href="p7-about.html" class="py-1 text-muted hover:text-fg">How it works</a>
+        </nav>
+      </div>
+      <div class="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-6">
+        <p class="text-xs text-muted">© 2026 BikeNest</p>
+        <p class="font-mono text-xs text-muted">Prototype · P5 Terms of service</p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ============ Interactions: mobile nav + TOC scroll-spy ============ -->
+  <script>
+    // Mobile menu
+    const menuBtn = document.getElementById('menu-btn');
+    const mobileMenu = document.getElementById('mobile-menu');
+    menuBtn.addEventListener('click', () => {
+      const open = mobileMenu.classList.toggle('hidden') === false;
+      menuBtn.setAttribute('aria-expanded', String(open));
+      menuBtn.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    });
+
+    // TOC scroll-spy: highlight the section currently in view
+    const tocLinks = Array.from(document.querySelectorAll('#toc-desktop .toc-link'));
+    const sections = tocLinks
+      .map((link) => document.querySelector(link.getAttribute('href')))
+      .filter(Boolean);
+
+    function updateToc() {
+      const fromTop = 120;
+      let current = sections[0];
+      for (const section of sections) {
+        if (section.getBoundingClientRect().top <= fromTop) current = section;
+      }
+      for (const link of tocLinks) {
+        const active = current && link.getAttribute('href') === '#' + current.id;
+        link.classList.toggle('border-accent-strong', active);
+        link.classList.toggle('font-medium', active);
+        link.classList.toggle('text-fg', active);
+        link.classList.toggle('text-muted', !active);
+      }
+    }
+    updateToc();
+    document.addEventListener('scroll', updateToc, { passive: true });
+  </script>
+</body>
+</html>

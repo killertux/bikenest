@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>User management — BikeNest</title>
+  <meta name="description" content="Admin-only user list with account states and audited role assignment." />
+  <meta name="robots" content="noindex" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    /* Design tokens — direction: human-approachable. Raw values live only here. */
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg:      'oklch(98% 0.004 240)',
+            surface: 'oklch(100% 0 0)',
+            fg:      'oklch(20% 0.02 240)',
+            muted:   'oklch(50% 0.018 240)',
+            line:    'oklch(90% 0.006 240)',
+            accent:  'oklch(56% 0.12 170)',
+            'accent-strong': 'oklch(45% 0.11 170)',
+            'accent-dark':   'oklch(40% 0.10 170)',
+            'accent-soft':   'oklch(56% 0.12 170 / 0.12)',
+            'scrim': 'oklch(18% 0.015 240)',
+            fresh:   'oklch(58% 0.13 155)',
+            aging:   'oklch(68% 0.12 75)',
+            stale:   'oklch(55% 0.16 35)',
+            danger:  'oklch(47% 0.17 30)',
+            'danger-soft': 'oklch(47% 0.17 30 / 0.08)',
+          },
+          fontFamily: {
+            display: ['"Avenir Next"', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
+            body:    ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', 'system-ui', 'sans-serif'],
+            mono:    ['ui-monospace', '"SF Mono"', 'Menlo', 'monospace'],
+          },
+          boxShadow: {
+            card: '0 1px 2px oklch(20% 0.02 240 / 0.06), 0 8px 24px oklch(20% 0.02 240 / 0.08)',
+            pop:  '0 2px 6px oklch(20% 0.02 240 / 0.10), 0 16px 40px oklch(20% 0.02 240 / 0.16)',
+          },
+          maxWidth: { shell: '72rem' },
+        }
+      }
+    }
+  </script>
+  <style type="text/tailwindcss">
+    @layer base {
+      html { -webkit-text-size-adjust: 100%; }
+      body { text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
+      p { text-wrap: pretty; }
+      h1, h2, h3 { text-wrap: balance; }
+      :focus-visible { outline: 2px solid oklch(45% 0.11 170); outline-offset: 2px; border-radius: 4px; }
+    }
+  </style>
+</head>
+<body class="bg-bg font-body text-fg">
+
+
+  <header data-od-id="topnav-admin" class="sticky top-0 z-40 border-b border-line bg-[oklch(98%_0.004_240_/_0.9)] backdrop-blur">
+    <div class="mx-auto flex h-16 max-w-shell items-center justify-between gap-6 px-5 lg:px-8">
+      <a href="p1-landing.html" class="flex items-center gap-2.5" aria-label="BikeNest — home">
+        <span class="grid h-9 w-9 place-items-center rounded-xl bg-accent text-white"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-5 w-5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="18.5" cy="17.5" r="3.5" /> <circle cx="5.5" cy="17.5" r="3.5" /> <circle cx="15" cy="5" r="1" /> <path d="M12 17.5V14l-3-3 4-3 2 3h2" /> </svg></span>
+        <span class="font-display text-lg font-bold tracking-tight">BikeNest</span>
+      </a>
+      <nav class="hidden items-center gap-7 md:flex" aria-label="Primary">
+        <a href="p2-search.html" class="text-sm text-muted hover:text-fg">Parking spots</a>
+        <a href="p1-landing.html#how-it-works" class="text-sm text-muted hover:text-fg">How it works</a>
+      </nav>
+      <div class="hidden items-center gap-4 md:flex">
+        <div class="flex items-center rounded-lg border border-line p-0.5 font-mono text-xs" role="group" aria-label="Language">
+          <a href="#" lang="pt-BR" class="rounded-md px-2 py-1 text-muted hover:text-fg" aria-label="Português (Brasil)">PT</a>
+          <a href="#" lang="en" aria-current="true" class="rounded-md bg-fg px-2 py-1 font-medium text-bg" aria-label="English">EN</a>
+        </div>
+        <div class="relative" data-od-id="user-menu">
+          <button id="user-btn" type="button" aria-expanded="false" aria-haspopup="menu"
+                  class="flex items-center gap-2 rounded-full border border-line py-1 pl-1 pr-2.5 transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]">
+            <span class="grid h-8 w-8 place-items-center rounded-full bg-accent-strong font-display text-xs font-bold text-white">AR</span>
+            <span class="text-sm font-medium">Ana</span>
+            <!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m6 9 6 6 6-6" /> </svg>
+          </button>
+          <div id="user-menu" role="menu" aria-label="Account menu"
+               class="hidden absolute right-0 top-[calc(100%+8px)] w-64 rounded-xl border border-line bg-surface p-1.5 shadow-pop">
+            <div class="border-b border-line px-3 py-2.5">
+              <p class="flex items-center gap-2 text-sm font-semibold">Ana Ribeiro
+                <span class="inline-flex items-center gap-1 rounded-full bg-[oklch(45%_0.15_265_/_0.12)] px-2 py-0.5 text-[11px] font-semibold text-[oklch(42%_0.13_265)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3 w-3" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> </svg> Admin</span>
+              </p>
+              <p class="mt-0.5 truncate text-xs text-muted">ana.ribeiro@example.com</p>
+            </div>
+            <div class="mt-1">
+              <a role="menuitem" href="c1-account.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /> <circle cx="12" cy="7" r="4" /> </svg> Account overview</a>
+              <a role="menuitem" href="c5-contributions.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="8" height="4" x="8" y="2" rx="1" ry="1" /> <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /> <path d="M12 11h4" /> <path d="M12 16h4" /> <path d="M8 11h.01" /> <path d="M8 16h.01" /> </svg> Contributions</a>
+              <a role="menuitem" href="c6-privacy.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> <path d="m9 12 2 2 4-4" /> </svg> Privacy &amp; data</a>
+            </div>
+            <div class="my-1 border-t border-line"></div>
+            <p class="px-3 pb-1 pt-1 font-mono text-[11px] uppercase tracking-wide text-muted">Moderation</p>
+            <a role="menuitem" href="m1-moderation.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> </svg> Moderation overview</a><a role="menuitem" href="m2-photos.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" ry="2" /> <circle cx="9" cy="9" r="2" /> <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" /> </svg> Photo queue</a><a role="menuitem" href="m3-reports.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528" /> </svg> Reports queue</a><a role="menuitem" href="m4-proposals.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="18" cy="18" r="3" /> <circle cx="6" cy="6" r="3" /> <path d="M13 6h3a2 2 0 0 1 2 2v7" /> <line x1="6" x2="6" y1="9" y2="21" /> </svg> Proposal review</a>
+            <p class="px-3 pb-1 pt-2 font-mono text-[11px] uppercase tracking-wide text-muted">Administration</p>
+            <a role="menuitem" href="m5-users.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /> <path d="M16 3.128a4 4 0 0 1 0 7.744" /> <path d="M22 21v-2a4 4 0 0 0-3-3.87" /> <circle cx="9" cy="7" r="4" /> </svg> User management</a><a role="menuitem" href="m6-audit.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /> <path d="M3 3v5h5" /> <path d="M12 7v5l4 2" /> </svg> Audit log</a>
+            <div class="my-1 border-t border-line"></div>
+            <a role="menuitem" href="a2-login.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-danger hover:bg-danger-soft"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m16 17 5-5-5-5" /> <path d="M21 12H9" /> <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /> </svg> Log out</a>
+          </div>
+        </div>
+      </div>
+      <button id="menu-btn" class="grid h-10 w-10 place-items-center rounded-lg border border-line md:hidden" aria-expanded="false" aria-controls="mobile-menu" aria-label="Open menu">
+        <!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-5 w-5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M4 5h16" /> <path d="M4 12h16" /> <path d="M4 19h16" /> </svg>
+      </button>
+    </div>
+    <div id="mobile-menu" class="hidden border-t border-line bg-bg px-5 py-4 md:hidden">
+      <nav class="flex flex-col gap-1" aria-label="Primary mobile">
+        <a href="p2-search.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Parking spots</a>
+        <a href="p1-landing.html#how-it-works" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">How it works</a>
+      </nav>
+      <div class="mt-3 flex flex-col gap-1 border-t border-line pt-3">
+        <p class="px-3 pb-1 font-mono text-[11px] uppercase tracking-wide text-muted">Moderation</p>
+        <a href="m1-moderation.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Moderation overview</a><a href="m2-photos.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Photo queue</a><a href="m3-reports.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Reports queue</a><a href="m4-proposals.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Proposal review</a>
+      </div>
+      <div class="mt-3 flex flex-col gap-1 border-t border-line pt-3">
+        <p class="px-3 pb-1 font-mono text-[11px] uppercase tracking-wide text-muted">Administration</p>
+        <a href="m5-users.html" class="rounded-lg px-3 py-2.5 text-[15px] font-medium text-fg">User management</a><a href="m6-audit.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Audit log</a>
+      </div>
+      <div class="mt-3 flex flex-col gap-1 border-t border-line pt-3">
+        <p class="px-3 pb-1 font-mono text-[11px] uppercase tracking-wide text-muted">Your account</p>
+        <a href="c1-account.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Account overview</a>
+        <a href="a2-login.html" class="mt-1 rounded-lg px-3 py-2.5 text-[15px] font-medium text-danger hover:bg-danger-soft">Log out</a>
+      </div>
+    </div>
+  </header>
+<nav data-od-id="moderation-tabs" aria-label="Moderation and administration sections" class="border-b border-line bg-bg"><div class="mx-auto flex max-w-shell gap-6 overflow-x-auto px-5 lg:px-8"><a href="m1-moderation.html" class="whitespace-nowrap border-b-2 border-transparent text-muted hover:border-line hover:text-fg py-3.5 text-sm">Moderation overview</a><a href="m2-photos.html" class="whitespace-nowrap border-b-2 border-transparent text-muted hover:border-line hover:text-fg py-3.5 text-sm">Photo queue</a><a href="m3-reports.html" class="whitespace-nowrap border-b-2 border-transparent text-muted hover:border-line hover:text-fg py-3.5 text-sm">Reports queue</a><a href="m4-proposals.html" class="whitespace-nowrap border-b-2 border-transparent text-muted hover:border-line hover:text-fg py-3.5 text-sm">Proposal review</a><a href="m5-users.html" aria-current="page" class="whitespace-nowrap border-b-2 border-accent-strong font-medium text-fg py-3.5 text-sm">User management</a><a href="m6-audit.html" class="whitespace-nowrap border-b-2 border-transparent text-muted hover:border-line hover:text-fg py-3.5 text-sm">Audit log</a></div></nav>
+
+  <main id="content" class="mx-auto w-full max-w-6xl px-5 py-10 lg:px-8">
+    <div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <p class="font-mono text-xs uppercase tracking-[0.14em] text-muted">Administration</p>
+        <h1 class="mt-1 font-display text-3xl font-bold tracking-tight">User management</h1>
+        <p class="mt-2 max-w-2xl text-sm leading-relaxed text-muted">Account states and role assignment. Role changes require an ADMIN principal and always create an audit event — they are denied by default everywhere else (§19).</p>
+      </div>
+      <span class="inline-flex w-fit items-center gap-1.5 rounded-full bg-[oklch(45%_0.15_265_/_0.12)] px-3 py-1.5 text-xs font-semibold text-[oklch(42%_0.13_265)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> </svg> Signed in as Admin</span>
+    </div>
+
+    <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div class="relative sm:w-80">
+        <!-- @license lucide-static v0.544.0 - ISC --> <svg class="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m21 21-4.34-4.34" /> <circle cx="11" cy="11" r="8" /> </svg>
+        <input id="user-search" type="search" placeholder="Search by name or email…" aria-label="Search users"
+               class="w-full rounded-xl border border-line bg-surface py-2.5 pl-10 pr-4 text-sm placeholder:text-muted focus:border-accent-strong" />
+      </div>
+      <div id="user-filters" class="flex items-center gap-2" role="group" aria-label="Filter by account state">
+        <button type="button" data-state="all" class="state-chip rounded-full border border-fg bg-fg px-3 py-1.5 text-xs font-medium text-bg">All · 8</button>
+        <button type="button" data-state="active" class="state-chip rounded-full border border-line px-3 py-1.5 text-xs text-muted transition-colors hover:border-fg hover:text-fg">Active</button>
+        <button type="button" data-state="suspended" class="state-chip rounded-full border border-line px-3 py-1.5 text-xs text-muted transition-colors hover:border-fg hover:text-fg">Suspended</button>
+        <button type="button" data-state="pending" class="state-chip rounded-full border border-line px-3 py-1.5 text-xs text-muted transition-colors hover:border-fg hover:text-fg">Pending</button>
+      </div>
+    </div>
+
+    <div class="overflow-x-auto rounded-2xl border border-line bg-surface shadow-card">
+      <table class="w-full min-w-[780px] text-left">
+        <thead>
+          <tr class="border-b border-line font-mono text-[11px] uppercase tracking-wide text-muted">
+            <th scope="col" class="px-5 py-3 font-medium">User</th>
+            <th scope="col" class="py-3 pr-4 font-medium">Role &amp; state</th>
+            <th scope="col" class="py-3 pr-4 font-medium">Contributions</th>
+            <th scope="col" class="py-3 pr-4 font-medium">Joined</th>
+            <th scope="col" class="py-3 pr-5 text-right font-medium">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="user-rows">
+      <tr data-od-id="user-row-ana" data-name="ana ribeiro ana.ribeiro@example.com" data-state="active" class="border-t border-line align-top">
+        <td class="px-5 py-4 pr-4">
+          <p class="text-sm font-semibold">Ana Ribeiro <span class="ml-1 rounded bg-[oklch(20%_0.02_240_/_0.06)] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted">You</span></p>
+          <p class="mt-0.5 text-xs text-muted">ana.ribeiro@example.com</p>
+          
+        </td>
+        <td class="state-cell py-4 pr-4">
+          <div class="flex flex-col items-start gap-1.5"><div class="flex items-center gap-1.5"><span class="inline-flex items-center gap-1 rounded-full bg-[oklch(45%_0.16_265_/_0.12)] px-2 py-0.5 text-[11px] font-semibold text-[oklch(42%_0.14_265)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3 w-3" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> </svg>Admin</span><span class="font-mono text-[10px] uppercase tracking-wide text-muted">Own role — locked</span></div><span class="inline-flex items-center gap-1.5 rounded-full border border-[oklch(58%_0.13_155_/_0.35)] bg-[oklch(58%_0.13_155_/_0.10)] px-2.5 py-1 text-xs font-medium text-fresh"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="10" /> <path d="m9 12 2 2 4-4" /> </svg>Active</span></div>
+        </td>
+        <td class="py-4 pr-4 font-mono text-sm text-muted">31</td>
+        <td class="py-4 pr-4 font-mono text-xs text-muted">Jan 2026</td>
+        <td class="py-4 pr-5">
+          <div class="flex flex-wrap items-center justify-end gap-2"><span class="font-mono text-[10px] uppercase tracking-wide text-muted">Own account — role locked</span></div>
+        </td>
+      </tr>
+      <tr data-od-id="user-row-bruno" data-name="bruno costa bruno.costa@example.com" data-state="active" class="border-t border-line align-top">
+        <td class="px-5 py-4 pr-4">
+          <p class="text-sm font-semibold">Bruno Costa</p>
+          <p class="mt-0.5 text-xs text-muted">bruno.costa@example.com</p>
+          
+        </td>
+        <td class="state-cell py-4 pr-4">
+          <div class="flex flex-col items-start gap-1.5"><div class="flex items-center gap-1.5" data-role-cell><span class="inline-flex items-center gap-1 rounded-full bg-[oklch(56%_0.12_170_/_0.12)] px-2 py-0.5 text-[11px] font-semibold text-accent-strong"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3 w-3" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> <path d="m9 12 2 2 4-4" /> </svg>Moderator</span><button type="button" data-action="role" aria-label="Change role for Bruno Costa" title="Change role" class="grid h-6 w-6 place-items-center rounded-md text-muted transition-colors hover:bg-[oklch(20%_0.02_240_/_0.06)] hover:text-fg"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M14 17H5" /> <path d="M19 7h-9" /> <circle cx="17" cy="17" r="3" /> <circle cx="7" cy="7" r="3" /> </svg></button></div><span class="inline-flex items-center gap-1.5 rounded-full border border-[oklch(58%_0.13_155_/_0.35)] bg-[oklch(58%_0.13_155_/_0.10)] px-2.5 py-1 text-xs font-medium text-fresh"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="10" /> <path d="m9 12 2 2 4-4" /> </svg>Active</span></div>
+        </td>
+        <td class="py-4 pr-4 font-mono text-sm text-muted">42</td>
+        <td class="py-4 pr-4 font-mono text-xs text-muted">Feb 2026</td>
+        <td class="py-4 pr-5">
+          <div class="flex flex-wrap items-center justify-end gap-2"><button type="button" data-action="suspend" class="rounded-lg border border-[oklch(55%_0.19_25_/_0.35)] px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger-soft">Suspend</button></div>
+        </td>
+      </tr>
+      <tr data-od-id="user-row-carla" data-name="carla mendes carla.mendes@example.com" data-state="active" class="border-t border-line align-top">
+        <td class="px-5 py-4 pr-4">
+          <p class="text-sm font-semibold">Carla Mendes</p>
+          <p class="mt-0.5 text-xs text-muted">carla.mendes@example.com</p>
+          
+        </td>
+        <td class="state-cell py-4 pr-4">
+          <div class="flex flex-col items-start gap-1.5"><div class="flex items-center gap-1.5" data-role-cell><span class="inline-flex items-center gap-1 rounded-full bg-[oklch(20%_0.02_240_/_0.06)] px-2 py-0.5 text-[11px] font-semibold text-muted">User</span><button type="button" data-action="role" aria-label="Change role for Carla Mendes" title="Change role" class="grid h-6 w-6 place-items-center rounded-md text-muted transition-colors hover:bg-[oklch(20%_0.02_240_/_0.06)] hover:text-fg"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M14 17H5" /> <path d="M19 7h-9" /> <circle cx="17" cy="17" r="3" /> <circle cx="7" cy="7" r="3" /> </svg></button></div><span class="inline-flex items-center gap-1.5 rounded-full border border-[oklch(58%_0.13_155_/_0.35)] bg-[oklch(58%_0.13_155_/_0.10)] px-2.5 py-1 text-xs font-medium text-fresh"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="10" /> <path d="m9 12 2 2 4-4" /> </svg>Active</span></div>
+        </td>
+        <td class="py-4 pr-4 font-mono text-sm text-muted">17</td>
+        <td class="py-4 pr-4 font-mono text-xs text-muted">Mar 2026</td>
+        <td class="py-4 pr-5">
+          <div class="flex flex-wrap items-center justify-end gap-2"><button type="button" data-action="suspend" class="rounded-lg border border-[oklch(55%_0.19_25_/_0.35)] px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger-soft">Suspend</button></div>
+        </td>
+      </tr>
+      <tr data-od-id="user-row-diego" data-name="diego ferreira diego.ferreira@example.com" data-state="suspended" class="border-t border-line align-top">
+        <td class="px-5 py-4 pr-4">
+          <p class="text-sm font-semibold">Diego Ferreira</p>
+          <p class="mt-0.5 text-xs text-muted">diego.ferreira@example.com</p>
+          <p class="mt-1 text-xs leading-relaxed text-danger"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="mr-1 inline h-3 w-3 -translate-y-px" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" /> <path d="M12 9v4" /> <path d="M12 17h.01" /> </svg>Suspended for review spam — audit #2231</p>
+        </td>
+        <td class="state-cell py-4 pr-4">
+          <div class="flex flex-col items-start gap-1.5"><div class="flex items-center gap-1.5" data-role-cell><span class="inline-flex items-center gap-1 rounded-full bg-[oklch(20%_0.02_240_/_0.06)] px-2 py-0.5 text-[11px] font-semibold text-muted">User</span><button type="button" data-action="role" aria-label="Change role for Diego Ferreira" title="Change role" class="grid h-6 w-6 place-items-center rounded-md text-muted transition-colors hover:bg-[oklch(20%_0.02_240_/_0.06)] hover:text-fg"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M14 17H5" /> <path d="M19 7h-9" /> <circle cx="17" cy="17" r="3" /> <circle cx="7" cy="7" r="3" /> </svg></button></div><span class="inline-flex items-center gap-1.5 rounded-full border border-[oklch(55%_0.19_25_/_0.35)] bg-danger-soft px-2.5 py-1 text-xs font-medium text-danger"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M4.929 4.929 19.07 19.071" /> <circle cx="12" cy="12" r="10" /> </svg>Suspended</span></div>
+        </td>
+        <td class="py-4 pr-4 font-mono text-sm text-muted">3</td>
+        <td class="py-4 pr-4 font-mono text-xs text-muted">Apr 2026</td>
+        <td class="py-4 pr-5">
+          <div class="flex flex-wrap items-center justify-end gap-2"><button type="button" data-action="restore" class="rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-fg transition-colors hover:bg-[oklch(20%_0.02_240_/_0.05)]">Restore</button></div>
+        </td>
+      </tr>
+      <tr data-od-id="user-row-elena" data-name="elena souza elena.souza@example.com" data-state="pending" class="border-t border-line align-top">
+        <td class="px-5 py-4 pr-4">
+          <p class="text-sm font-semibold">Elena Souza</p>
+          <p class="mt-0.5 text-xs text-muted">elena.souza@example.com</p>
+          
+        </td>
+        <td class="state-cell py-4 pr-4">
+          <div class="flex flex-col items-start gap-1.5"><div class="flex items-center gap-1.5" data-role-cell><span class="inline-flex items-center gap-1 rounded-full bg-[oklch(20%_0.02_240_/_0.06)] px-2 py-0.5 text-[11px] font-semibold text-muted">User</span><button type="button" data-action="role" aria-label="Change role for Elena Souza" title="Change role" class="grid h-6 w-6 place-items-center rounded-md text-muted transition-colors hover:bg-[oklch(20%_0.02_240_/_0.06)] hover:text-fg"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M14 17H5" /> <path d="M19 7h-9" /> <circle cx="17" cy="17" r="3" /> <circle cx="7" cy="7" r="3" /> </svg></button></div><span class="inline-flex items-center gap-1.5 rounded-full border border-[oklch(68%_0.12_75_/_0.45)] bg-[oklch(68%_0.12_75_/_0.12)] px-2.5 py-1 text-xs font-medium text-aging"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7" /> <rect x="2" y="4" width="20" height="16" rx="2" /> </svg>Pending verification</span></div>
+        </td>
+        <td class="py-4 pr-4 font-mono text-sm text-muted">0</td>
+        <td class="py-4 pr-4 font-mono text-xs text-muted">Jun 2026</td>
+        <td class="py-4 pr-5">
+          <div class="flex flex-wrap items-center justify-end gap-2"><button type="button" data-action="suspend" class="rounded-lg border border-[oklch(55%_0.19_25_/_0.35)] px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger-soft">Suspend</button></div>
+        </td>
+      </tr>
+      <tr data-od-id="user-row-felipe" data-name="felipe lima felipe.lima@example.com" data-state="active" class="border-t border-line align-top">
+        <td class="px-5 py-4 pr-4">
+          <p class="text-sm font-semibold">Felipe Lima</p>
+          <p class="mt-0.5 text-xs text-muted">felipe.lima@example.com</p>
+          
+        </td>
+        <td class="state-cell py-4 pr-4">
+          <div class="flex flex-col items-start gap-1.5"><div class="flex items-center gap-1.5" data-role-cell><span class="inline-flex items-center gap-1 rounded-full bg-[oklch(56%_0.12_170_/_0.12)] px-2 py-0.5 text-[11px] font-semibold text-accent-strong"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3 w-3" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> <path d="m9 12 2 2 4-4" /> </svg>Moderator</span><button type="button" data-action="role" aria-label="Change role for Felipe Lima" title="Change role" class="grid h-6 w-6 place-items-center rounded-md text-muted transition-colors hover:bg-[oklch(20%_0.02_240_/_0.06)] hover:text-fg"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M14 17H5" /> <path d="M19 7h-9" /> <circle cx="17" cy="17" r="3" /> <circle cx="7" cy="7" r="3" /> </svg></button></div><span class="inline-flex items-center gap-1.5 rounded-full border border-[oklch(58%_0.13_155_/_0.35)] bg-[oklch(58%_0.13_155_/_0.10)] px-2.5 py-1 text-xs font-medium text-fresh"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="10" /> <path d="m9 12 2 2 4-4" /> </svg>Active</span></div>
+        </td>
+        <td class="py-4 pr-4 font-mono text-sm text-muted">68</td>
+        <td class="py-4 pr-4 font-mono text-xs text-muted">Jan 2026</td>
+        <td class="py-4 pr-5">
+          <div class="flex flex-wrap items-center justify-end gap-2"><button type="button" data-action="suspend" class="rounded-lg border border-[oklch(55%_0.19_25_/_0.35)] px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger-soft">Suspend</button></div>
+        </td>
+      </tr>
+      <tr data-od-id="user-row-gustavo" data-name="gustavo rocha gustavo.rocha@example.com" data-state="active" class="border-t border-line align-top">
+        <td class="px-5 py-4 pr-4">
+          <p class="text-sm font-semibold">Gustavo Rocha</p>
+          <p class="mt-0.5 text-xs text-muted">gustavo.rocha@example.com</p>
+          
+        </td>
+        <td class="state-cell py-4 pr-4">
+          <div class="flex flex-col items-start gap-1.5"><div class="flex items-center gap-1.5" data-role-cell><span class="inline-flex items-center gap-1 rounded-full bg-[oklch(20%_0.02_240_/_0.06)] px-2 py-0.5 text-[11px] font-semibold text-muted">User</span><button type="button" data-action="role" aria-label="Change role for Gustavo Rocha" title="Change role" class="grid h-6 w-6 place-items-center rounded-md text-muted transition-colors hover:bg-[oklch(20%_0.02_240_/_0.06)] hover:text-fg"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M14 17H5" /> <path d="M19 7h-9" /> <circle cx="17" cy="17" r="3" /> <circle cx="7" cy="7" r="3" /> </svg></button></div><span class="inline-flex items-center gap-1.5 rounded-full border border-[oklch(58%_0.13_155_/_0.35)] bg-[oklch(58%_0.13_155_/_0.10)] px-2.5 py-1 text-xs font-medium text-fresh"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="10" /> <path d="m9 12 2 2 4-4" /> </svg>Active</span></div>
+        </td>
+        <td class="py-4 pr-4 font-mono text-sm text-muted">9</td>
+        <td class="py-4 pr-4 font-mono text-xs text-muted">May 2026</td>
+        <td class="py-4 pr-5">
+          <div class="flex flex-wrap items-center justify-end gap-2"><button type="button" data-action="suspend" class="rounded-lg border border-[oklch(55%_0.19_25_/_0.35)] px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger-soft">Suspend</button></div>
+        </td>
+      </tr>
+      <tr data-od-id="user-row-helena" data-name="helena prado helena.prado@example.com" data-state="active" class="border-t border-line align-top">
+        <td class="px-5 py-4 pr-4">
+          <p class="text-sm font-semibold">Helena Prado</p>
+          <p class="mt-0.5 text-xs text-muted">helena.prado@example.com</p>
+          
+        </td>
+        <td class="state-cell py-4 pr-4">
+          <div class="flex flex-col items-start gap-1.5"><div class="flex items-center gap-1.5" data-role-cell><span class="inline-flex items-center gap-1 rounded-full bg-[oklch(20%_0.02_240_/_0.06)] px-2 py-0.5 text-[11px] font-semibold text-muted">User</span><button type="button" data-action="role" aria-label="Change role for Helena Prado" title="Change role" class="grid h-6 w-6 place-items-center rounded-md text-muted transition-colors hover:bg-[oklch(20%_0.02_240_/_0.06)] hover:text-fg"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M14 17H5" /> <path d="M19 7h-9" /> <circle cx="17" cy="17" r="3" /> <circle cx="7" cy="7" r="3" /> </svg></button></div><span class="inline-flex items-center gap-1.5 rounded-full border border-[oklch(58%_0.13_155_/_0.35)] bg-[oklch(58%_0.13_155_/_0.10)] px-2.5 py-1 text-xs font-medium text-fresh"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="10" /> <path d="m9 12 2 2 4-4" /> </svg>Active</span></div>
+        </td>
+        <td class="py-4 pr-4 font-mono text-sm text-muted">5</td>
+        <td class="py-4 pr-4 font-mono text-xs text-muted">Jun 2026</td>
+        <td class="py-4 pr-5">
+          <div class="flex flex-wrap items-center justify-end gap-2"><button type="button" data-action="suspend" class="rounded-lg border border-[oklch(55%_0.19_25_/_0.35)] px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger-soft">Suspend</button></div>
+        </td>
+      </tr>
+        </tbody>
+      </table>
+      <p id="user-empty" class="hidden px-5 py-10 text-center text-sm text-muted">No users match this search or filter.</p>
+    </div>
+
+    <section data-od-id="role-notes" class="mt-6 grid gap-4 sm:grid-cols-2">
+      <div class="rounded-2xl border border-line bg-surface p-6 shadow-card">
+        <h2 class="flex items-center gap-2 font-display text-base font-bold"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-[18px] w-[18px] text-accent-strong" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /> <circle cx="9" cy="7" r="4" /> <line x1="19" x2="19" y1="8" y2="14" /> <line x1="22" x2="16" y1="11" y2="11" /> </svg> Granting a role</h2>
+        <p class="mt-2 text-sm leading-relaxed text-muted">Use the gear icon on a row to grant or revoke MODERATOR. Every change asks for confirmation, is tied to your ADMIN principal, and writes an audit event. Roles are never granted through self-service settings (§19).</p>
+      </div>
+      <div class="rounded-2xl border border-line bg-surface p-6 shadow-card">
+        <h2 class="flex items-center gap-2 font-display text-base font-bold"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-[18px] w-[18px] text-danger" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /> <circle cx="9" cy="7" r="4" /> <line x1="17" x2="22" y1="8" y2="13" /> <line x1="22" x2="17" y1="8" y2="13" /> </svg> Suspending an account</h2>
+        <p class="mt-2 text-sm leading-relaxed text-muted">Suspension is for abusive behaviour (§44): the user is signed out and can no longer sign in or contribute. Their public contributions follow the anonymization rules. Suspension is reversible and audited.</p>
+      </div>
+    </section>
+
+    <details data-od-id="state-previews" class="group mt-8 rounded-2xl border border-dashed border-line bg-bg">
+      <summary class="flex cursor-pointer select-none items-center justify-between px-5 py-4 font-mono text-xs uppercase tracking-[0.14em] text-muted">
+        Prototype — hidden states
+        <!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 transition-transform group-open:rotate-180" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m6 9 6 6 6-6" /> </svg>
+      </summary>
+      <div class="space-y-6 border-t border-line px-5 py-5">
+        <div>
+          <p class="mb-2 font-mono text-[11px] uppercase tracking-wide text-muted">Access denied (MODERATOR opening /admin/users)</p>
+          <div class="flex items-start gap-3 rounded-xl border border-line bg-surface p-4">
+            <!-- @license lucide-static v0.544.0 - ISC --> <svg class="mt-0.5 h-[18px] w-[18px] shrink-0 text-danger" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="11" x="3" y="11" rx="2" ry="2" /> <path d="M7 11V7a5 5 0 0 1 10 0v4" /> </svg>
+            <p class="text-sm leading-relaxed text-fg"><strong class="font-semibold">You don't have access to user management.</strong> This area is restricted to ADMIN accounts. Role changes are explicit, audited operations — never self-assigned (§19).</p>
+          </div>
+        </div>
+      </div>
+    </details>
+  </main>
+
+  <footer data-od-id="footer" class="mt-4 border-t border-line bg-surface">
+    <div class="mx-auto max-w-shell px-5 py-12 lg:px-8">
+      <div class="flex flex-col gap-10 md:flex-row md:items-start md:justify-between">
+        <div class="max-w-xs">
+          <a href="p1-landing.html" class="flex items-center gap-2.5" aria-label="BikeNest — home">
+            <span class="grid h-8 w-8 place-items-center rounded-lg bg-accent text-white"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="18.5" cy="17.5" r="3.5" /> <circle cx="5.5" cy="17.5" r="3.5" /> <circle cx="15" cy="5" r="1" /> <path d="M12 17.5V14l-3-3 4-3 2 3h2" /> </svg></span>
+            <span class="font-display text-base font-bold tracking-tight">BikeNest</span>
+          </a>
+          <p class="mt-3 text-sm leading-relaxed text-muted">A community-maintained map of bicycle parking, built by and for cyclists.</p>
+        </div>
+        <nav class="grid grid-cols-2 gap-x-12 gap-y-2 text-sm" aria-label="Footer">
+          <a href="p7-about.html" class="py-1 text-muted hover:text-fg">About</a>
+          <a href="#" class="py-1 text-muted hover:text-fg">Contact</a>
+          <a href="p4-privacy.html" class="py-1 text-muted hover:text-fg">Privacy policy</a>
+          <a href="p5-terms.html" class="py-1 text-muted hover:text-fg">Terms of service</a>
+          <a href="p6-cookies.html" class="py-1 text-muted hover:text-fg">Cookie policy</a>
+          <a href="p7-about.html#how-it-works" class="py-1 text-muted hover:text-fg">How it works</a>
+        </nav>
+      </div>
+      <div class="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-6">
+        <p class="text-xs text-muted">© 2026 BikeNest</p>
+        <p class="font-mono text-xs text-muted">Prototype · M5 User management</p>
+      </div>
+    </div>
+  </footer>
+  <div class="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-5">
+    <p id="flash" role="status" aria-live="polite" class="pointer-events-auto hidden max-w-md items-center gap-2.5 rounded-xl bg-fg px-4 py-3 text-sm text-bg shadow-pop">
+      <!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 shrink-0" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="10" /> <path d="M12 16v-4" /> <path d="M12 8h.01" /> </svg>
+      <span id="flash-text"></span>
+    </p>
+  </div>
+  <script>
+    /* Design tokens — direction: human-approachable. Raw values live only here. */
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg:      'oklch(98% 0.004 240)',
+            surface: 'oklch(100% 0 0)',
+            fg:      'oklch(20% 0.02 240)',
+            muted:   'oklch(50% 0.018 240)',
+            line:    'oklch(90% 0.006 240)',
+            accent:  'oklch(56% 0.12 170)',
+            'accent-strong': 'oklch(45% 0.11 170)',
+            'accent-dark':   'oklch(40% 0.10 170)',
+            'accent-soft':   'oklch(56% 0.12 170 / 0.12)',
+            'scrim': 'oklch(18% 0.015 240)',
+            fresh:   'oklch(58% 0.13 155)',
+            aging:   'oklch(68% 0.12 75)',
+            stale:   'oklch(55% 0.16 35)',
+            danger:  'oklch(47% 0.17 30)',
+            'danger-soft': 'oklch(47% 0.17 30 / 0.08)',
+          },
+          fontFamily: {
+            display: ['"Avenir Next"', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
+            body:    ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', 'system-ui', 'sans-serif'],
+            mono:    ['ui-monospace', '"SF Mono"', 'Menlo', 'monospace'],
+          },
+          boxShadow: {
+            card: '0 1px 2px oklch(20% 0.02 240 / 0.06), 0 8px 24px oklch(20% 0.02 240 / 0.08)',
+            pop:  '0 2px 6px oklch(20% 0.02 240 / 0.10), 0 16px 40px oklch(20% 0.02 240 / 0.16)',
+          },
+          maxWidth: { shell: '72rem' },
+        }
+      }
+    }
+  </script>
+
+  <script>
+/* ---------- Shell: user menu, mobile menu, flash ---------- */
+    var userBtn = document.getElementById('user-btn');
+    var userMenu = document.getElementById('user-menu');
+    userBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var open = !userMenu.classList.toggle('hidden');
+      userBtn.setAttribute('aria-expanded', String(open));
+    });
+    document.addEventListener('click', function (e) {
+      if (!userMenu.classList.contains('hidden') && !userMenu.contains(e.target) && !userBtn.contains(e.target)) {
+        userMenu.classList.add('hidden');
+        userBtn.setAttribute('aria-expanded', 'false');
+      }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !userMenu.classList.contains('hidden')) {
+        userMenu.classList.add('hidden');
+        userBtn.setAttribute('aria-expanded', 'false');
+        userBtn.focus();
+      }
+    });
+
+    var menuBtn = document.getElementById('menu-btn');
+    var mobileMenu = document.getElementById('mobile-menu');
+    menuBtn.addEventListener('click', function () {
+      var open = !mobileMenu.classList.toggle('hidden');
+      menuBtn.setAttribute('aria-expanded', String(open));
+      menuBtn.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    });
+
+    var flashEl = document.getElementById('flash');
+    var flashText = document.getElementById('flash-text');
+    var flashTimer;
+    function flash(msg) {
+      flashText.textContent = msg;
+      flashEl.classList.remove('hidden');
+      flashEl.classList.add('flex');
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(function () {
+        flashEl.classList.add('hidden');
+        flashEl.classList.remove('flex');
+      }, 4600);
+    }
+
+
+    /* ---------- M5: user management ---------- */
+    var M5 = {"activeChip": "<span class=\"inline-flex items-center gap-1.5 rounded-full border border-[oklch(58%_0.13_155_/_0.35)] bg-[oklch(58%_0.13_155_/_0.10)] px-2.5 py-1 text-xs font-medium text-fresh\"><!-- @license lucide-static v0.544.0 - ISC --> <svg class=\"h-3.5 w-3.5\" aria-hidden=\"true\"  xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" > <circle cx=\"12\" cy=\"12\" r=\"10\" /> <path d=\"m9 12 2 2 4-4\" /> </svg>Active</span>", "suspendedChip": "<span class=\"inline-flex items-center gap-1.5 rounded-full border border-[oklch(55%_0.19_25_/_0.35)] bg-danger-soft px-2.5 py-1 text-xs font-medium text-danger\"><!-- @license lucide-static v0.544.0 - ISC --> <svg class=\"h-3.5 w-3.5\" aria-hidden=\"true\"  xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" > <path d=\"M4.929 4.929 19.07 19.071\" /> <circle cx=\"12\" cy=\"12\" r=\"10\" /> </svg>Suspended</span>", "modChip": "<span class=\"inline-flex items-center gap-1 rounded-full bg-[oklch(56%_0.12_170_/_0.12)] px-2 py-0.5 text-[11px] font-semibold text-accent-strong\"><!-- @license lucide-static v0.544.0 - ISC --> <svg class=\"h-3 w-3\" aria-hidden=\"true\"  xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" > <path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\" /> <path d=\"m9 12 2 2 4-4\" /> </svg>Moderator</span>", "userChip": "<span class=\"inline-flex items-center gap-1 rounded-full bg-[oklch(20%_0.02_240_/_0.06)] px-2 py-0.5 text-[11px] font-semibold text-muted\">User</span>", "adminChip": "<span class=\"inline-flex items-center gap-1 rounded-full bg-[oklch(45%_0.16_265_/_0.12)] px-2 py-0.5 text-[11px] font-semibold text-[oklch(42%_0.14_265)]\"><!-- @license lucide-static v0.544.0 - ISC --> <svg class=\"h-3 w-3\" aria-hidden=\"true\"  xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" > <path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\" /> </svg>Admin</span>", "gear": "<!-- @license lucide-static v0.544.0 - ISC --> <svg class=\"h-3.5 w-3.5\" aria-hidden=\"true\"  xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" > <path d=\"M14 17H5\" /> <path d=\"M19 7h-9\" /> <circle cx=\"17\" cy=\"17\" r=\"3\" /> <circle cx=\"7\" cy=\"7\" r=\"3\" /> </svg>"};
+    (function () {
+      var search = document.getElementById('user-search');
+      var rows = Array.prototype.slice.call(document.querySelectorAll('#user-rows tr'));
+      var stateFilter = 'all';
+
+      function apply() {
+        var q = (search.value || '').trim().toLowerCase();
+        var visible = 0;
+        rows.forEach(function (tr) {
+          var okState = stateFilter === 'all' || tr.getAttribute('data-state') === stateFilter;
+          var hay = tr.getAttribute('data-name');
+          var show = okState && (!q || hay.indexOf(q) !== -1);
+          tr.classList.toggle('hidden', !show);
+          if (show) visible++;
+        });
+        document.getElementById('user-empty').classList.toggle('hidden', visible !== 0);
+      }
+      search.addEventListener('input', apply);
+
+      document.getElementById('user-filters').addEventListener('click', function (e) {
+        var btn = e.target.closest('.state-chip');
+        if (!btn) return;
+        stateFilter = btn.getAttribute('data-state');
+        document.querySelectorAll('.state-chip').forEach(function (b) {
+          var on = b === btn;
+          b.className = 'state-chip rounded-full border px-3 py-1.5 text-xs ' +
+            (on ? 'border-fg bg-fg font-medium text-bg' : 'border-line text-muted transition-colors hover:border-fg hover:text-fg');
+        });
+        apply();
+      });
+
+      function setState(tr, chip) {
+        var roleCell = tr.querySelector('[data-role-cell]');
+        tr.querySelector('.state-cell').innerHTML =
+          '<div class="flex flex-col items-start gap-1.5">' + (roleCell ? roleCell.outerHTML : '') + chip + '</div>';
+      }
+
+      document.getElementById('user-rows').addEventListener('click', function (e) {
+        var susp = e.target.closest('[data-action="suspend"]');
+        if (susp && !susp.disabled) {
+          var tr = susp.closest('tr');
+          var name = tr.querySelector('td p').childNodes[0].textContent.trim();
+          if (confirm('Suspend ' + name + '?\n\nThe account is signed out immediately and can no longer sign in or contribute. This action is recorded in the audit trail (§44).')) {
+            setState(tr, M5.suspendedChip);
+            tr.setAttribute('data-state', 'suspended');
+            susp.textContent = 'Restore';
+            susp.setAttribute('data-action', 'restore');
+            susp.className = 'rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-fg transition-colors hover:bg-[oklch(20%_0.02_240_/_0.05)]';
+            flash(name + ' was suspended. Recorded in the audit trail.');
+          }
+          return;
+        }
+        var restore = e.target.closest('[data-action="restore"]');
+        if (restore) {
+          var tr2 = restore.closest('tr');
+          var name2 = tr2.querySelector('td p').childNodes[0].textContent.trim();
+          setState(tr2, M5.activeChip);
+          tr2.setAttribute('data-state', 'active');
+          restore.textContent = 'Suspend';
+          restore.setAttribute('data-action', 'suspend');
+          restore.className = 'rounded-lg border border-[oklch(55%_0.19_25_/_0.35)] px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger-soft';
+          flash(name2 + ' was restored to active. Recorded in the audit trail.');
+        }
+      });
+    })();
+  </script>
+
+</body>
+</html>

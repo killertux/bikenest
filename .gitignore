@@ -1,0 +1,12 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Env
+.env
+
+# Node
+node_modules/
+
+# Object storage (seeded/uploaded media — Ledger #7, dev only)
+/media

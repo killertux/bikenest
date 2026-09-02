@@ -1,0 +1,528 @@
+{
+  "schema": "open-design.design-manifest.v1",
+  "title": "9cd2bb4d-8637-4c6e-a2f0-b14099dfb5cb",
+  "entryFile": "ui_kits/app/index.html",
+  "sourceFiles": {
+    "all": [
+      "a1-register.html",
+      "a2-login.html",
+      "a3-verify-email.html",
+      "a4-reset-password.html",
+      "a5-reset-password.html",
+      "assets/imagery/commuter-portrait.jpg",
+      "assets/imagery/cyclist-crosswalk.jpg",
+      "assets/imagery/cyclist-foggy-avenue.jpg",
+      "assets/imagery/hero-bike-parking.jpg",
+      "assets/imagery/mtb-pair-rack.jpg",
+      "assets/imagery/square-bike-rows.jpg",
+      "assets/imagery/street-rack-mint-bike.jpg",
+      "c1-account.html",
+      "c2-password.html",
+      "c3-email.html",
+      "c4-favorites.html",
+      "c5-contributions.html",
+      "c6-privacy.html",
+      "c7-export.html",
+      "colors_and_type.css",
+      "context/provenance.md",
+      "context/source-context.md",
+      "d1-add-parking.html",
+      "d2-propose-change.html",
+      "d3-write-review.html",
+      "DESIGN.md",
+      "e1-not-found.html",
+      "e2-error.html",
+      "images/optimized/commuter-portrait.jpg",
+      "images/optimized/cyclist-crosswalk.jpg",
+      "images/optimized/cyclist-foggy-avenue.jpg",
+      "images/optimized/hero-bike-parking.jpg",
+      "images/optimized/mtb-pair-rack.jpg",
+      "images/optimized/square-bike-rows.jpg",
+      "images/optimized/street-rack-mint-bike.jpg",
+      "images/pexels-alena-evseenko-660538512-20888653.jpg",
+      "images/pexels-daniel-orban-1151928062-21287382.jpg",
+      "images/pexels-hans-heemsbergen-2152884034-32629213.jpg",
+      "images/pexels-jaralol-17331856.jpg",
+      "images/pexels-jorgeural-5546118.jpg",
+      "images/pexels-linken-van-zyl-263454378-18958633.jpg",
+      "images/pexels-lukez0r-15931678.jpg",
+      "images/pexels-pavel-danilyuk-5807860.jpg",
+      "images/pexels-rrrumeyda-29609860.jpg",
+      "m1-moderation.html",
+      "m2-photos.html",
+      "m3-reports.html",
+      "m4-proposals.html",
+      "m5-users.html",
+      "m6-audit.html",
+      "p1-landing.html",
+      "p2-search.html",
+      "p3-parking-details.html",
+      "p4-privacy.html",
+      "p5-terms.html",
+      "p6-cookies.html",
+      "p7-about.html",
+      "preview/applied-ui.html",
+      "preview/brand-assets.html",
+      "preview/colors-primary.html",
+      "preview/components-buttons.html",
+      "preview/README.md",
+      "preview/spacing-tokens.html",
+      "preview/typography-specimens.html",
+      "README.md",
+      "render-checks/d1-currency.png",
+      "render-checks/e1-final.png",
+      "render-checks/e2-polish.png",
+      "render-checks/m2-photo-queue-v2.png",
+      "render-checks/m5-users-final.png",
+      "scripts/gen_d.py",
+      "scripts/gen_m.py",
+      "scripts/gen_m56.py",
+      "SKILL.md",
+      "ui_kits/app/components/buttons.html",
+      "ui_kits/app/components/cards.html",
+      "ui_kits/app/components/forms.html",
+      "ui_kits/app/components/navigation.html",
+      "ui_kits/app/index.html",
+      "ui_kits/app/README.md"
+    ],
+    "html": [
+      "a1-register.html",
+      "a2-login.html",
+      "a3-verify-email.html",
+      "a4-reset-password.html",
+      "a5-reset-password.html",
+      "c1-account.html",
+      "c2-password.html",
+      "c3-email.html",
+      "c4-favorites.html",
+      "c5-contributions.html",
+      "c6-privacy.html",
+      "c7-export.html",
+      "d1-add-parking.html",
+      "d2-propose-change.html",
+      "d3-write-review.html",
+      "e1-not-found.html",
+      "e2-error.html",
+      "m1-moderation.html",
+      "m2-photos.html",
+      "m3-reports.html",
+      "m4-proposals.html",
+      "m5-users.html",
+      "m6-audit.html",
+      "p1-landing.html",
+      "p2-search.html",
+      "p3-parking-details.html",
+      "p4-privacy.html",
+      "p5-terms.html",
+      "p6-cookies.html",
+      "p7-about.html",
+      "preview/applied-ui.html",
+      "preview/brand-assets.html",
+      "preview/colors-primary.html",
+      "preview/components-buttons.html",
+      "preview/spacing-tokens.html",
+      "preview/typography-specimens.html",
+      "ui_kits/app/components/buttons.html",
+      "ui_kits/app/components/cards.html",
+      "ui_kits/app/components/forms.html",
+      "ui_kits/app/components/navigation.html",
+      "ui_kits/app/index.html"
+    ],
+    "css": [
+      "colors_and_type.css"
+    ],
+    "scriptsAndComponents": [],
+    "assets": [
+      "assets/imagery/commuter-portrait.jpg",
+      "assets/imagery/cyclist-crosswalk.jpg",
+      "assets/imagery/cyclist-foggy-avenue.jpg",
+      "assets/imagery/hero-bike-parking.jpg",
+      "assets/imagery/mtb-pair-rack.jpg",
+      "assets/imagery/square-bike-rows.jpg",
+      "assets/imagery/street-rack-mint-bike.jpg",
+      "context/provenance.md",
+      "context/source-context.md",
+      "DESIGN.md",
+      "images/optimized/commuter-portrait.jpg",
+      "images/optimized/cyclist-crosswalk.jpg",
+      "images/optimized/cyclist-foggy-avenue.jpg",
+      "images/optimized/hero-bike-parking.jpg",
+      "images/optimized/mtb-pair-rack.jpg",
+      "images/optimized/square-bike-rows.jpg",
+      "images/optimized/street-rack-mint-bike.jpg",
+      "images/pexels-alena-evseenko-660538512-20888653.jpg",
+      "images/pexels-daniel-orban-1151928062-21287382.jpg",
+      "images/pexels-hans-heemsbergen-2152884034-32629213.jpg",
+      "images/pexels-jaralol-17331856.jpg",
+      "images/pexels-jorgeural-5546118.jpg",
+      "images/pexels-linken-van-zyl-263454378-18958633.jpg",
+      "images/pexels-lukez0r-15931678.jpg",
+      "images/pexels-pavel-danilyuk-5807860.jpg",
+      "images/pexels-rrrumeyda-29609860.jpg",
+      "preview/README.md",
+      "README.md",
+      "render-checks/d1-currency.png",
+      "render-checks/e1-final.png",
+      "render-checks/e2-polish.png",
+      "render-checks/m2-photo-queue-v2.png",
+      "render-checks/m5-users-final.png",
+      "scripts/gen_d.py",
+      "scripts/gen_m.py",
+      "scripts/gen_m56.py",
+      "SKILL.md",
+      "ui_kits/app/README.md"
+    ]
+  },
+  "screens": [
+    {
+      "file": "a1-register.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "a2-login.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "a3-verify-email.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "a4-reset-password.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "a5-reset-password.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "c1-account.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "c2-password.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "c3-email.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "c4-favorites.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "c5-contributions.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "c6-privacy.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "c7-export.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "d1-add-parking.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "d2-propose-change.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "d3-write-review.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "e1-not-found.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "e2-error.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "m1-moderation.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "m2-photos.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "m3-reports.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "m4-proposals.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "m5-users.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "m6-audit.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "p1-landing.html",
+      "role": "landing-page",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "p2-search.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "p3-parking-details.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "p4-privacy.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "p5-terms.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "p6-cookies.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "p7-about.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "preview/applied-ui.html",
+      "role": "product-screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "preview/brand-assets.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "preview/colors-primary.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "preview/components-buttons.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "preview/spacing-tokens.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "preview/typography-specimens.html",
+      "role": "screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "ui_kits/app/components/buttons.html",
+      "role": "product-screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "ui_kits/app/components/cards.html",
+      "role": "product-screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "ui_kits/app/components/forms.html",
+      "role": "product-screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "ui_kits/app/components/navigation.html",
+      "role": "product-screen",
+      "implementationNote": "Preserve visual hierarchy, responsive behavior, and interactive states from this screen."
+    },
+    {
+      "file": "ui_kits/app/index.html",
+      "role": "launcher-overview",
+      "implementationNote": "Use this as the navigation/overview entry only; implement each linked screen file as its own route/surface."
+    }
+  ],
+  "screenFilePolicy": {
+    "mode": "screen-file-first",
+    "entryFileRole": "launcher-overview",
+    "rules": [
+      "Each distinct user-facing screen or surface must be delivered and implemented as its own file/route.",
+      "If a landing page is present or requested, keep it in landing.html and do not merge it into the product app screen.",
+      "When multiple HTML screens exist, index.html is a launcher/overview only; it must not be treated as the combined final UI.",
+      "Keep product app screens, landing pages, platform screens, and OS widget surfaces separate in production code."
+    ]
+  },
+  "appModules": [
+    "Identify domain-specific in-app modules from the exported UI; do not reduce them to generic cards.",
+    "For each major module, implement purpose, default/loading/empty/error/success states, and responsive behavior.",
+    "Keep app modules separate from OS home-screen widgets in the production component model."
+  ],
+  "osWidgets": [
+    "If the export includes home-screen, lock-screen, Live Activity, tablet glance, or Android widget surfaces, implement them as platform quick-access surfaces outside the app UI.",
+    "If none are present, do not invent OS widgets unless the product requirements request them."
+  ],
+  "landingPage": {
+    "detection": "Inspect files and screen names for a marketing/landing page surface. If present, keep it separate from product app screens.",
+    "requiredSections": [
+      "hero",
+      "value props",
+      "product proof/screenshots",
+      "feature proof",
+      "CTA"
+    ]
+  },
+  "tokens": {
+    "source": [
+      "colors_and_type.css"
+    ],
+    "required": [
+      "background",
+      "surface",
+      "foreground",
+      "muted text",
+      "border",
+      "accent",
+      "radius",
+      "shadow",
+      "spacing",
+      "type scale",
+      "motion"
+    ],
+    "note": "Extract/freeze tokens before framework implementation so coding tools do not substitute default theme colors or typography."
+  },
+  "interactions": {
+    "source": [
+      "ui_kits/app/index.html"
+    ],
+    "requiredStates": [
+      "default",
+      "hover",
+      "focus",
+      "active",
+      "disabled",
+      "loading",
+      "empty",
+      "error",
+      "success"
+    ],
+    "requiredBehaviors": [
+      "forms/validation where present",
+      "tabs/filters where present",
+      "dialogs/sheets/drawers where present",
+      "copy/generate/share actions where present",
+      "player or quick controls where present"
+    ],
+    "note": "If the prototype is static, derive missing behavior from visible controls and document it before coding."
+  },
+  "responsiveViewports": [
+    {
+      "name": "mobile-compact",
+      "width": 360,
+      "height": 800,
+      "category": "mobile",
+      "mustAvoidHorizontalScroll": true
+    },
+    {
+      "name": "mobile-standard",
+      "width": 390,
+      "height": 844,
+      "category": "mobile",
+      "mustAvoidHorizontalScroll": true
+    },
+    {
+      "name": "mobile-large",
+      "width": 430,
+      "height": 932,
+      "category": "mobile",
+      "mustAvoidHorizontalScroll": true
+    },
+    {
+      "name": "foldable-small-tablet",
+      "width": 600,
+      "height": 960,
+      "category": "foldable-tablet",
+      "mustAvoidHorizontalScroll": true
+    },
+    {
+      "name": "tablet-portrait",
+      "width": 820,
+      "height": 1180,
+      "category": "tablet",
+      "mustAvoidHorizontalScroll": true
+    },
+    {
+      "name": "tablet-landscape",
+      "width": 1024,
+      "height": 768,
+      "category": "tablet",
+      "mustAvoidHorizontalScroll": true
+    },
+    {
+      "name": "laptop",
+      "width": 1366,
+      "height": 768,
+      "category": "desktop",
+      "mustAvoidHorizontalScroll": true
+    },
+    {
+      "name": "desktop",
+      "width": 1440,
+      "height": 900,
+      "category": "desktop",
+      "mustAvoidHorizontalScroll": true
+    },
+    {
+      "name": "wide",
+      "width": 1920,
+      "height": 1080,
+      "category": "wide",
+      "mustAvoidHorizontalScroll": true
+    }
+  ],
+  "implementationChecklist": [
+    "Open entryFile first and map screens, modules, tokens, and interactions.",
+    "Extract tokens before writing framework components.",
+    "Implement app-specific modules with real states instead of generic card grids.",
+    "Preserve or rebuild JS interactions for meaningful UX actions.",
+    "Validate screenshots at desktop/tablet/mobile viewports with no horizontal overflow.",
+    "Keep landing pages, in-app modules, and OS widgets as separate implementation surfaces."
+  ]
+}

@@ -1,0 +1,89 @@
+# Development stack: `docker compose up` starts the database, the app
+# (auto-recompiling via cargo-watch) and the Tailwind CSS watcher.
+# DB-only: `docker compose up -d db`.
+
+services:
+  db:
+    image: imresamu/postgis:17-3.5  # arm64-compatible PostGIS build
+    container_name: bikenest-db
+    environment:
+      POSTGRES_USER: bikenest
+      POSTGRES_PASSWORD: bikenest
+      POSTGRES_DB: bikenest
+    ports:
+      - "${DB_HOST_PORT:-5432}:5432"
+    volumes:
+      - bikenest-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bikenest -d bikenest"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Rust app, recompiled on change. First start compiles the workspace
+  # (several minutes); the named volumes cache the target dir and the cargo
+  # registry, so later starts are fast. SQLx compile-time query checking
+  # talks to the `db` service.
+  app:
+    image: rust:1.95
+    working_dir: /app
+    environment:
+      DATABASE_URL: postgres://bikenest:bikenest@db:5432/bikenest
+      BIND_ADDR: 0.0.0.0:8080
+      RUST_LOG: info
+      # Object storage (Ledger #7). MEDIA_ROOT defaults to <repo>/media, which
+      # is the mounted /app/media; the signing secret is dev-only here.
+      MEDIA_ROOT: /app/media
+      MEDIA_SIGNING_SECRET: dev-compose-media-secret
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+      - cargo-target:/app/target
+      - cargo-registry:/usr/local/cargo/registry
+    depends_on:
+      db:
+        condition: service_healthy
+    # NOTE: literal block (|) with the `cargo watch` invocation on ONE physical
+    # line. A folded (>) block keeps extra-indented lines as newlines, which in
+    # sh would terminate `exec cargo watch` before its flags — cargo-watch would
+    # then fall back to its default `cargo check` and never start the server.
+    command:
+      - sh
+      - -c
+      - |
+        if ! cargo watch --version >/dev/null 2>&1; then echo 'installing cargo-watch (first start only)…'; cargo install --locked cargo-watch; fi
+        exec cargo watch -w crates -w migrations -w templates -w Cargo.toml -c -x 'run -q -p bikenest-web'
+
+  # Tailwind CSS 4.3 watcher: rebuilds web/static/css/app.css as the entry
+  # or templates change. node_modules lives in a named volume so the Linux
+  # install never clobbers a host-side install.
+  #
+  # Uses a glibc image (node:24-slim), NOT alpine: Tailwind 4's native `oxide`
+  # engine (@tailwindcss/oxide) has no reliable musl build, so on alpine the
+  # `tailwindcss` binary crashes on start and the service dies immediately.
+  css:
+    image: node:24-slim
+    working_dir: /app
+    environment:
+      NODE_ENV: development
+    # Tailwind 4's `--watch` exits cleanly when stdin reaches EOF; under
+    # `docker compose up -d` there is no terminal, so keep stdin open + a TTY
+    # allocated, otherwise the watcher stops the moment it starts.
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+    command: >
+      sh -c "
+        (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) &&
+        npm run build:assets &&
+        npm run watch:css
+      "
+
+volumes:
+  bikenest-pgdata:
+  cargo-target:
+  cargo-registry:
+  node_modules:

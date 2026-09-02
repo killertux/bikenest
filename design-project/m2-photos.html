@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Photo moderation queue — BikeNest</title>
+  <meta name="description" content="Review pending photos before they become publicly visible." />
+  <meta name="robots" content="noindex" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    /* Design tokens — direction: human-approachable. Raw values live only here. */
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg:      'oklch(98% 0.004 240)',
+            surface: 'oklch(100% 0 0)',
+            fg:      'oklch(20% 0.02 240)',
+            muted:   'oklch(50% 0.018 240)',
+            line:    'oklch(90% 0.006 240)',
+            accent:  'oklch(56% 0.12 170)',
+            'accent-strong': 'oklch(45% 0.11 170)',
+            'accent-dark':   'oklch(40% 0.10 170)',
+            'accent-soft':   'oklch(56% 0.12 170 / 0.12)',
+            'scrim': 'oklch(18% 0.015 240)',
+            fresh:   'oklch(58% 0.13 155)',
+            aging:   'oklch(68% 0.12 75)',
+            stale:   'oklch(55% 0.16 35)',
+            danger:  'oklch(47% 0.17 30)',
+            'danger-soft': 'oklch(47% 0.17 30 / 0.08)',
+          },
+          fontFamily: {
+            display: ['"Avenir Next"', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
+            body:    ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', 'system-ui', 'sans-serif'],
+            mono:    ['ui-monospace', '"SF Mono"', 'Menlo', 'monospace'],
+          },
+          boxShadow: {
+            card: '0 1px 2px oklch(20% 0.02 240 / 0.06), 0 8px 24px oklch(20% 0.02 240 / 0.08)',
+            pop:  '0 2px 6px oklch(20% 0.02 240 / 0.10), 0 16px 40px oklch(20% 0.02 240 / 0.16)',
+          },
+          maxWidth: { shell: '72rem' },
+        }
+      }
+    }
+  </script>
+  <style type="text/tailwindcss">
+    @layer base {
+      html { -webkit-text-size-adjust: 100%; }
+      body { text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
+      p { text-wrap: pretty; }
+      h1, h2, h3 { text-wrap: balance; }
+      :focus-visible { outline: 2px solid oklch(45% 0.11 170); outline-offset: 2px; border-radius: 4px; }
+    }
+  </style>
+</head>
+<body class="bg-bg font-body text-fg">
+
+
+  <header data-od-id="topnav-moderation" class="sticky top-0 z-40 border-b border-line bg-[oklch(98%_0.004_240_/_0.9)] backdrop-blur">
+    <div class="mx-auto flex h-16 max-w-shell items-center justify-between gap-6 px-5 lg:px-8">
+      <a href="p1-landing.html" class="flex items-center gap-2.5" aria-label="BikeNest — home">
+        <span class="grid h-9 w-9 place-items-center rounded-xl bg-accent text-white"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-5 w-5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="18.5" cy="17.5" r="3.5" /> <circle cx="5.5" cy="17.5" r="3.5" /> <circle cx="15" cy="5" r="1" /> <path d="M12 17.5V14l-3-3 4-3 2 3h2" /> </svg></span>
+        <span class="font-display text-lg font-bold tracking-tight">BikeNest</span>
+      </a>
+      <nav class="hidden items-center gap-7 md:flex" aria-label="Primary">
+        <a href="p2-search.html" class="text-sm text-muted hover:text-fg">Parking spots</a>
+        <a href="p1-landing.html#how-it-works" class="text-sm text-muted hover:text-fg">How it works</a>
+      </nav>
+      <div class="hidden items-center gap-4 md:flex">
+        <div class="flex items-center rounded-lg border border-line p-0.5 font-mono text-xs" role="group" aria-label="Language">
+          <a href="#" lang="pt-BR" class="rounded-md px-2 py-1 text-muted hover:text-fg" aria-label="Português (Brasil)">PT</a>
+          <a href="#" lang="en" aria-current="true" class="rounded-md bg-fg px-2 py-1 font-medium text-bg" aria-label="English">EN</a>
+        </div>
+        <div class="relative" data-od-id="user-menu">
+          <button id="user-btn" type="button" aria-expanded="false" aria-haspopup="menu"
+                  class="flex items-center gap-2 rounded-full border border-line py-1 pl-1 pr-2.5 transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]">
+            <span class="grid h-8 w-8 place-items-center rounded-full bg-accent-strong font-display text-xs font-bold text-white">AR</span>
+            <span class="text-sm font-medium">Ana</span>
+            <!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m6 9 6 6 6-6" /> </svg>
+          </button>
+          <div id="user-menu" role="menu" aria-label="Account menu"
+               class="hidden absolute right-0 top-[calc(100%+8px)] w-64 rounded-xl border border-line bg-surface p-1.5 shadow-pop">
+            <div class="border-b border-line px-3 py-2.5">
+              <p class="flex items-center gap-2 text-sm font-semibold">Ana Ribeiro
+                <span class="inline-flex items-center gap-1 rounded-full bg-[oklch(56%_0.12_170_/_0.12)] px-2 py-0.5 text-[11px] font-semibold text-accent-strong"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3 w-3" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> </svg> Moderator</span>
+              </p>
+              <p class="mt-0.5 truncate text-xs text-muted">ana.ribeiro@example.com</p>
+            </div>
+            <div class="mt-1">
+              <a role="menuitem" href="c1-account.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /> <circle cx="12" cy="7" r="4" /> </svg> Account overview</a>
+              <a role="menuitem" href="c5-contributions.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="8" height="4" x="8" y="2" rx="1" ry="1" /> <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /> <path d="M12 11h4" /> <path d="M12 16h4" /> <path d="M8 11h.01" /> <path d="M8 16h.01" /> </svg> Contributions</a>
+              <a role="menuitem" href="c6-privacy.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> <path d="m9 12 2 2 4-4" /> </svg> Privacy &amp; data</a>
+            </div>
+            <div class="my-1 border-t border-line"></div>
+            <p class="px-3 pb-1 pt-1 font-mono text-[11px] uppercase tracking-wide text-muted">Moderation</p>
+            <a role="menuitem" href="m1-moderation.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> </svg> Moderation overview</a><a role="menuitem" href="m2-photos.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" ry="2" /> <circle cx="9" cy="9" r="2" /> <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" /> </svg> Photo queue</a><a role="menuitem" href="m3-reports.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528" /> </svg> Reports queue</a><a role="menuitem" href="m4-proposals.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="18" cy="18" r="3" /> <circle cx="6" cy="6" r="3" /> <path d="M13 6h3a2 2 0 0 1 2 2v7" /> <line x1="6" x2="6" y1="9" y2="21" /> </svg> Proposal review</a>
+            <div class="my-1 border-t border-line"></div>
+            <a role="menuitem" href="a2-login.html" class="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-danger hover:bg-danger-soft"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m16 17 5-5-5-5" /> <path d="M21 12H9" /> <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /> </svg> Log out</a>
+          </div>
+        </div>
+      </div>
+      <button id="menu-btn" class="grid h-10 w-10 place-items-center rounded-lg border border-line md:hidden" aria-expanded="false" aria-controls="mobile-menu" aria-label="Open menu">
+        <!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-5 w-5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M4 5h16" /> <path d="M4 12h16" /> <path d="M4 19h16" /> </svg>
+      </button>
+    </div>
+    <div id="mobile-menu" class="hidden border-t border-line bg-bg px-5 py-4 md:hidden">
+      <nav class="flex flex-col gap-1" aria-label="Primary mobile">
+        <a href="p2-search.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Parking spots</a>
+        <a href="p1-landing.html#how-it-works" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">How it works</a>
+      </nav>
+      <div class="mt-3 flex flex-col gap-1 border-t border-line pt-3">
+        <p class="px-3 pb-1 font-mono text-[11px] uppercase tracking-wide text-muted">Moderation</p>
+        <a href="m1-moderation.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Moderation overview</a><a href="m2-photos.html" class="rounded-lg px-3 py-2.5 text-[15px] font-medium text-fg">Photo queue</a><a href="m3-reports.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Reports queue</a><a href="m4-proposals.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Proposal review</a>
+      </div>
+      <div class="mt-3 flex flex-col gap-1 border-t border-line pt-3">
+        <p class="px-3 pb-1 font-mono text-[11px] uppercase tracking-wide text-muted">Your account</p>
+        <a href="c1-account.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Account overview</a>
+        <a href="c5-contributions.html" class="rounded-lg px-3 py-2.5 text-[15px] text-muted hover:bg-[oklch(20%_0.02_240_/_0.05)] hover:text-fg">Contributions</a>
+        <a href="a2-login.html" class="mt-1 rounded-lg px-3 py-2.5 text-[15px] font-medium text-danger hover:bg-danger-soft">Log out</a>
+      </div>
+    </div>
+  </header>
+<nav data-od-id="moderation-tabs" aria-label="Moderation sections" class="border-b border-line bg-bg"><div class="mx-auto flex max-w-shell gap-6 overflow-x-auto px-5 lg:px-8"><a href="m1-moderation.html" class="whitespace-nowrap border-b-2 border-transparent text-muted hover:border-line hover:text-fg py-3.5 text-sm">Overview</a><a href="m2-photos.html" aria-current="page" class="whitespace-nowrap border-b-2 border-accent-strong font-medium text-fg py-3.5 text-sm">Photos</a><a href="m3-reports.html" class="whitespace-nowrap border-b-2 border-transparent text-muted hover:border-line hover:text-fg py-3.5 text-sm">Reports</a><a href="m4-proposals.html" class="whitespace-nowrap border-b-2 border-transparent text-muted hover:border-line hover:text-fg py-3.5 text-sm">Proposals</a></div></nav>
+
+  <main id="content" class="mx-auto w-full max-w-6xl px-5 py-10 lg:px-8">
+    <div class="mb-8">
+      <p class="font-mono text-xs uppercase tracking-[0.14em] text-muted">Moderation · Photos</p>
+      <div class="mt-1 flex flex-wrap items-end justify-between gap-3">
+        <h1 class="font-display text-3xl font-bold tracking-tight">Photo queue</h1>
+        <div class="flex items-center gap-2 font-mono text-[11px] uppercase tracking-wide text-muted">
+          <span class="rounded-full border border-line px-2.5 py-1">Pending review</span><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3 w-3" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M5 12h14" /> <path d="m12 5 7 7-7 7" /> </svg>
+          <span class="rounded-full border border-[oklch(58%_0.13_155_/_0.45)] px-2.5 py-1 text-fresh">Approved</span>
+          <span class="rounded-full border border-[oklch(47%_0.17_30_/_0.45)] px-2.5 py-1 text-danger">Rejected</span>
+        </div>
+      </div>
+      <p class="mt-2 max-w-2xl text-sm leading-relaxed text-muted">Newly uploaded photos start as <span class="font-medium text-fg">pending review</span> and are <span class="font-medium text-fg">not publicly visible until approved</span> (§30). Photos already public can still be hidden later.</p>
+    </div>
+
+    <section data-od-id="pending-photos" aria-live="polite">
+      <h2 class="mb-4 font-display text-lg font-bold">Pending review <span id="pending-count" class="ml-1 align-middle rounded-full bg-[oklch(20%_0.02_240_/_0.06)] px-2.5 py-0.5 font-mono text-xs font-medium text-muted">5</span></h2>
+      <ul id="pending-grid" class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          <li class="photo-item overflow-hidden rounded-2xl border border-line bg-surface shadow-card" data-photo="0">
+            <button type="button" class="photo-view group relative block w-full" data-photo="0" aria-label="View photo full size">
+              <img src="images/optimized/street-rack-mint-bike.jpg" width="1200" height="800" alt="Pending photo for Estação Vila Mariana" class="aspect-4/3 w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" />
+              <span class="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-[oklch(18%_0.015_240_/_0.78)] px-2.5 py-1 font-mono text-[11px] font-medium text-white"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3 w-3" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /> <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /> <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /> <path d="m2 2 20 20" /> </svg> Not public yet</span>
+            </button>
+            <div class="p-5">
+              <p class="text-sm font-semibold">Estação Vila Mariana</p>
+              <p class="mt-1 font-mono text-[11px] text-muted">Uploaded 2 days ago · Contributor #1042 · EXIF stripped</p>
+              <p class="mt-2 text-sm italic text-muted">&ldquo;New covered rack by the pharmacy.&rdquo;</p>
+              <div class="mt-4 flex items-center gap-2.5 border-t border-line pt-4">
+                <button type="button" class="approve-btn inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent-strong px-3 text-sm font-semibold text-white transition-colors hover:bg-accent-dark"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 6 9 17l-5-5" /> </svg> Approve</button>
+                <button type="button" class="reject-toggle inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-line px-3 text-sm font-medium text-fg transition-colors hover:border-danger hover:text-danger" aria-expanded="false" aria-controls="reject-panel-0"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg> Reject</button>
+              </div>
+              <div id="reject-panel-0" class="reject-panel hidden border-t border-line pt-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-muted">Reason</p>
+                <div class="mt-2 space-y-1.5">
+                  <label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-0" class="accent-[oklch(47%_0.17_30)]" /> Not of this location</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-0" class="accent-[oklch(47%_0.17_30)]" /> Doesn't show the parking</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-0" class="accent-[oklch(47%_0.17_30)]" /> Inappropriate content</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-0" class="accent-[oklch(47%_0.17_30)]" /> Spam or advertising</label>
+                </div>
+                <label class="mt-3 block text-xs font-semibold uppercase tracking-wide text-muted" for="reject-note-0">Note to contributor (optional)</label>
+                <input id="reject-note-0" type="text" class="mt-1.5 w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm focus:border-accent-strong" placeholder="e.g. Please upload a photo of the rack itself" />
+                <button type="button" class="reject-confirm mt-3 inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-danger px-3 text-sm font-semibold text-white transition-colors hover:bg-[oklch(40%_0.15_30)]" data-photo="0"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg> Reject photo</button>
+              </div>
+            </div>
+          </li>
+          <li class="photo-item overflow-hidden rounded-2xl border border-line bg-surface shadow-card" data-photo="1">
+            <button type="button" class="photo-view group relative block w-full" data-photo="1" aria-label="View photo full size">
+              <img src="images/optimized/mtb-pair-rack.jpg" width="800" height="1200" alt="Pending photo for Bicicletário Metrô Ana Rosa" class="aspect-4/3 w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" />
+              <span class="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-[oklch(18%_0.015_240_/_0.78)] px-2.5 py-1 font-mono text-[11px] font-medium text-white"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3 w-3" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /> <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /> <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /> <path d="m2 2 20 20" /> </svg> Not public yet</span>
+            </button>
+            <div class="p-5">
+              <p class="text-sm font-semibold">Bicicletário Metrô Ana Rosa</p>
+              <p class="mt-1 font-mono text-[11px] text-muted">Uploaded 2 days ago · Contributor #0917 · EXIF stripped</p>
+              
+              <div class="mt-4 flex items-center gap-2.5 border-t border-line pt-4">
+                <button type="button" class="approve-btn inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent-strong px-3 text-sm font-semibold text-white transition-colors hover:bg-accent-dark"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 6 9 17l-5-5" /> </svg> Approve</button>
+                <button type="button" class="reject-toggle inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-line px-3 text-sm font-medium text-fg transition-colors hover:border-danger hover:text-danger" aria-expanded="false" aria-controls="reject-panel-1"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg> Reject</button>
+              </div>
+              <div id="reject-panel-1" class="reject-panel hidden border-t border-line pt-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-muted">Reason</p>
+                <div class="mt-2 space-y-1.5">
+                  <label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-1" class="accent-[oklch(47%_0.17_30)]" /> Not of this location</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-1" class="accent-[oklch(47%_0.17_30)]" /> Doesn't show the parking</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-1" class="accent-[oklch(47%_0.17_30)]" /> Inappropriate content</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-1" class="accent-[oklch(47%_0.17_30)]" /> Spam or advertising</label>
+                </div>
+                <label class="mt-3 block text-xs font-semibold uppercase tracking-wide text-muted" for="reject-note-1">Note to contributor (optional)</label>
+                <input id="reject-note-1" type="text" class="mt-1.5 w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm focus:border-accent-strong" placeholder="e.g. Please upload a photo of the rack itself" />
+                <button type="button" class="reject-confirm mt-3 inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-danger px-3 text-sm font-semibold text-white transition-colors hover:bg-[oklch(40%_0.15_30)]" data-photo="1"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg> Reject photo</button>
+              </div>
+            </div>
+          </li>
+          <li class="photo-item overflow-hidden rounded-2xl border border-line bg-surface shadow-card" data-photo="2">
+            <button type="button" class="photo-view group relative block w-full" data-photo="2" aria-label="View photo full size">
+              <img src="images/optimized/hero-bike-parking.jpg" width="2000" height="1125" alt="Pending photo for Estação Vila Mariana" class="aspect-4/3 w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" />
+              <span class="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-[oklch(18%_0.015_240_/_0.78)] px-2.5 py-1 font-mono text-[11px] font-medium text-white"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3 w-3" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /> <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /> <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /> <path d="m2 2 20 20" /> </svg> Not public yet</span>
+            </button>
+            <div class="p-5">
+              <p class="text-sm font-semibold">Estação Vila Mariana</p>
+              <p class="mt-1 font-mono text-[11px] text-muted">Uploaded yesterday · Contributor #1108 · EXIF stripped</p>
+              
+              <div class="mt-4 flex items-center gap-2.5 border-t border-line pt-4">
+                <button type="button" class="approve-btn inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent-strong px-3 text-sm font-semibold text-white transition-colors hover:bg-accent-dark"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 6 9 17l-5-5" /> </svg> Approve</button>
+                <button type="button" class="reject-toggle inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-line px-3 text-sm font-medium text-fg transition-colors hover:border-danger hover:text-danger" aria-expanded="false" aria-controls="reject-panel-2"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg> Reject</button>
+              </div>
+              <div id="reject-panel-2" class="reject-panel hidden border-t border-line pt-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-muted">Reason</p>
+                <div class="mt-2 space-y-1.5">
+                  <label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-2" class="accent-[oklch(47%_0.17_30)]" /> Not of this location</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-2" class="accent-[oklch(47%_0.17_30)]" /> Doesn't show the parking</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-2" class="accent-[oklch(47%_0.17_30)]" /> Inappropriate content</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-2" class="accent-[oklch(47%_0.17_30)]" /> Spam or advertising</label>
+                </div>
+                <label class="mt-3 block text-xs font-semibold uppercase tracking-wide text-muted" for="reject-note-2">Note to contributor (optional)</label>
+                <input id="reject-note-2" type="text" class="mt-1.5 w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm focus:border-accent-strong" placeholder="e.g. Please upload a photo of the rack itself" />
+                <button type="button" class="reject-confirm mt-3 inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-danger px-3 text-sm font-semibold text-white transition-colors hover:bg-[oklch(40%_0.15_30)]" data-photo="2"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg> Reject photo</button>
+              </div>
+            </div>
+          </li>
+          <li class="photo-item overflow-hidden rounded-2xl border border-line bg-surface shadow-card" data-photo="3">
+            <button type="button" class="photo-view group relative block w-full" data-photo="3" aria-label="View photo full size">
+              <img src="images/optimized/commuter-portrait.jpg" width="801" height="1200" alt="Pending photo for Parque Ibirapuera — Portão 3" class="aspect-4/3 w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" />
+              <span class="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-[oklch(18%_0.015_240_/_0.78)] px-2.5 py-1 font-mono text-[11px] font-medium text-white"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3 w-3" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /> <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /> <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /> <path d="m2 2 20 20" /> </svg> Not public yet</span>
+            </button>
+            <div class="p-5">
+              <p class="text-sm font-semibold">Parque Ibirapuera — Portão 3</p>
+              <p class="mt-1 font-mono text-[11px] text-muted">Uploaded 3 days ago · Contributor #1215 · EXIF stripped</p>
+              
+              <div class="mt-4 flex items-center gap-2.5 border-t border-line pt-4">
+                <button type="button" class="approve-btn inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent-strong px-3 text-sm font-semibold text-white transition-colors hover:bg-accent-dark"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 6 9 17l-5-5" /> </svg> Approve</button>
+                <button type="button" class="reject-toggle inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-line px-3 text-sm font-medium text-fg transition-colors hover:border-danger hover:text-danger" aria-expanded="false" aria-controls="reject-panel-3"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg> Reject</button>
+              </div>
+              <div id="reject-panel-3" class="reject-panel hidden border-t border-line pt-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-muted">Reason</p>
+                <div class="mt-2 space-y-1.5">
+                  <label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-3" class="accent-[oklch(47%_0.17_30)]" /> Not of this location</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-3" class="accent-[oklch(47%_0.17_30)]" /> Doesn't show the parking</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-3" class="accent-[oklch(47%_0.17_30)]" /> Inappropriate content</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-3" class="accent-[oklch(47%_0.17_30)]" /> Spam or advertising</label>
+                </div>
+                <label class="mt-3 block text-xs font-semibold uppercase tracking-wide text-muted" for="reject-note-3">Note to contributor (optional)</label>
+                <input id="reject-note-3" type="text" class="mt-1.5 w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm focus:border-accent-strong" placeholder="e.g. Please upload a photo of the rack itself" />
+                <button type="button" class="reject-confirm mt-3 inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-danger px-3 text-sm font-semibold text-white transition-colors hover:bg-[oklch(40%_0.15_30)]" data-photo="3"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg> Reject photo</button>
+              </div>
+            </div>
+          </li>
+          <li class="photo-item overflow-hidden rounded-2xl border border-line bg-surface shadow-card" data-photo="4">
+            <button type="button" class="photo-view group relative block w-full" data-photo="4" aria-label="View photo full size">
+              <img src="images/optimized/cyclist-crosswalk.jpg" width="1200" height="1200" alt="Pending photo for Rua Domingos de Morais, 1500" class="aspect-4/3 w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" />
+              <span class="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-[oklch(18%_0.015_240_/_0.78)] px-2.5 py-1 font-mono text-[11px] font-medium text-white"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3 w-3" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /> <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /> <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /> <path d="m2 2 20 20" /> </svg> Not public yet</span>
+            </button>
+            <div class="p-5">
+              <p class="text-sm font-semibold">Rua Domingos de Morais, 1500</p>
+              <p class="mt-1 font-mono text-[11px] text-muted">Uploaded 5 days ago · Contributor #0990 · EXIF stripped</p>
+              
+              <div class="mt-4 flex items-center gap-2.5 border-t border-line pt-4">
+                <button type="button" class="approve-btn inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent-strong px-3 text-sm font-semibold text-white transition-colors hover:bg-accent-dark"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 6 9 17l-5-5" /> </svg> Approve</button>
+                <button type="button" class="reject-toggle inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-line px-3 text-sm font-medium text-fg transition-colors hover:border-danger hover:text-danger" aria-expanded="false" aria-controls="reject-panel-4"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg> Reject</button>
+              </div>
+              <div id="reject-panel-4" class="reject-panel hidden border-t border-line pt-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-muted">Reason</p>
+                <div class="mt-2 space-y-1.5">
+                  <label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-4" class="accent-[oklch(47%_0.17_30)]" /> Not of this location</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-4" class="accent-[oklch(47%_0.17_30)]" /> Doesn't show the parking</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-4" class="accent-[oklch(47%_0.17_30)]" /> Inappropriate content</label><label class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line px-3 py-2 text-sm transition-colors hover:bg-[oklch(20%_0.02_240_/_0.04)]"><input type="radio" name="reject-reason-4" class="accent-[oklch(47%_0.17_30)]" /> Spam or advertising</label>
+                </div>
+                <label class="mt-3 block text-xs font-semibold uppercase tracking-wide text-muted" for="reject-note-4">Note to contributor (optional)</label>
+                <input id="reject-note-4" type="text" class="mt-1.5 w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm focus:border-accent-strong" placeholder="e.g. Please upload a photo of the rack itself" />
+                <button type="button" class="reject-confirm mt-3 inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-danger px-3 text-sm font-semibold text-white transition-colors hover:bg-[oklch(40%_0.15_30)]" data-photo="4"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg> Reject photo</button>
+              </div>
+            </div>
+          </li>
+      </ul>
+      <div id="queue-empty" class="hidden rounded-2xl border border-line bg-surface p-10 text-center shadow-card">
+        <!-- @license lucide-static v0.544.0 - ISC --> <svg class="mx-auto h-8 w-8 text-fresh" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="10" /> <path d="m9 12 2 2 4-4" /> </svg>
+        <h3 class="mt-3 font-display text-lg font-bold">Queue is clear</h3>
+        <p class="mx-auto mt-1 max-w-sm text-sm text-muted">No photos are waiting for review. New uploads will appear here the moment the community submits them.</p>
+      </div>
+    </section>
+
+    <section data-od-id="recently-moderated" class="mt-8 rounded-2xl border border-line bg-surface p-6 shadow-card sm:p-8">
+      <h2 class="font-display text-lg font-bold">Recently moderated</h2>
+      <ul class="mt-2 divide-y divide-line">
+        <li class="flex flex-wrap items-center justify-between gap-3 py-3.5">
+          <div>
+            <p class="text-sm font-medium">Photo approved · Bicicletário Metrô Ana Rosa</p>
+            <p class="mt-0.5 text-xs text-muted">By you · yesterday · now public on the location page</p>
+          </div>
+          <button type="button" class="hide-btn inline-flex h-9 items-center gap-1.5 rounded-lg border border-line px-3 text-xs font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.04)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /> <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /> <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /> <path d="m2 2 20 20" /> </svg> Hide</button>
+        </li>
+        <li class="flex flex-wrap items-center justify-between gap-3 py-3.5">
+          <div>
+            <p class="text-sm font-medium">Photo approved · Estação Vila Mariana</p>
+            <p class="mt-0.5 text-xs text-muted">By you · 3 days ago</p>
+          </div>
+          <button type="button" class="hide-btn inline-flex h-9 items-center gap-1.5 rounded-lg border border-line px-3 text-xs font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.04)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /> <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /> <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /> <path d="m2 2 20 20" /> </svg> Hide</button>
+        </li>
+        <li class="flex flex-wrap items-center justify-between gap-3 py-3.5">
+          <div>
+            <p class="text-sm font-medium">Photo rejected · Rua Augusta hub</p>
+            <p class="mt-0.5 text-xs text-muted">Reason: doesn't show the parking · contributor #0871 notified · 4 days ago</p>
+          </div>
+          <button type="button" class="restore-btn inline-flex h-9 items-center gap-1.5 rounded-lg border border-line px-3 text-xs font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.04)]"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-3.5 w-3.5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M9 14 4 9l5-5" /> <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" /> </svg> Restore</button>
+        </li>
+      </ul>
+      <p class="mt-4 border-t border-line pt-4 text-xs leading-relaxed text-muted">Every moderation action is recorded in an audit trail with the actor, target and timestamp. Audit history cannot be edited or deleted — corrections appear as new entries (§44).</p>
+    </section>
+
+    <details data-od-id="state-previews" class="group mt-8 rounded-2xl border border-dashed border-line bg-bg">
+      <summary class="flex cursor-pointer select-none items-center justify-between px-5 py-4 font-mono text-xs uppercase tracking-[0.14em] text-muted">
+        Prototype — hidden states
+        <!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 transition-transform group-open:rotate-180" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m6 9 6 6 6-6" /> </svg>
+      </summary>
+      <div class="space-y-4 border-t border-line px-5 py-5 text-sm leading-relaxed text-muted">
+        <p><strong class="font-semibold text-fg">Approve / reject flows are live:</strong> approving removes the card from the queue and logs it under "Recently moderated"; rejecting expands a reason panel first, and the contributor sees the outcome on their contribution history (C5) with the reason attached.</p>
+        <p><strong class="font-semibold text-fg text-danger">Duplicate-check note:</strong> if the same photo file was already approved for another location, the card would show a "Possible duplicate of…" warning before the decision, linking both entries.</p>
+      </div>
+    </details>
+
+    <div id="lightbox" class="fixed inset-0 z-50 hidden items-center justify-center bg-[oklch(18%_0.015_240_/_0.92)] p-5" role="dialog" aria-modal="true" aria-label="Photo preview">
+      <figure class="max-h-full max-w-3xl">
+        <img id="lightbox-img" src="" alt="" width="1200" height="800" class="max-h-[80vh] w-auto max-w-full rounded-xl object-contain" />
+        <figcaption id="lightbox-cap" class="mt-3 text-center text-sm text-[oklch(98%_0.004_240_/_0.85)]"></figcaption>
+      </figure>
+      <button id="lightbox-close" type="button" class="absolute right-5 top-5 grid h-10 w-10 place-items-center rounded-full bg-[oklch(100%_0_0_/_0.12)] text-white hover:bg-[oklch(100%_0_0_/_0.22)]" aria-label="Close preview"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-5 w-5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg></button>
+    </div>
+  </main>
+
+  <footer data-od-id="footer" class="mt-4 border-t border-line bg-surface">
+    <div class="mx-auto max-w-shell px-5 py-12 lg:px-8">
+      <div class="flex flex-col gap-10 md:flex-row md:items-start md:justify-between">
+        <div class="max-w-xs">
+          <a href="p1-landing.html" class="flex items-center gap-2.5" aria-label="BikeNest — home">
+            <span class="grid h-8 w-8 place-items-center rounded-lg bg-accent text-white"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="18.5" cy="17.5" r="3.5" /> <circle cx="5.5" cy="17.5" r="3.5" /> <circle cx="15" cy="5" r="1" /> <path d="M12 17.5V14l-3-3 4-3 2 3h2" /> </svg></span>
+            <span class="font-display text-base font-bold tracking-tight">BikeNest</span>
+          </a>
+          <p class="mt-3 text-sm leading-relaxed text-muted">A community-maintained map of bicycle parking, built by and for cyclists.</p>
+        </div>
+        <nav class="grid grid-cols-2 gap-x-12 gap-y-2 text-sm" aria-label="Footer">
+          <a href="p7-about.html" class="py-1 text-muted hover:text-fg">About</a>
+          <a href="#" class="py-1 text-muted hover:text-fg">Contact</a>
+          <a href="p4-privacy.html" class="py-1 text-muted hover:text-fg">Privacy policy</a>
+          <a href="p5-terms.html" class="py-1 text-muted hover:text-fg">Terms of service</a>
+          <a href="p6-cookies.html" class="py-1 text-muted hover:text-fg">Cookie policy</a>
+          <a href="p7-about.html#how-it-works" class="py-1 text-muted hover:text-fg">How it works</a>
+        </nav>
+      </div>
+      <div class="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-6">
+        <p class="text-xs text-muted">© 2026 BikeNest</p>
+        <p class="font-mono text-xs text-muted">Prototype · M2 Photo queue</p>
+      </div>
+    </div>
+  </footer>
+  <div class="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-5">
+    <p id="flash" role="status" aria-live="polite" class="pointer-events-auto hidden max-w-md items-center gap-2.5 rounded-xl bg-fg px-4 py-3 text-sm text-bg shadow-pop">
+      <!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-4 w-4 shrink-0" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="12" cy="12" r="10" /> <path d="M12 16v-4" /> <path d="M12 8h.01" /> </svg>
+      <span id="flash-text"></span>
+    </p>
+  </div>
+  <script>
+    /* Design tokens — direction: human-approachable. Raw values live only here. */
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg:      'oklch(98% 0.004 240)',
+            surface: 'oklch(100% 0 0)',
+            fg:      'oklch(20% 0.02 240)',
+            muted:   'oklch(50% 0.018 240)',
+            line:    'oklch(90% 0.006 240)',
+            accent:  'oklch(56% 0.12 170)',
+            'accent-strong': 'oklch(45% 0.11 170)',
+            'accent-dark':   'oklch(40% 0.10 170)',
+            'accent-soft':   'oklch(56% 0.12 170 / 0.12)',
+            'scrim': 'oklch(18% 0.015 240)',
+            fresh:   'oklch(58% 0.13 155)',
+            aging:   'oklch(68% 0.12 75)',
+            stale:   'oklch(55% 0.16 35)',
+            danger:  'oklch(47% 0.17 30)',
+            'danger-soft': 'oklch(47% 0.17 30 / 0.08)',
+          },
+          fontFamily: {
+            display: ['"Avenir Next"', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
+            body:    ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', 'system-ui', 'sans-serif'],
+            mono:    ['ui-monospace', '"SF Mono"', 'Menlo', 'monospace'],
+          },
+          boxShadow: {
+            card: '0 1px 2px oklch(20% 0.02 240 / 0.06), 0 8px 24px oklch(20% 0.02 240 / 0.08)',
+            pop:  '0 2px 6px oklch(20% 0.02 240 / 0.10), 0 16px 40px oklch(20% 0.02 240 / 0.16)',
+          },
+          maxWidth: { shell: '72rem' },
+        }
+      }
+    }
+  </script>
+
+  <script>
+/* ---------- Shell: user menu, mobile menu, flash ---------- */
+    var userBtn = document.getElementById('user-btn');
+    var userMenu = document.getElementById('user-menu');
+    userBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var open = !userMenu.classList.toggle('hidden');
+      userBtn.setAttribute('aria-expanded', String(open));
+    });
+    document.addEventListener('click', function (e) {
+      if (!userMenu.classList.contains('hidden') && !userMenu.contains(e.target) && !userBtn.contains(e.target)) {
+        userMenu.classList.add('hidden');
+        userBtn.setAttribute('aria-expanded', 'false');
+      }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !userMenu.classList.contains('hidden')) {
+        userMenu.classList.add('hidden');
+        userBtn.setAttribute('aria-expanded', 'false');
+        userBtn.focus();
+      }
+    });
+
+    var menuBtn = document.getElementById('menu-btn');
+    var mobileMenu = document.getElementById('mobile-menu');
+    menuBtn.addEventListener('click', function () {
+      var open = !mobileMenu.classList.toggle('hidden');
+      menuBtn.setAttribute('aria-expanded', String(open));
+      menuBtn.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    });
+
+    var flashEl = document.getElementById('flash');
+    var flashText = document.getElementById('flash-text');
+    var flashTimer;
+    function flash(msg) {
+      flashText.textContent = msg;
+      flashEl.classList.remove('hidden');
+      flashEl.classList.add('flex');
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(function () {
+        flashEl.classList.add('hidden');
+        flashEl.classList.remove('flex');
+      }, 4600);
+    }
+
+    /* ---------- M2: photo queue actions + lightbox ---------- */
+    var pendingGrid = document.getElementById('pending-grid');
+    var queueEmpty = document.getElementById('queue-empty');
+    var pendingCount = document.getElementById('pending-count');
+
+    function refreshCount() {
+      var left = pendingGrid.querySelectorAll('.photo-item').length;
+      pendingCount.textContent = left;
+      if (left === 0) { queueEmpty.classList.remove('hidden'); }
+    }
+
+    function moderatedRow(text, detail, actionHtml) {
+      var list = document.querySelector('#recently-moderated ul');
+      var li = document.createElement('li');
+      li.className = 'flex flex-wrap items-center justify-between gap-3 py-3.5';
+      li.innerHTML = '<div><p class="text-sm font-medium">' + text + '</p><p class="mt-0.5 text-xs text-muted">' + detail + '</p></div>' + actionHtml;
+      list.insertBefore(li, list.firstChild);
+    }
+
+    pendingGrid.addEventListener('click', function (e) {
+      var approve = e.target.closest('.approve-btn');
+      if (approve) {
+        var item = approve.closest('.photo-item');
+        var spot = item.querySelector('p').textContent;
+        item.remove();
+        moderatedRow('Photo approved · ' + spot, 'By you · just now · now public on the location page',
+          '<button type="button" class="hide-btn inline-flex h-9 items-center gap-1.5 rounded-lg border border-line px-3 text-xs font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.04)]">' + document.querySelector('.hide-btn').innerHTML + '</button>');
+        flash('Photo approved and published. The action was recorded in the audit trail.');
+        refreshCount();
+        return;
+      }
+      var toggle = e.target.closest('.reject-toggle');
+      if (toggle) {
+        var panel = document.getElementById(toggle.getAttribute('aria-controls'));
+        var open = !panel.classList.toggle('hidden');
+        toggle.setAttribute('aria-expanded', String(open));
+        toggle.textContent = open ? 'Cancel' : 'Reject';
+        return;
+      }
+      var confirm = e.target.closest('.reject-confirm');
+      if (confirm) {
+        var item = confirm.closest('.photo-item');
+        var spot = item.querySelector('p').textContent;
+        var radios = item.querySelectorAll('input[type="radio"]');
+        var reason = 'No reason given';
+        for (var i = 0; i < radios.length; i++) { if (radios[i].checked) { reason = radios[i].nextSibling.textContent.trim(); } }
+        var note = item.querySelector('input[type="text"]').value.trim();
+        item.remove();
+        moderatedRow('Photo rejected · ' + spot, 'Reason: ' + reason + (note ? ' · "' + note + '"' : '') + ' · contributor notified · just now',
+          '<button type="button" class="restore-btn inline-flex h-9 items-center gap-1.5 rounded-lg border border-line px-3 text-xs font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.04)]">' + document.querySelector('.restore-btn').innerHTML + '</button>');
+        flash('Photo rejected. The contributor was notified with the reason. Recorded in the audit trail.');
+        refreshCount();
+      }
+    });
+
+    document.querySelectorAll('.hide-btn, .restore-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var isHide = btn.classList.contains('hide-btn');
+        flash(isHide ? 'Photo hidden from the location page. Recorded in the audit trail.'
+                     : 'Photo restored to the public gallery. Recorded in the audit trail.');
+        btn.disabled = true;
+        btn.classList.add('opacity-50');
+      });
+    });
+
+    var lightbox = document.getElementById('lightbox');
+    var lbImg = document.getElementById('lightbox-img');
+    var lbCap = document.getElementById('lightbox-cap');
+    document.querySelectorAll('.photo-view').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var img = btn.querySelector('img');
+        var item = btn.closest('.photo-item');
+        lbImg.src = img.src;
+        lbImg.alt = img.alt;
+        lbCap.textContent = item.querySelector('p').textContent + ' — ' + item.querySelector('p + p').textContent;
+        lightbox.classList.remove('hidden');
+        lightbox.classList.add('flex');
+        document.getElementById('lightbox-close').focus();
+      });
+    });
+    function closeLb() { lightbox.classList.add('hidden'); lightbox.classList.remove('flex'); }
+    document.getElementById('lightbox-close').addEventListener('click', closeLb);
+    lightbox.addEventListener('click', function (e) { if (e.target === lightbox) closeLb(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !lightbox.classList.contains('hidden')) closeLb(); });
+  </script>
+
+</body>
+</html>

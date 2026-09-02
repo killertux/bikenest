@@ -6,6 +6,19 @@ This file specifies every page and shared component the application needs, so a 
 
 The page specs use one consistent template so each page is described in the same shape.
 
+## Implemented design source of truth (`design-project/`)
+
+A complete visual design for this application has been produced and exported in the `design-project/` folder (Open Design export). The visual implementation MUST be built from this design rather than from a loose reinterpretation of this document.
+
+- **Entry point:** `design-project/ui_kits/app/index.html` (see `DESIGN-MANIFEST.json` for the machine-readable screen map and `DESIGN-HANDOFF.md` for the implementation contract).
+- **Screens:** 33 exported HTML screens covering this document's page inventory — public `p1`–`p7`, auth `a1`–`a5`, account `c1`–`c7`, contribution `d1`–`d3`, moderation `m1`–`m6`, errors `e1`–`e2` (file names match the page codes below, e.g. `p3-parking-details.html` ↔ P3).
+- **Design system:** `design-project/DESIGN.md` (theme, color/type/spacing tokens, component specs) and `design-project/colors_and_type.css` (canonical token block — load before Tailwind). Direction: human-approachable, cool-gray neutrals, single green-teal OKLch-170 accent, freshness color scale, hairline borders, rounded components.
+- **Assets:** optimized photography under `design-project/images/` and `design-project/assets/`.
+- **Fidelity rule:** tokens, typography scale, spacing rhythm, radii, shadows, motion, and component states in `DESIGN.md`/`colors_and_type.css` are the visual contract. Where this file's prose and the exported design disagree on visual details, the exported design wins; where the design lacks a screen, follow the page specs below and reuse the same component system.
+- **Styling implementation:** the design is implemented with **Tailwind CSS 4.3** (see `REQUIREMENTS.md` §12). The token block in `colors_and_type.css` maps to Tailwind theme tokens (`@theme`), not hand-written per-screen CSS.
+
+The page specs use one consistent template so each page is described in the same shape.
+
 ## Design principles (from `REQUIREMENTS.md`)
 
 - **Server-rendered.** HTML is produced by Askama. HTMX handles server-state interactions (search, filter, forms). Alpine.js is limited to *local UI state only* (map, dropdowns, modals, filter-panel toggles).

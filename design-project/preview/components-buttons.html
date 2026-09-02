@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BikeNest DS — Components</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<script src="https://unpkg.com/lucide-static@0.462.0/dist/umd/lucide.js" defer></script>
+<style>
+  .wrap{max-width:72rem;margin:0 auto;padding:40px 32px}
+  h2{margin:40px 0 16px}
+  .lead{color:var(--muted);font-size:15px;margin:0}
+  .demo{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-card);padding:24px}
+  .row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .demo + .demo{margin-top:16px}
+  .lucide{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--border)}
+  td{padding:12px;border-bottom:1px solid var(--border)}
+  td.mono{font-family:var(--font-mono);font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body data-od-id="preview-components">
+<div class="wrap">
+  <span class="badge badge-accent">Design system · Components</span>
+  <h1 class="type-title" style="margin-top:12px">Component library</h1>
+  <p class="lead">Shapes match the preserved source screens exactly. Applied versions live in <a href="../ui_kits/app/index.html">ui_kits/app</a>.</p>
+
+  <h2 class="type-section">Buttons — one primary per action per viewport</h2>
+  <div class="demo" data-od-id="buttons-demo">
+    <div class="row">
+      <button class="btn-primary">Add parking spot</button>
+      <button class="btn-secondary">Preview listing</button>
+      <button class="btn-danger">Delete account</button>
+      <a href="#" style="color:var(--accent-strong);font-size:14px;font-weight:600">Cancel contribution</a>
+    </div>
+    <p class="type-meta" style="margin:16px 0 0">Primary hover → <code>accent-dark</code> · Secondary hover → neutral wash · Danger hover → <code>oklch(40% 0.15 30)</code>. Text never lightens on hover.</p>
+  </div>
+
+  <h2 class="type-section">Form fields</h2>
+  <div class="demo" style="max-width:420px" data-od-id="fields-demo">
+    <label for="addr" style="display:block;font-size:14px;font-weight:500;margin-bottom:6px">Street address</label>
+    <input id="addr" class="field" placeholder="e.g. 22 Station Road">
+    <p class="type-meta" style="margin:6px 0 0">Drop a pin on the map after typing.</p>
+    <label for="zip" style="display:block;font-size:14px;font-weight:500;margin:20px 0 6px">Postcode</label>
+    <input id="zip" class="field" style="border-color:var(--danger)" value="NW1X">
+    <p class="type-meta" style="margin:6px 0 0;color:var(--danger)">Enter a full UK postcode.</p>
+  </div>
+
+  <h2 class="type-section">Cards &amp; icon tiles</h2>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px" data-od-id="cards-demo">
+    <div class="card" style="padding:24px">
+      <span style="display:grid;place-items:center;width:44px;height:44px;border-radius:12px;background:var(--accent-soft);color:var(--accent-strong);margin-bottom:12px">
+        <svg class="lucide" style="width:20px;height:20px" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></svg>
+      </span>
+      <p class="type-card" style="margin:0">Moderation overview</p>
+      <p class="type-meta" style="margin:6px 0 0">Review new photos, reports and proposals before they go public.</p>
+    </div>
+    <div class="card" style="padding:24px">
+      <p class="type-card" style="margin:0">Campus rack — North entrance</p>
+      <p class="type-meta" style="margin:6px 0 0">Covered · 12 spaces · 0.3 km away</p>
+      <div style="margin-top:12px;display:flex;gap:8px"><span class="badge badge-fresh">Fresh</span><span class="badge badge-accent">Verified</span></div>
+    </div>
+  </div>
+
+  <h2 class="type-section">Queue table</h2>
+  <div class="demo" style="padding:0;overflow:hidden" data-od-id="table-demo">
+    <table>
+      <thead><tr><th>Photo</th><th>Spot</th><th>Submitted</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        <tr><td class="mono">PN-0417 · 2 images</td><td>Market Square shelter</td><td class="mono">08:42</td><td><span class="badge badge-aging">Open</span></td><td style="text-align:right"><button class="btn-secondary" style="height:36px;padding:0 12px;font-size:13px">Review</button></td></tr>
+        <tr><td class="mono">PN-0402 · 1 image</td><td>Library railing</td><td class="mono">Yesterday</td><td><span class="badge badge-accent">Under review</span></td><td style="text-align:right"><button class="btn-secondary" style="height:36px;padding:0 12px;font-size:13px">Review</button></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+</body>
+</html>

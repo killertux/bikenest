@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BikeNest — Find safe bicycle parking near your destination</title>
+  <meta name="description" content="BikeNest helps cyclists find, compare and verify bicycle parking near any destination — powered by the cycling community." />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    /* Design tokens — direction: human-approachable. Raw values live only here. */
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg:      'oklch(98% 0.004 240)',
+            surface: 'oklch(100% 0 0)',
+            fg:      'oklch(20% 0.02 240)',
+            muted:   'oklch(50% 0.018 240)',
+            line:    'oklch(90% 0.006 240)',
+            accent:  'oklch(56% 0.12 170)',
+            'accent-strong': 'oklch(45% 0.11 170)',
+            'accent-dark':   'oklch(40% 0.10 170)',
+            'accent-soft':   'oklch(56% 0.12 170 / 0.12)',
+            'scrim': 'oklch(18% 0.015 240)',
+            fresh:   'oklch(58% 0.13 155)',
+            aging:   'oklch(68% 0.12 75)',
+            stale:   'oklch(55% 0.16 35)',
+          },
+          fontFamily: {
+            display: ['"Avenir Next"', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
+            body:    ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', 'system-ui', 'sans-serif'],
+            mono:    ['ui-monospace', '"SF Mono"', 'Menlo', 'monospace'],
+          },
+          boxShadow: {
+            card: '0 1px 2px oklch(20% 0.02 240 / 0.06), 0 8px 24px oklch(20% 0.02 240 / 0.08)',
+            pop:  '0 2px 6px oklch(20% 0.02 240 / 0.10), 0 16px 40px oklch(20% 0.02 240 / 0.16)',
+          },
+          maxWidth: { shell: '72rem' },
+        }
+      }
+    }
+  </script>
+  <style type="text/tailwindcss">
+    @layer base {
+      html { -webkit-text-size-adjust: 100%; }
+      body { text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
+      p { text-wrap: pretty; }
+      h1, h2, h3 { text-wrap: balance; }
+      :focus-visible { outline: 2px solid oklch(45% 0.11 170); outline-offset: 2px; border-radius: 4px; }
+    }
+  </style>
+</head>
+<body class="bg-bg font-body text-fg">
+
+  <!-- ============ Header (global layout, UI_DESIGN §Global) ============ -->
+  <header id="top" data-od-id="topnav" class="sticky top-0 z-40 border-b border-line bg-[oklch(98%_0.004_240_/_0.9)] backdrop-blur">
+    <div class="mx-auto flex h-16 max-w-shell items-center justify-between gap-6 px-5 lg:px-8">
+      <a href="/" class="flex items-center gap-2.5" aria-label="BikeNest — home">
+        <span class="grid h-9 w-9 place-items-center rounded-xl bg-accent text-white">
+          <svg aria-hidden="true" class="lucide h-5 w-5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><circle cx="18.5" cy="17.5" r="3.5" /><circle cx="5.5" cy="17.5" r="3.5" /><circle cx="15" cy="5" r="1" /><path d="M12 17.5V14l-3-3 4-3 2 3h2" /></svg> 
+        </span>
+        <span class="font-display text-lg font-bold tracking-tight">BikeNest</span>
+      </a>
+
+      <nav class="hidden items-center gap-7 md:flex" aria-label="Primary">
+        <a href="#how-it-works" class="text-sm text-muted hover:text-fg">How it works</a>
+        <a href="#featured" class="text-sm text-muted hover:text-fg">Parking spots</a>
+        <a href="#community" class="text-sm text-muted hover:text-fg">Community</a>
+      </nav>
+
+      <div class="hidden items-center gap-4 md:flex">
+        <div class="flex items-center rounded-lg border border-line p-0.5 font-mono text-xs" role="group" aria-label="Language">
+          <a href="#" lang="pt-BR" class="rounded-md px-2 py-1 text-muted hover:text-fg" aria-label="Português (Brasil)">PT</a>
+          <a href="#" lang="en" aria-current="true" class="rounded-md bg-fg px-2 py-1 font-medium text-bg" aria-label="English">EN</a>
+        </div>
+        <a href="a2-login.html" class="rounded-lg px-3 py-2 text-sm font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]">Log in</a>
+        <a href="a1-register.html" class="rounded-lg bg-accent-strong px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent">Sign up</a>
+      </div>
+
+      <button id="menu-btn" class="grid h-10 w-10 place-items-center rounded-lg text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)] md:hidden" aria-expanded="false" aria-controls="mobile-menu" aria-label="Open menu">
+        <svg aria-hidden="true" class="lucide h-5 w-5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M4 5h16" /><path d="M4 12h16" /><path d="M4 19h16" /></svg> 
+      </button>
+    </div>
+
+    <!-- Mobile menu -->
+    <div id="mobile-menu" class="hidden border-t border-line bg-surface px-5 py-4 md:hidden">
+      <nav class="flex flex-col gap-1" aria-label="Mobile">
+        <a href="#how-it-works" class="rounded-lg px-3 py-2.5 text-sm hover:bg-[oklch(20%_0.02_240_/_0.05)]">How it works</a>
+        <a href="#featured" class="rounded-lg px-3 py-2.5 text-sm hover:bg-[oklch(20%_0.02_240_/_0.05)]">Parking spots</a>
+        <a href="#community" class="rounded-lg px-3 py-2.5 text-sm hover:bg-[oklch(20%_0.02_240_/_0.05)]">Community</a>
+        <hr class="my-2 border-line" />
+        <a href="a2-login.html" class="rounded-lg px-3 py-2.5 text-sm hover:bg-[oklch(20%_0.02_240_/_0.05)]">Log in</a>
+        <a href="a1-register.html" class="rounded-lg bg-accent-strong px-3 py-2.5 text-center text-sm font-medium text-white hover:bg-accent">Sign up</a>
+        <div class="mt-2 flex items-center gap-2 px-3">
+          <svg aria-hidden="true" class="lucide h-4 w-4 text-muted" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="m5 8 6 6" /><path d="m4 14 6-6 2-3" /><path d="M2 5h12" /><path d="M7 2h1" /><path d="m22 22-5-10-5 10" /><path d="M14 18h6" /></svg> 
+          <a href="#" lang="pt-BR" class="font-mono text-xs text-muted">PT-BR</a>
+          <span class="font-mono text-xs text-muted">/</span>
+          <span class="font-mono text-xs font-medium text-fg">EN</span>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <main id="content">
+
+    <!-- ============ Hero: headline + large search + use my location (P1) ============ -->
+    <section data-od-id="hero" class="relative isolate overflow-hidden">
+      <img src="images/optimized/hero-bike-parking.jpg"
+           alt="Rows of bicycles parked in a multi-tier parking facility"
+           width="2000" height="1125"
+           class="absolute inset-0 h-full w-full object-cover" />
+      <div class="absolute inset-0 bg-gradient-to-b from-[oklch(18%_0.015_240_/_0.72)] via-[oklch(18%_0.015_240_/_0.56)] to-[oklch(18%_0.015_240_/_0.84)]" aria-hidden="true"></div>
+
+      <div class="relative mx-auto max-w-shell px-5 py-24 sm:py-32 lg:px-8">
+        <div class="max-w-2xl">
+          <p class="mb-4 font-mono text-xs uppercase tracking-[0.14em] text-white/80">Community-powered bike parking</p>
+          <h1 class="font-display text-4xl font-bold leading-[1.08] tracking-tight text-white sm:text-5xl lg:text-6xl">
+            Park your bike with confidence, everywhere you ride.
+          </h1>
+          <p class="mt-5 max-w-xl text-lg leading-relaxed text-white/85">
+            Find racks, staffed bike stations and indoor parking near your destination — with security, cost and freshness details verified by cyclists like you.
+          </p>
+        </div>
+
+        <!-- Search card -->
+        <div class="mt-10 max-w-2xl">
+          <form id="search-form" action="/search" method="get" class="rounded-2xl bg-surface p-2 shadow-pop sm:flex sm:items-center sm:gap-2" role="search">
+            <div class="flex flex-1 items-center gap-3 px-3 py-1.5">
+              <svg aria-hidden="true" class="lucide h-5 w-5 shrink-0 text-muted" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg> 
+              <label for="q" class="sr-only">Destination or address</label>
+              <input id="q" name="q" type="text" autocomplete="off"
+                     placeholder="Where are you going? e.g. Av. Paulista, 1578"
+                     class="w-full bg-transparent py-2.5 text-base text-fg placeholder:text-muted focus:outline-none" />
+            </div>
+            <button type="submit"
+                    class="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent-strong px-6 py-3.5 text-base font-medium text-white transition-colors hover:bg-accent-dark sm:mt-0 sm:w-auto">
+              <svg aria-hidden="true" class="lucide h-5 w-5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg> 
+              Search parking
+            </button>
+          </form>
+
+          <div class="mt-3 flex flex-wrap items-center gap-3">
+            <button id="use-location" type="button"
+                    class="inline-flex items-center gap-2 rounded-full border border-white/30 bg-white/10 px-4 py-2 text-sm font-medium text-white backdrop-blur transition-colors hover:border-white/60 hover:bg-white/20">
+              <svg aria-hidden="true" class="lucide h-4 w-4" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><polygon points="3 11 22 2 13 21 11 13 3 11" /></svg> 
+              Use my location
+            </button>
+            <span class="text-sm text-white/70">Your location is used once, only for this search.</span>
+          </div>
+
+          <!-- Status / flash region: geolocation states (loading, denied, fallback) -->
+          <p id="geo-status" role="status" aria-live="polite" class="mt-3 hidden items-center gap-2 rounded-xl bg-white/15 px-4 py-3 text-sm text-white backdrop-blur">
+            <svg aria-hidden="true" class="lucide h-4 w-4 shrink-0" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg> 
+            <span id="geo-status-text"></span>
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ How it works: 3 steps (P1) ============ -->
+    <section data-od-id="how-it-works" class="mx-auto max-w-shell px-5 py-20 lg:px-8 lg:py-28">
+      <div class="max-w-xl">
+        <p class="mb-3 font-mono text-xs uppercase tracking-[0.14em] text-accent-strong">How it works</p>
+        <h2 class="font-display text-3xl font-bold tracking-tight sm:text-4xl">From destination to parked bike in three steps.</h2>
+      </div>
+
+      <ol class="mt-12 grid gap-8 md:grid-cols-3 md:gap-6 lg:gap-10">
+        <li class="relative rounded-2xl border border-line bg-surface p-7 shadow-card">
+          <span class="absolute -top-3 left-7 rounded-full bg-fg px-2.5 py-0.5 font-mono text-xs text-bg">01</span>
+          <div class="mb-5 grid h-11 w-11 place-items-center rounded-xl border border-line text-accent-strong">
+            <svg aria-hidden="true" class="lucide h-5 w-5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg> 
+          </div>
+          <h3 class="font-display text-xl font-semibold">Set your destination</h3>
+          <p class="mt-2 text-[15px] leading-relaxed text-muted">Type an address or use your current location. BikeNest searches for parking within walking distance of where you're actually going.</p>
+        </li>
+        <li class="relative rounded-2xl border border-line bg-surface p-7 shadow-card">
+          <span class="absolute -top-3 left-7 rounded-full bg-fg px-2.5 py-0.5 font-mono text-xs text-bg">02</span>
+          <div class="mb-5 grid h-11 w-11 place-items-center rounded-xl border border-line text-accent-strong">
+            <svg aria-hidden="true" class="lucide h-5 w-5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /><path d="m9 12 2 2 4-4" /></svg> 
+          </div>
+          <h3 class="font-display text-xl font-semibold">Compare what matters</h3>
+          <p class="mt-2 text-[15px] leading-relaxed text-muted">Cost, cover, CCTV, staffed hours and community ratings — side by side, so you can decide where you'd actually feel comfortable leaving your bike.</p>
+        </li>
+        <li class="relative rounded-2xl border border-line bg-surface p-7 shadow-card">
+          <span class="absolute -top-3 left-7 rounded-full bg-fg px-2.5 py-0.5 font-mono text-xs text-bg">03</span>
+          <div class="mb-5 grid h-11 w-11 place-items-center rounded-xl border border-line text-accent-strong">
+            <svg aria-hidden="true" class="lucide h-5 w-5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" /></svg> 
+          </div>
+          <h3 class="font-display text-xl font-semibold">Park — and keep it true</h3>
+          <p class="mt-2 text-[15px] leading-relaxed text-muted">After parking, confirm the spot still exists and how it looks. Every report keeps the map fresh for the next cyclist.</p>
+        </li>
+      </ol>
+    </section>
+
+    <!-- ============ Featured parking (P1, optional section — sample data) ============ -->
+    <section data-od-id="featured" class="border-t border-line bg-surface">
+      <div class="mx-auto max-w-shell px-5 py-20 lg:px-8 lg:py-24">
+        <div class="flex flex-wrap items-end justify-between gap-4">
+          <div class="max-w-xl">
+            <p class="mb-3 font-mono text-xs uppercase tracking-[0.14em] text-accent-strong">Near the crowd</p>
+            <h2 class="font-display text-3xl font-bold tracking-tight sm:text-4xl">Parking spots cyclists actually use.</h2>
+          </div>
+          <p class="font-mono text-xs text-muted">Sample data shown for illustration</p>
+        </div>
+
+        <div class="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+
+          <!-- Parking card 1 — staffed station -->
+          <article class="group overflow-hidden rounded-2xl border border-line bg-surface shadow-card transition-shadow hover:shadow-pop">
+            <div class="relative aspect-[4/3] overflow-hidden">
+              <img src="images/optimized/square-bike-rows.jpg"
+                   alt="Row of bicycles parked under trees in a sunny public square"
+                   width="795" height="1200"
+                   class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" />
+              <span class="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-full bg-[oklch(100%_0_0_/_0.95)] px-2.5 py-1 font-mono text-[11px] uppercase tracking-wide text-fg shadow-sm">
+                <svg aria-hidden="true" class="lucide h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M18 21V10a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1v11" /><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 1.132-1.803l7.95-3.974a2 2 0 0 1 1.837 0l7.948 3.974A2 2 0 0 1 22 8z" /><path d="M6 13h12" /><path d="M6 17h12" /></svg>  Staffed
+              </span>
+            </div>
+            <div class="p-5">
+              <div class="flex items-start justify-between gap-3">
+                <h3 class="font-display text-lg font-semibold leading-snug">Estação Vila Mariana</h3>
+                <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-[oklch(58%_0.13_155_/_0.12)] px-2 py-0.5 text-xs font-medium text-fresh">
+                  <svg aria-hidden="true" class="lucide h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M14 9.536V7a4 4 0 0 1 4-4h1.5a.5.5 0 0 1 .5.5V5a4 4 0 0 1-4 4 4 4 0 0 0-4 4c0 2 1 3 1 5a5 5 0 0 1-1 3" /><path d="M4 9a5 5 0 0 1 8 4 5 5 0 0 1-8-4" /><path d="M5 21h14" /></svg>  Fresh
+                </span>
+              </div>
+              <p class="mt-1 flex items-center gap-1.5 text-sm text-muted">
+                <svg aria-hidden="true" class="lucide h-4 w-4" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z" /><path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z" /><path d="M16 17h4" /><path d="M4 13h4" /></svg>  180 m from Metrô Ana Rosa
+              </p>
+              <ul class="mt-3 flex flex-wrap gap-1.5" aria-label="Security features">
+                <li class="inline-flex items-center gap-1 rounded-md border border-line px-2 py-0.5 text-xs text-muted"><svg aria-hidden="true" class="lucide h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5" /><rect x="2" y="6" width="14" height="12" rx="2" /></svg> CCTV</li>
+                <li class="inline-flex items-center gap-1 rounded-md border border-line px-2 py-0.5 text-xs text-muted"><svg aria-hidden="true" class="lucide h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="m16 11 2 2 4-4" /><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /></svg> Staffed</li>
+                <li class="inline-flex items-center gap-1 rounded-md border border-line px-2 py-0.5 text-xs text-muted"><svg aria-hidden="true" class="lucide h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M12 13v7a2 2 0 0 0 4 0" /><path d="M12 2v2" /><path d="M20.992 13a1 1 0 0 0 .97-1.274 10.284 10.284 0 0 0-19.923 0A1 1 0 0 0 3 13z" /></svg> Covered</li>
+              </ul>
+              <div class="mt-4 flex items-center justify-between border-t border-line pt-4">
+                <span class="font-mono text-sm text-fg">R$ 5,00 <span class="text-muted">/ day</span></span>
+                <span class="inline-flex items-center gap-1 text-sm font-medium text-fg">
+                  <svg aria-hidden="true" class="lucide h-4 w-4 fill-amber-400 text-amber-400" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z" /></svg>  4.8
+                  <span class="text-muted">(63)</span>
+                </span>
+              </div>
+              <div class="mt-2 flex items-center gap-1.5 text-xs text-fresh">
+                <span class="h-1.5 w-1.5 rounded-full bg-fresh" aria-hidden="true"></span> Open now · until 22:00
+              </div>
+            </div>
+          </article>
+
+          <!-- Parking card 2 — free street rack, recently verified -->
+          <article class="group overflow-hidden rounded-2xl border border-line bg-surface shadow-card transition-shadow hover:shadow-pop">
+            <div class="relative aspect-[4/3] overflow-hidden">
+              <img src="images/optimized/street-rack-mint-bike.jpg"
+                   alt="Mint-green city bicycle locked to a street bike rack"
+                   width="1200" height="800"
+                   class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" />
+              <span class="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-full bg-[oklch(100%_0_0_/_0.95)] px-2.5 py-1 font-mono text-[11px] uppercase tracking-wide text-fg shadow-sm">
+                <svg aria-hidden="true" class="lucide h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M10 18v-7" /><path d="M11.12 2.198a2 2 0 0 1 1.76.006l7.866 3.847c.476.233.31.949-.22.949H3.474c-.53 0-.695-.716-.22-.949z" /><path d="M14 18v-7" /><path d="M18 18v-7" /><path d="M3 22h18" /><path d="M6 18v-7" /></svg>  Street rack
+              </span>
+            </div>
+            <div class="p-5">
+              <div class="flex items-start justify-between gap-3">
+                <h3 class="font-display text-lg font-semibold leading-snug">Rack — Estação da Luz</h3>
+                <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-[oklch(68%_0.12_75_/_0.18)] px-2 py-0.5 text-xs font-medium text-aging">
+                  <svg aria-hidden="true" class="lucide h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M12 6v6h4" /><circle cx="12" cy="12" r="10" /></svg>  3 wks
+                </span>
+              </div>
+              <p class="mt-1 flex items-center gap-1.5 text-sm text-muted">
+                <svg aria-hidden="true" class="lucide h-4 w-4" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z" /><path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z" /><path d="M16 17h4" /><path d="M4 13h4" /></svg>  90 m from Estação da Luz
+              </p>
+              <ul class="mt-3 flex flex-wrap gap-1.5" aria-label="Security features">
+                <li class="inline-flex items-center gap-1 rounded-md border border-line px-2 py-0.5 text-xs text-muted"><svg aria-hidden="true" class="lucide h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /><path d="m2 2 20 20" /></svg> No CCTV</li>
+                <li class="inline-flex items-center gap-1 rounded-md border border-line px-2 py-0.5 text-xs text-muted"><svg aria-hidden="true" class="lucide h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.41" /></svg> Uncovered</li>
+              </ul>
+              <div class="mt-4 flex items-center justify-between border-t border-line pt-4">
+                <span class="font-mono text-sm text-fg">Free</span>
+                <span class="inline-flex items-center gap-1 text-sm font-medium text-fg">
+                  <svg aria-hidden="true" class="lucide h-4 w-4 fill-amber-400 text-amber-400" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z" /></svg>  4.2
+                  <span class="text-muted">(41)</span>
+                </span>
+              </div>
+              <div class="mt-2 flex items-center gap-1.5 text-xs text-fresh">
+                <span class="h-1.5 w-1.5 rounded-full bg-fresh" aria-hidden="true"></span> Open now · 24 h
+              </div>
+            </div>
+          </article>
+
+          <!-- Parking card 3 — unverified, security unknown (explicit "unknown" state) -->
+          <article class="group overflow-hidden rounded-2xl border border-line bg-surface shadow-card transition-shadow hover:shadow-pop">
+            <div class="relative aspect-[4/3] overflow-hidden">
+              <img src="images/optimized/mtb-pair-rack.jpg"
+                   alt="Two mountain bikes resting on a simple metal bike rack"
+                   width="800" height="1200"
+                   class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" />
+              <span class="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-full bg-[oklch(100%_0_0_/_0.95)] px-2.5 py-1 font-mono text-[11px] uppercase tracking-wide text-fg shadow-sm">
+                <svg aria-hidden="true" class="lucide h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M10 18v-7" /><path d="M11.12 2.198a2 2 0 0 1 1.76.006l7.866 3.847c.476.233.31.949-.22.949H3.474c-.53 0-.695-.716-.22-.949z" /><path d="M14 18v-7" /><path d="M18 18v-7" /><path d="M3 22h18" /><path d="M6 18v-7" /></svg>  Street rack
+              </span>
+            </div>
+            <div class="p-5">
+              <div class="flex items-start justify-between gap-3">
+                <h3 class="font-display text-lg font-semibold leading-snug">Paraciclo — Av. Paulista, 1578</h3>
+                <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-[oklch(55%_0.16_35_/_0.12)] px-2 py-0.5 text-xs font-medium text-stale">
+                  <svg aria-hidden="true" class="lucide h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M12 6v6l4 2" /><path d="M20 12v5" /><path d="M20 21h.01" /><path d="M21.25 8.2A10 10 0 1 0 16 21.16" /></svg>  5 mo
+                </span>
+              </div>
+              <p class="mt-1 flex items-center gap-1.5 text-sm text-muted">
+                <svg aria-hidden="true" class="lucide h-4 w-4" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z" /><path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z" /><path d="M16 17h4" /><path d="M4 13h4" /></svg>  240 m from MASP
+              </p>
+              <ul class="mt-3 flex flex-wrap gap-1.5" aria-label="Security features">
+                <li class="inline-flex items-center gap-1 rounded-md border border-line px-2 py-0.5 text-xs text-muted"><svg aria-hidden="true" class="lucide h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><path d="M12 17h.01" /></svg> Security unknown</li>
+              </ul>
+              <div class="mt-4 flex items-center justify-between border-t border-line pt-4">
+                <span class="font-mono text-sm text-fg">Free</span>
+                <span class="inline-flex items-center gap-1 text-sm font-medium text-fg">
+                  <svg aria-hidden="true" class="lucide h-4 w-4 fill-amber-400 text-amber-400" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z" /></svg>  3.9
+                  <span class="text-muted">(12)</span>
+                </span>
+              </div>
+              <div class="mt-2 flex items-center gap-1.5 text-xs text-muted">
+                <span class="h-1.5 w-1.5 rounded-full bg-muted" aria-hidden="true"></span> Hours not reported yet
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ Community / contribute (split) ============ -->
+    <section data-od-id="community" class="mx-auto max-w-shell px-5 py-20 lg:px-8 lg:py-28">
+      <div class="grid items-center gap-12 lg:grid-cols-2 lg:gap-20">
+        <div class="relative mx-auto w-full max-w-md lg:max-w-none">
+          <img src="images/optimized/commuter-portrait.jpg"
+               alt="Commuter cyclist in a helmet resting on their bike"
+               width="801" height="1200"
+               class="h-auto w-full rounded-2xl object-contain" />
+          <figure class="absolute bottom-4 left-4 right-4 rounded-xl bg-[oklch(100%_0_0_/_0.96)] p-4 shadow-pop sm:right-auto sm:max-w-xs">
+            <blockquote class="text-sm leading-relaxed text-fg">"I verified two racks on my commute this week. Took thirty seconds."</blockquote>
+            <figcaption class="mt-2 font-mono text-xs text-muted">Marina · rides to Pinheiros daily</figcaption>
+          </figure>
+        </div>
+
+        <div>
+          <p class="mb-3 font-mono text-xs uppercase tracking-[0.14em] text-accent-strong">The community</p>
+          <h2 class="font-display text-3xl font-bold tracking-tight sm:text-4xl">A map kept honest by the people who use it.</h2>
+          <p class="mt-5 max-w-lg text-[17px] leading-relaxed text-muted">
+            BikeNest is built from contributions: cyclists add racks they know, review spots they've used, and confirm details after parking. Moderators check photos and changes before they go live — so the information you see is verified, and stays fresh.
+          </p>
+          <ul class="mt-8 space-y-4">
+            <li class="flex gap-3.5">
+              <svg aria-hidden="true" class="lucide mt-0.5 h-5 w-5 shrink-0 text-accent-strong" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z" /><circle cx="12" cy="13" r="3" /></svg> 
+              <p class="text-[15px] leading-relaxed"><strong class="font-semibold text-fg">Add a spot you know.</strong> New racks and stations start with one contribution — name, place, a photo.</p>
+            </li>
+            <li class="flex gap-3.5">
+              <svg aria-hidden="true" class="lucide mt-0.5 h-5 w-5 shrink-0 text-accent-strong" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z" /></svg> 
+              <p class="text-[15px] leading-relaxed"><strong class="font-semibold text-fg">Review where you parked.</strong> Ratings and notes help others pick between a busy rack and a quiet one.</p>
+            </li>
+            <li class="flex gap-3.5">
+              <svg aria-hidden="true" class="lucide mt-0.5 h-5 w-5 shrink-0 text-accent-strong" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z" /><path d="m9 12 2 2 4-4" /></svg> 
+              <p class="text-[15px] leading-relaxed"><strong class="font-semibold text-fg">Keep information fresh.</strong> Quick confirmations after parking mark details as verified — or flag what changed.</p>
+            </li>
+          </ul>
+          <div class="mt-9">
+            <a href="#" class="inline-flex items-center gap-2 rounded-xl border border-line bg-surface px-5 py-3 text-[15px] font-medium text-fg transition-colors hover:border-fg">
+              Learn how contributing works
+              <svg aria-hidden="true" class="lucide h-4 w-4" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg> 
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CTA strip (closing) ============ -->
+    <section data-od-id="cta-strip" class="relative isolate overflow-hidden">
+      <img src="images/optimized/cyclist-foggy-avenue.jpg"
+           alt="Cyclist riding down a tree-lined avenue in the morning mist"
+           width="1600" height="1069"
+           class="absolute inset-0 h-full w-full object-cover" />
+      <div class="absolute inset-0 bg-gradient-to-b from-[oklch(18%_0.015_240_/_0.80)] via-[oklch(18%_0.015_240_/_0.88)] to-[oklch(18%_0.015_240_/_0.93)]" aria-hidden="true"></div>
+      <div class="relative mx-auto max-w-2xl px-5 py-24 text-center lg:py-28">
+        <h2 class="font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">Your next ride ends at a spot you trust.</h2>
+        <p class="mx-auto mt-4 max-w-lg text-lg text-white/85">Search once, park knowing the details were checked by someone who rides the same route.</p>
+        <a href="#top" class="mt-8 inline-flex items-center gap-2 rounded-xl bg-accent-strong px-6 py-3.5 text-base font-medium text-white transition-colors hover:bg-accent-dark">
+          <svg aria-hidden="true" class="lucide h-5 w-5" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg> 
+          Find parking near you
+        </a>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ============ Footer (global layout) ============ -->
+  <footer data-od-id="footer" class="border-t border-line bg-surface">
+    <div class="mx-auto max-w-shell px-5 py-12 lg:px-8">
+      <div class="flex flex-col gap-10 md:flex-row md:items-start md:justify-between">
+        <div class="max-w-xs">
+          <a href="/" class="flex items-center gap-2.5" aria-label="BikeNest — home">
+            <span class="grid h-8 w-8 place-items-center rounded-lg bg-accent text-white">
+              <svg aria-hidden="true" class="lucide h-4 w-4" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><circle cx="18.5" cy="17.5" r="3.5" /><circle cx="5.5" cy="17.5" r="3.5" /><circle cx="15" cy="5" r="1" /><path d="M12 17.5V14l-3-3 4-3 2 3h2" /></svg> 
+            </span>
+            <span class="font-display text-base font-bold tracking-tight">BikeNest</span>
+          </a>
+          <p class="mt-3 text-sm leading-relaxed text-muted">A community-maintained map of bicycle parking, built by and for cyclists.</p>
+        </div>
+
+        <nav class="grid grid-cols-2 gap-x-12 gap-y-2 text-sm" aria-label="Footer">
+          <a href="p7-about.html" class="py-1 text-muted hover:text-fg">About</a>
+          <a href="#" class="py-1 text-muted hover:text-fg">Contact</a>
+          <a href="p4-privacy.html" class="py-1 text-muted hover:text-fg">Privacy policy</a>
+          <a href="p5-terms.html" class="py-1 text-muted hover:text-fg">Terms of service</a>
+          <a href="p6-cookies.html" class="py-1 text-muted hover:text-fg">Cookie policy</a>
+          <a href="p7-about.html#how-it-works" class="py-1 text-muted hover:text-fg">How it works</a>
+        </nav>
+      </div>
+      <div class="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-6">
+        <p class="text-xs text-muted">© 2026 BikeNest</p>
+        <p class="font-mono text-xs text-muted">Prototype · P1 Landing</p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ============ Interactions: mobile nav, search feedback, geolocation states ============ -->
+  <script>
+    // Mobile menu
+    const menuBtn = document.getElementById('menu-btn');
+    const mobileMenu = document.getElementById('mobile-menu');
+    menuBtn.addEventListener('click', () => {
+      const open = mobileMenu.classList.toggle('hidden') === false;
+      menuBtn.setAttribute('aria-expanded', String(open));
+      menuBtn.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    });
+
+    // Flash helper (mimics the app's flash region behaviour)
+    const geoStatus = document.getElementById('geo-status');
+    const geoStatusText = document.getElementById('geo-status-text');
+    function flash(text) {
+      geoStatusText.textContent = text;
+      geoStatus.classList.remove('hidden');
+      geoStatus.classList.add('flex');
+    }
+
+    // Search: in the real app this submits to /search?q=…
+    document.getElementById('search-form').addEventListener('submit', (e) => {
+      const q = document.getElementById('q').value.trim();
+      e.preventDefault();
+      flash(q
+        ? 'Prototype: this navigates to /search?q=' + encodeURIComponent(q)
+        : 'Type a destination to search for parking nearby.');
+    });
+
+    // Geolocation: requested only on explicit user action; used once, then discarded
+    const useLocationBtn = document.getElementById('use-location');
+    const useLocationLabel = useLocationBtn.innerHTML;
+    useLocationBtn.addEventListener('click', () => {
+      if (!('geolocation' in navigator)) {
+        flash('Location is not available in this browser — type your destination above instead.');
+        return;
+      }
+      useLocationBtn.disabled = true;
+      useLocationBtn.classList.add('opacity-70');
+      useLocationBtn.innerHTML = '<svg class="lucide h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>  Locating you…';
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          useLocationBtn.disabled = false;
+          useLocationBtn.classList.remove('opacity-70');
+          useLocationBtn.innerHTML = useLocationLabel;
+          flash('Prototype: this navigates to /search near your current position, then the location is discarded.');
+        },
+        () => {
+          useLocationBtn.disabled = false;
+          useLocationBtn.classList.remove('opacity-70');
+          useLocationBtn.innerHTML = useLocationLabel;
+          flash('We couldn\u2019t get your location — no problem, type your destination above instead.');
+        },
+        { timeout: 8000 }
+      );
+    });
+
+  </script>
+</body>
+</html>

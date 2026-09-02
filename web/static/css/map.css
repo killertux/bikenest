@@ -1,0 +1,67 @@
+/* MapLibre overrides + map page layout (kept out of the Tailwind entry, §12). */
+
+.search-layout {
+  display: grid;
+  gap: 1.5rem;
+}
+
+@media (min-width: 1024px) {
+  .search-layout {
+    grid-template-columns: 280px minmax(0, 1fr) 380px;
+  }
+}
+
+#map,
+#map-single {
+  width: 100%;
+  border-radius: 0.75rem;
+}
+
+#map {
+  height: 480px;
+}
+
+#map-single {
+  height: 18rem;
+}
+
+/* Destination + result markers */
+.marker {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  border: 2px solid white;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
+  cursor: pointer;
+}
+
+.marker-destination {
+  background: var(--color-accent-dark);
+  width: 22px;
+  height: 22px;
+}
+
+.marker.selected {
+  outline: 3px solid var(--color-accent-strong);
+  outline-offset: 1px;
+}
+
+/* Card ↔ marker selection highlight */
+[data-parking-id].selected {
+  border-color: var(--color-accent-strong);
+  box-shadow: 0 0 0 2px var(--color-accent-strong);
+}
+
+/* HTMX request indicator (htmx 4 uses Constructable Stylesheets for its
+   default indicator; ours is explicit) */
+.htmx-indicator {
+  opacity: 0;
+  transition: opacity 150ms ease-in;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+  opacity: 1;
+}
+[x-cloak] { display: none !important; }

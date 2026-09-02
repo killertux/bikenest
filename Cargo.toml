@@ -1,0 +1,37 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/domain",
+    "crates/application",
+    "crates/infrastructure",
+    "crates/web",
+    "crates/test-support",
+    "crates/test-macros",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+
+[workspace.dependencies]
+bikenest-domain = { path = "crates/domain" }
+bikenest-application = { path = "crates/application" }
+bikenest-infrastructure = { path = "crates/infrastructure" }
+bikenest-web = { path = "crates/web" }
+bikenest-test-support = { path = "crates/test-support" }
+
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+async-trait = "0.1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "migrate", "chrono"] }
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+askama = "0.14"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BikeNest UI Kit — Buttons &amp; badges</title>
+<link rel="stylesheet" href="../../../colors_and_type.css">
+<style>
+  body{font-family:var(--font-body)}
+  .wrap{max-width:72rem;margin:0 auto;padding:40px 32px}
+  h2{margin:40px 0 16px}
+  .demo{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-card);padding:24px}
+  .row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .chip{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:9999px;font-size:13px;font-weight:500;border:1px solid var(--border);background:var(--surface);color:var(--fg);cursor:pointer;transition:background 150ms}
+  .chip:hover{background:oklch(20% 0.02 240 / 0.04)}
+  .btn-sm{height:36px;padding:0 12px;font-size:13px}
+  .btn-ghost{background:none;border:none;color:var(--accent-strong);font-size:14px;font-weight:600;cursor:pointer;padding:8px 4px;border-radius:6px}
+  .btn-ghost:hover{background:var(--accent-soft)}
+</style>
+</head>
+<body data-od-id="kit-buttons">
+<main class="wrap">
+  <a href="../index.html" style="color:var(--accent-strong);font-size:14px;text-decoration:none;font-weight:600">← Overview</a>
+  <h1 class="type-title" style="margin:12px 0 8px">Buttons &amp; badges</h1>
+  <p class="type-body" style="color:var(--muted);margin:0">One solid primary per action per viewport. Solid fills darken on hover; neutrals wash. Text color never lightens.</p>
+
+  <h2 class="type-section">Buttons</h2>
+  <div class="demo" data-od-id="buttons-variants">
+    <div class="row">
+      <button class="btn-primary">Save contribution</button>
+      <button class="btn-secondary">Cancel</button>
+      <button class="btn-danger">Reject photo</button>
+      <button class="btn-ghost">Learn more</button>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button class="btn-primary btn-sm">Small primary</button>
+      <button class="btn-secondary btn-sm">Small secondary</button>
+      <button class="btn-primary" disabled style="opacity:.5;cursor:not-allowed">Disabled</button>
+    </div>
+  </div>
+
+  <h2 class="type-section">Status chips — semantic colors are data</h2>
+  <div class="demo" data-od-id="chips-variants">
+    <div class="row">
+      <span class="badge badge-fresh" style="font-size:13px;padding:5px 12px">Fresh · verified 2 days ago</span>
+      <span class="badge badge-aging" style="font-size:13px;padding:5px 12px">Needs re-check</span>
+      <span class="badge" style="font-size:13px;padding:5px 12px;background:oklch(55% 0.16 35 / 0.10);color:var(--stale)">Unverified</span>
+      <span class="badge badge-danger" style="font-size:13px;padding:5px 12px">Rejected</span>
+    </div>
+    <p class="type-meta" style="margin:14px 0 0">Outlined variant for lists (border at 45% alpha, no fill):</p>
+    <div class="row" style="margin-top:10px">
+      <span class="badge" style="font-size:13px;padding:4px 12px;border:1px solid oklch(58% 0.13 155 / 0.45);color:var(--fresh)">Approved</span>
+      <span class="badge" style="font-size:13px;padding:4px 12px;border:1px solid oklch(47% 0.17 30 / 0.45);color:var(--danger)">Rejected</span>
+    </div>
+  </div>
+
+  <h2 class="type-section">Filter chips</h2>
+  <div class="demo" data-od-id="filter-chips">
+    <div class="row">
+      <button class="chip" style="border-color:var(--accent-strong);color:var(--accent-strong);background:var(--accent-soft)">Covered ✓</button>
+      <button class="chip">Secure</button>
+      <button class="chip">Video surveillance</button>
+      <button class="chip">Within 1 km</button>
+    </div>
+  </div>
+</main>
+</body>
+</html>

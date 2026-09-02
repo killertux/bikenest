@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Page not found — BikeNest</title>
+  <meta name="robots" content="noindex" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    /* Design tokens — direction: human-approachable. Raw values live only here. */
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg:      'oklch(98% 0.004 240)',
+            surface: 'oklch(100% 0 0)',
+            fg:      'oklch(20% 0.02 240)',
+            muted:   'oklch(50% 0.018 240)',
+            line:    'oklch(90% 0.006 240)',
+            accent:  'oklch(56% 0.12 170)',
+            'accent-strong': 'oklch(45% 0.11 170)',
+            'accent-dark':   'oklch(40% 0.10 170)',
+            'accent-soft':   'oklch(56% 0.12 170 / 0.12)',
+            'scrim': 'oklch(18% 0.015 240)',
+            fresh:   'oklch(58% 0.13 155)',
+            aging:   'oklch(68% 0.12 75)',
+            stale:   'oklch(55% 0.16 35)',
+            danger:  'oklch(47% 0.17 30)',
+            'danger-soft': 'oklch(47% 0.17 30 / 0.08)',
+          },
+          fontFamily: {
+            display: ['"Avenir Next"', '-apple-system', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
+            body:    ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Text"', 'system-ui', 'sans-serif'],
+            mono:    ['ui-monospace', '"SF Mono"', 'Menlo', 'monospace'],
+          },
+          boxShadow: {
+            card: '0 1px 2px oklch(20% 0.02 240 / 0.06), 0 8px 24px oklch(20% 0.02 240 / 0.08)',
+            pop:  '0 2px 6px oklch(20% 0.02 240 / 0.10), 0 16px 40px oklch(20% 0.02 240 / 0.16)',
+          },
+          maxWidth: { shell: '72rem' },
+        }
+      }
+    }
+  </script>
+  <style type="text/tailwindcss">
+    @layer base {
+      html { -webkit-text-size-adjust: 100%; }
+      body { text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
+      p { text-wrap: pretty; }
+      h1, h2 { text-wrap: balance; }
+      :focus-visible { outline: 2px solid oklch(45% 0.11 170); outline-offset: 2px; border-radius: 4px; }
+    }
+  </style>
+</head>
+<body class="flex min-h-screen flex-col bg-bg font-body text-fg">
+
+  <header data-od-id="topnav-error" class="border-b border-line">
+    <div class="mx-auto flex h-16 max-w-6xl items-center justify-between gap-6 px-5 lg:px-8">
+      <a href="p1-landing.html" class="flex items-center gap-2.5" aria-label="BikeNest — home">
+        <span class="grid h-9 w-9 place-items-center rounded-xl bg-accent text-white"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-5 w-5" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <circle cx="18.5" cy="17.5" r="3.5" /> <circle cx="5.5" cy="17.5" r="3.5" /> <circle cx="15" cy="5" r="1" /> <path d="M12 17.5V14l-3-3 4-3 2 3h2" /> </svg></span>
+        <span class="font-display text-lg font-bold tracking-tight">BikeNest</span>
+      </a>
+      <div class="flex items-center rounded-lg border border-line p-0.5 font-mono text-xs" role="group" aria-label="Language">
+        <a href="#" lang="pt-BR" class="rounded-md px-2 py-1 text-muted hover:text-fg" aria-label="Português (Brasil)">PT</a>
+        <a href="#" lang="en" aria-current="true" class="rounded-md bg-fg px-2 py-1 font-medium text-bg" aria-label="English">EN</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="content" class="flex flex-1 items-center justify-center px-5 py-16">
+    <div class="w-full max-w-lg text-center">
+      <span class="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-[oklch(56%_0.12_170_/_0.10)] text-accent-strong"><!-- @license lucide-static v0.544.0 - ISC --> <svg class="h-8 w-8" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z" /> <circle cx="12" cy="12" r="10" /> </svg></span>
+      <p class="mt-6 font-mono text-sm uppercase tracking-[0.2em] text-muted">Error 404</p>
+      <h1 class="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl">This page went off route.</h1>
+      <p class="mt-3 text-sm leading-relaxed text-muted">The link may be outdated, or the address was typed wrong. Try searching for parking near where you're headed.</p>
+
+      <form data-od-id="error-search" action="p2-search.html" method="get" class="mx-auto mt-6 flex max-w-md items-center gap-2" role="search">
+        <div class="relative flex-1">
+          <!-- @license lucide-static v0.544.0 - ISC --> <svg class="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden="true"  xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m21 21-4.34-4.34" /> <circle cx="11" cy="11" r="8" /> </svg>
+          <input type="search" name="q" placeholder="Search a destination…" aria-label="Search parking near a destination"
+                 class="w-full rounded-xl border border-line bg-surface py-2.5 pl-10 pr-4 text-sm placeholder:text-muted focus:border-accent-strong" />
+        </div>
+        <button type="submit" class="rounded-xl bg-accent-strong px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-accent">Search</button>
+      </form>
+
+      <div class="mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm">
+        <a href="p1-landing.html" class="font-medium text-accent-strong underline-offset-4 hover:underline">Go to the home page</a>
+        <a href="p2-search.html" class="text-muted underline-offset-4 hover:text-fg hover:underline">Browse parking spots</a>
+        <a href="p7-about.html" class="text-muted underline-offset-4 hover:text-fg hover:underline">How BikeNest works</a>
+      </div>
+    </div>
+  </main>
+
+  <footer data-od-id="footer" class="border-t border-line">
+    <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-6 lg:px-8">
+      <p class="text-xs text-muted">© 2026 BikeNest</p>
+      <p class="font-mono text-xs text-muted">Prototype · E1 Not found (404)</p>
+    </div>
+  </footer>
+
+  <script>
+/* ---------- Shell: user menu, mobile menu, flash ---------- */
+    var userBtn = document.getElementById('user-btn');
+    var userMenu = document.getElementById('user-menu');
+    userBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var open = !userMenu.classList.toggle('hidden');
+      userBtn.setAttribute('aria-expanded', String(open));
+    });
+    document.addEventListener('click', function (e) {
+      if (!userMenu.classList.contains('hidden') && !userMenu.contains(e.target) && !userBtn.contains(e.target)) {
+        userMenu.classList.add('hidden');
+        userBtn.setAttribute('aria-expanded', 'false');
+      }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !userMenu.classList.contains('hidden')) {
+        userMenu.classList.add('hidden');
+        userBtn.setAttribute('aria-expanded', 'false');
+        userBtn.focus();
+      }
+    });
+
+    var menuBtn = document.getElementById('menu-btn');
+    var mobileMenu = document.getElementById('mobile-menu');
+    menuBtn.addEventListener('click', function () {
+      var open = !mobileMenu.classList.toggle('hidden');
+      menuBtn.setAttribute('aria-expanded', String(open));
+      menuBtn.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    });
+
+    var flashEl = document.getElementById('flash');
+    var flashText = document.getElementById('flash-text');
+    var flashTimer;
+    function flash(msg) {
+      flashText.textContent = msg;
+      flashEl.classList.remove('hidden');
+      flashEl.classList.add('flex');
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(function () {
+        flashEl.classList.add('hidden');
+        flashEl.classList.remove('flex');
+      }, 4600);
+    }
+
+  </script>
+
+</body>
+</html>

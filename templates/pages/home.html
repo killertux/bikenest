@@ -1,0 +1,205 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+
+<!-- ======== Hero: photo + gradient, headline, search card (P1) ======== -->
+<section class="relative isolate overflow-hidden">
+  <img
+    src="/static/img/hero-bike-parking.jpg"
+    alt="Rows of bicycles parked in a multi-tier parking facility"
+    width="2000" height="1125"
+    class="absolute inset-0 h-full w-full object-cover"
+  />
+  <div class="absolute inset-0 bg-gradient-to-b from-[oklch(18%_0.015_240_/_0.72)] via-[oklch(18%_0.015_240_/_0.56)] to-[oklch(18%_0.015_240_/_0.84)]" aria-hidden="true"></div>
+
+  <div class="relative mx-auto max-w-shell px-4 py-24 sm:py-32">
+    <div class="max-w-2xl">
+      <p class="mb-4 font-mono text-xs uppercase tracking-[0.14em] text-white/80">{{ tr.t("home.eyebrow") }}</p>
+      <h1 class="font-display text-4xl font-bold leading-[1.08] tracking-tight text-white sm:text-5xl lg:text-6xl">
+        {{ tr.t("home.hero.title") }}
+      </h1>
+      <p class="mt-5 max-w-xl text-lg leading-relaxed text-white/85">
+        {{ tr.t("home.hero.subtitle") }}
+      </p>
+    </div>
+
+    <!-- Search card -->
+    <div class="mt-10 max-w-2xl" x-data="{ locating: false, denied: false }">
+      <form action="/search" method="get" role="search" class="flex flex-col gap-2 rounded-2xl bg-surface p-2 shadow-pop sm:flex-row sm:items-center">
+        <div class="flex flex-1 items-center gap-3 px-3 py-1.5">
+          <svg aria-hidden="true" class="h-5 w-5 shrink-0 text-muted" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
+          <label for="q" class="sr-only">{{ tr.t("home.search.placeholder") }}</label>
+          <input
+            id="q" name="q" type="text" autocomplete="off"
+            placeholder="{{ tr.t("home.search.placeholder") }}"
+            class="w-full bg-transparent py-2 text-base focus:outline-none"
+          />
+        </div>
+        <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-base font-medium text-white transition-colors hover:bg-accent-dark">
+          <svg aria-hidden="true" class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg>
+          {{ tr.t("home.search.button") }}
+        </button>
+      </form>
+      <div class="mt-3 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          @click="
+            if (!navigator.geolocation) { denied = true; return; }
+            locating = true;
+            navigator.geolocation.getCurrentPosition(
+              (pos) => { window.location = '/search?lat=' + pos.coords.latitude.toFixed(6) + '&lon=' + pos.coords.longitude.toFixed(6); },
+              () => { locating = false; denied = true; }
+            );
+          "
+          class="inline-flex items-center gap-2 rounded-full border border-white/30 bg-white/10 px-4 py-2 text-sm font-medium text-white backdrop-blur transition-colors hover:bg-white/20"
+        >
+          <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
+          {{ tr.t("home.search.locate") }}
+          <span x-show="locating" class="text-white/70">…</span>
+        </button>
+        <span class="text-xs text-white/70">{{ tr.t("home.search.locate_hint") }}</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======== How it works (P1) ======== -->
+<section id="how-it-works" class="mx-auto max-w-shell px-4 py-20 lg:py-28">
+  <p class="mb-3 font-mono text-xs uppercase tracking-[0.14em] text-accent-strong">{{ tr.t("home.how.title") }}</p>
+  <h2 class="font-display text-3xl font-bold tracking-tight sm:text-4xl">{{ tr.t("home.hero.title") }}</h2>
+
+  <div class="mt-10 grid gap-6 md:grid-cols-3">
+    <div class="rounded-2xl border border-border bg-surface p-6">
+      <span class="inline-flex items-center rounded-full bg-accent/10 px-2.5 py-1 font-mono text-xs font-semibold text-accent-strong">01</span>
+      <h3 class="font-display mt-4 text-xl font-semibold">{{ tr.t("home.how.s1.title") }}</h3>
+      <p class="mt-2 text-[15px] leading-relaxed text-muted">{{ tr.t("home.how.s1.body") }}</p>
+    </div>
+    <div class="rounded-2xl border border-border bg-surface p-6">
+      <span class="inline-flex items-center rounded-full bg-accent/10 px-2.5 py-1 font-mono text-xs font-semibold text-accent-strong">02</span>
+      <h3 class="font-display mt-4 text-xl font-semibold">{{ tr.t("home.how.s2.title") }}</h3>
+      <p class="mt-2 text-[15px] leading-relaxed text-muted">{{ tr.t("home.how.s2.body") }}</p>
+    </div>
+    <div class="rounded-2xl border border-border bg-surface p-6">
+      <span class="inline-flex items-center rounded-full bg-accent/10 px-2.5 py-1 font-mono text-xs font-semibold text-accent-strong">03</span>
+      <h3 class="font-display mt-4 text-xl font-semibold">{{ tr.t("home.how.s3.title") }}</h3>
+      <p class="mt-2 text-[15px] leading-relaxed text-muted">{{ tr.t("home.how.s3.body") }}</p>
+    </div>
+  </div>
+</section>
+
+<!-- ======== Featured parking with real photos (P1) ======== -->
+{% if !featured.is_empty() %}
+<section class="border-t border-border bg-surface">
+  <div class="mx-auto max-w-shell px-4 py-20 lg:py-28">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+      <h2 class="font-display text-3xl font-bold tracking-tight sm:text-4xl">{{ tr.t("home.featured.title") }}</h2>
+      <a href="/search?q=Rua+XV+de+Novembro" class="inline-flex items-center gap-2 text-[15px] font-medium text-accent-strong hover:text-accent-dark">
+        {{ tr.t("home.featured.link") }}
+        <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
+      </a>
+    </div>
+
+    <div class="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      {% for item in featured %}
+      <a href="{{ item.url }}" class="group flex flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-card transition-shadow hover:shadow-pop">
+        <div class="relative aspect-[4/3] overflow-hidden">
+          {% if let Some(url) = item.photo_url %}
+          <img src="{{ url }}" alt="{{ item.name }}" class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" />
+          {% else %}
+          <img src="{{ item.image }}" alt="{{ item.image_alt }}" class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" />
+          {% endif %}
+          <span class="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-full bg-[oklch(100%_0_0_/_0.95)] px-2.5 py-1 font-mono text-[11px] uppercase tracking-wide text-fg shadow-sm">
+            {{ item.type_label }}
+          </span>
+        </div>
+        <div class="flex flex-1 flex-col p-5">
+          <div class="flex items-start justify-between gap-3">
+            <h3 class="font-display text-lg font-semibold leading-snug">{{ item.name }}</h3>
+            <span class="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium {% if item.freshness_code == "fresh" || item.freshness_code == "recently_verified" %}bg-fresh/10 text-fresh{% else if item.freshness_code == "aging" %}bg-aging/10 text-aging{% else %}bg-stale/10 text-stale{% endif %}">
+              {{ item.freshness_label }}
+            </span>
+          </div>
+          <p class="mt-1 flex items-center gap-1 text-sm text-muted">
+            <svg aria-hidden="true" class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
+            {{ item.distance_label }} · {{ item.address }}
+          </p>
+          {% if !item.security_chips.is_empty() %}
+          <div class="mt-3 flex flex-wrap gap-1.5">
+            {% for chip in item.security_chips %}
+            <span class="rounded-full bg-bg px-2 py-0.5 text-xs text-muted">{{ chip }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          <div class="mt-auto flex items-center justify-between gap-2 pt-4 text-sm">
+            <span class="font-medium text-fg">{{ item.cost_label }}</span>
+            {% if item.has_rating %}
+            <span class="inline-flex items-center gap-1 text-muted">
+              <svg aria-hidden="true" class="h-4 w-4 text-aging" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.9 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l7.1-1.01z"/></svg>
+              {{ item.rating_label }}
+            </span>
+            {% endif %}
+          </div>
+          {% if item.is_open_now %}
+          <p class="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-fresh">
+            <span class="h-1.5 w-1.5 rounded-full bg-fresh" aria-hidden="true"></span>{{ tr.t("open.now") }}
+          </p>
+          {% endif %}
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<!-- ======== Community: the map is kept honest by riders (P1) ======== -->
+<section class="border-t border-border">
+  <div class="mx-auto grid max-w-shell items-center gap-10 px-4 py-20 lg:grid-cols-2 lg:py-28">
+    <div class="overflow-hidden rounded-2xl border border-border shadow-card">
+      <img src="/static/img/mtb-pair-rack.jpg" alt="Two bicycles resting on a metal rack" class="aspect-[4/3] w-full object-cover" />
+    </div>
+    <div>
+      <p class="mb-3 font-mono text-xs uppercase tracking-[0.14em] text-accent-strong">{{ tr.t("home.community.eyebrow") }}</p>
+      <h2 class="font-display text-3xl font-bold tracking-tight sm:text-4xl">{{ tr.t("home.community.title") }}</h2>
+      <p class="mt-4 text-lg leading-relaxed text-muted">{{ tr.t("home.community.body") }}</p>
+      <ul class="mt-6 space-y-3 text-[15px]">
+        <li class="flex items-start gap-3">
+          <span class="mt-1 grid h-5 w-5 place-items-center rounded-full bg-accent/10 text-accent-strong"><svg aria-hidden="true" class="h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg></span>
+          {{ tr.t("home.community.p1") }}
+        </li>
+        <li class="flex items-start gap-3">
+          <span class="mt-1 grid h-5 w-5 place-items-center rounded-full bg-accent/10 text-accent-strong"><svg aria-hidden="true" class="h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg></span>
+          {{ tr.t("home.community.p2") }}
+        </li>
+        <li class="flex items-start gap-3">
+          <span class="mt-1 grid h-5 w-5 place-items-center rounded-full bg-accent/10 text-accent-strong"><svg aria-hidden="true" class="h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg></span>
+          {{ tr.t("home.community.p3") }}
+        </li>
+      </ul>
+      <a href="/about" class="mt-7 inline-flex items-center gap-2 text-[15px] font-medium text-accent-strong hover:text-accent-dark">
+        {{ tr.t("home.community.link") }}
+        <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ======== CTA strip (closing, P1) ======== -->
+<section class="relative isolate overflow-hidden">
+  <img
+    src="/static/img/cyclist-foggy-avenue.jpg"
+    alt="Cyclist riding down a tree-lined avenue in the morning mist"
+    width="1600" height="1069"
+    class="absolute inset-0 h-full w-full object-cover"
+  />
+  <div class="absolute inset-0 bg-gradient-to-b from-[oklch(18%_0.015_240_/_0.80)] via-[oklch(18%_0.015_240_/_0.88)] to-[oklch(18%_0.015_240_/_0.93)]" aria-hidden="true"></div>
+  <div class="relative mx-auto max-w-2xl px-4 py-24 text-center lg:py-28">
+    <h2 class="font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">{{ tr.t("home.cta.title") }}</h2>
+    <p class="mx-auto mt-4 max-w-lg text-lg text-white/85">{{ tr.t("home.cta.body") }}</p>
+    <a href="/search" class="mt-8 inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-base font-medium text-white transition-colors hover:bg-accent-dark">
+      <svg aria-hidden="true" class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg>
+      {{ tr.t("home.cta.button") }}
+    </a>
+  </div>
+</section>
+
+{% endblock %}

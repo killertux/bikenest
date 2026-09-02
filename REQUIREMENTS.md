@@ -404,7 +404,15 @@ The frontend MUST use:
 * HTML
 * HTMX 4
 * Askama
+* Tailwind CSS 4.3
 * Alpine.js where client-side state is genuinely necessary
+
+The application MUST use **Tailwind CSS 4.3** as its styling system:
+
+* design tokens (colors, typography, spacing, radii, shadows) MUST be defined as Tailwind theme tokens (`@theme` in CSS) rather than scattered custom CSS;
+* the tokens from the exported design (`design-project/colors_and_type.css`, see `UI_DESIGN.md`) MUST be mapped into the Tailwind theme so the implemented UI matches the approved design;
+* Tailwind's built-in build/CLI tooling MUST be used — no CDN/runtime-JIT in production;
+* custom CSS SHOULD be limited to things Tailwind cannot express well (e.g. MapLibre overrides) and SHOULD be kept in one well-known stylesheet loaded after the Tailwind entry.
 
 The application SHOULD minimize custom JavaScript.
 
@@ -874,6 +882,12 @@ Initial attributes:
 * Restricted access
 
 The model MUST be extensible.
+
+> **Resolved (implementation):** the catalog of security-attribute **codes** is a hardcoded list in
+> the domain (`SECURITY_FEATURE_CODES`), and human-readable **labels are resolved in the presentation
+> layer via i18n** — not stored in a database catalog table. This keeps labels localizable (§102) and
+> makes adding an attribute a code + translation rather than a schema migration, while remaining
+> extensible. Per-location values still live in the `parking_security` table as (code, tri-state).
 
 Security attributes SHOULD support an `unknown` state rather than treating missing information as false.
 
@@ -1650,7 +1664,7 @@ For example:
 
 ```text
 Destination:
-São Paulo coordinates
+Curitiba coordinates
 
 Parking A:
 100m away
@@ -3103,4 +3117,12 @@ The following decisions were resolved during requirements review. They are the s
 
 5. **Expected scale/volume** — Not yet defined. Performance targets in section 99 remain the operating constraints; volume assumptions are left TBD and MUST be revisited before capacity planning.
 
-6. **HTMX version** — HTMX 4 is the target (https://four.htmx.org/docs/whats-new-in-htmx-4). Note that htmx 4 swaps `4xx`/`5xx` error responses by default; error-handling fragments MUST be designed accordingly (see section 85).
+6. **HTMX version** — HTMX 4 is the target (https://four.htmx.org/docs/whats-new-in-htmx-4). Note that htmx 4 swaps `4xx`/`5xx` error responses by default; error-handling fragments MUST be designed accordingly (see section 85). Boosted navigation uses `hx-boost` with the `hx-alpine-compat` extension so Alpine re-initializes after swaps.
+
+7. **Internationalization** — implemented from the first search milestone (M1), not deferred: a bilingual (pt-BR + en) catalog with per-request locale resolution (`Accept-Language`, fallback pt-BR) overridable by a `lang` cookie toggle. User-facing strings live in the web-layer catalog, not hard-coded in domain/application logic. (See section 102.)
+
+8. **Text search** — none. Search resolves a *destination* (address/place/landmark/neighborhood/city/current location) via the geocoder to coordinates, then runs a PostGIS proximity query. There is no free-text search over parking names/descriptions and no separate search engine in the initial release. (See sections 21 and 101.)
+
+9. **Image storage** — abstracted behind an `ObjectStorage` port; the development implementation is local-disk with HMAC-signed, expiring URLs, replaceable by S3-compatible storage without domain changes. Introduced early (M1) to back seeded/location photos and the details gallery; the full upload → validate → re-encode → EXIF-strip → thumbnail → moderate pipeline remains M4. (See sections 30 and 84.)
+
+10. **Security-attribute catalog** — attribute **codes** are a hardcoded domain list; **labels** are resolved via i18n in the presentation layer, not stored in a database catalog table (localizable per §102). Per-location values remain in `parking_security` as (code, tri-state). (See sections 8 and 28.)

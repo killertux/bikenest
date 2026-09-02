@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BikeNest UI Kit — Navigation</title>
+<link rel="stylesheet" href="../../../colors_and_type.css">
+<style>
+  body{font-family:var(--font-body)}
+  .wrap{max-width:72rem;margin:0 auto;padding:40px 32px 64px}
+  h2{margin:40px 0 16px}
+  .demo{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-card);padding:24px}
+  .navbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 20px;border:1px solid var(--border);border-radius:12px;background:oklch(98% 0.004 240 / 0.9);backdrop-filter:blur(8px)}
+  .navlinks{display:flex;gap:4px}
+  .navlinks a{padding:10px 12px;border-radius:8px;font-size:15px;color:var(--muted);text-decoration:none}
+  .navlinks a:hover{background:oklch(20% 0.02 240 / 0.05);color:var(--fg)}
+  .navlinks a[aria-current]{color:var(--fg);font-weight:500;background:var(--accent-soft);color:var(--accent-strong)}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--border)}
+  .tabs a{padding:10px 14px;font-size:14px;color:var(--muted);text-decoration:none;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tabs a:hover{color:var(--fg)}
+  .tabs a[aria-current]{color:var(--accent-strong);font-weight:600;border-bottom-color:var(--accent)}
+  .crumbs{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted)}
+  .crumbs a{color:var(--muted);text-decoration:none}
+  .crumbs a:hover{color:var(--fg)}
+  .crumbs [aria-current]{color:var(--fg);font-weight:500}
+  .avatar{display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:9999px;padding:4px 12px 4px 4px;background:var(--surface);cursor:pointer}
+  .avatar:hover{background:oklch(20% 0.02 240 / 0.04)}
+  .avatar .face{width:28px;height:28px;border-radius:9999px;background:var(--accent-soft);color:var(--accent-strong);display:grid;place-items:center;font-size:12px;font-weight:700;font-family:var(--font-display)}
+</style>
+</head>
+<body data-od-id="kit-navigation">
+<main class="wrap">
+  <a href="../index.html" style="color:var(--accent-strong);font-size:14px;text-decoration:none;font-weight:600">← Overview</a>
+  <h1 class="type-title" style="margin:12px 0 8px">Navigation</h1>
+  <p class="type-body" style="color:var(--muted);margin:0">Sticky blurred header, tab bars and breadcrumbs, matching the shells in the preserved screens.</p>
+
+  <h2 class="type-section">Sticky header — authenticated shell</h2>
+  <div class="navbar" data-od-id="nav-header">
+    <a href="#" style="display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--fg)">
+      <svg viewBox="0 0 24 24" style="width:22px;height:22px;stroke:var(--accent);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><circle cx="5.5" cy="17.5" r="3.5"/><circle cx="18.5" cy="17.5" r="3.5"/><path d="M15 6a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm-3 11.5V14l-3-3 4-3 2 3h2"/></svg>
+      <span style="font-family:var(--font-display);font-weight:700;font-size:17px">BikeNest</span>
+    </a>
+    <nav class="navlinks" aria-label="Primary">
+      <a href="#" aria-current="page">Parking spots</a>
+      <a href="#">How it works</a>
+      <a href="#">Community</a>
+    </nav>
+    <button class="avatar" data-od-id="nav-avatar"><span class="face">MK</span><span style="font-size:13px;font-weight:500">Mira K.</span></button>
+  </div>
+
+  <h2 class="type-section">Moderator sub-nav with role badge</h2>
+  <div class="demo" data-od-id="nav-moderator">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+      <span class="badge badge-accent" style="padding:6px 12px;font-size:12px">Signed in as Moderator</span>
+      <span class="type-meta">Queue SLA: review within 48 h</span>
+    </div>
+    <nav class="tabs" aria-label="Moderation">
+      <a href="#">Moderation overview</a>
+      <a href="#" aria-current="page">Photo queue <span class="badge badge-accent" style="margin-left:4px">5</span></a>
+      <a href="#">Reports queue</a>
+      <a href="#">Proposal review</a>
+      <a href="#">Audit log</a>
+    </nav>
+  </div>
+
+  <h2 class="type-section">Breadcrumbs</h2>
+  <div class="demo" data-od-id="nav-crumbs">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="#">Parking spots</a><span aria-hidden="true">/</span>
+      <a href="#">Camden</a><span aria-hidden="true">/</span>
+      <span aria-current="page">Market Square shelter</span>
+    </nav>
+  </div>
+</main>
+</body>
+</html>

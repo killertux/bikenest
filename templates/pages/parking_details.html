@@ -1,0 +1,158 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<div class="mx-auto max-w-shell px-4 py-8 lg:px-8">
+
+  <!-- Breadcrumb -->
+  <nav class="mb-5 flex items-center gap-1.5 text-sm text-muted" aria-label="Breadcrumb">
+    <a href="/" class="hover:text-fg">{{ tr.t("details.breadcrumb.home") }}</a>
+    <span aria-hidden="true">/</span>
+    <a href="/search" class="hover:text-fg">{{ tr.t("details.breadcrumb.search") }}</a>
+    <span aria-hidden="true">/</span>
+    <span class="text-fg">{{ name }}</span>
+  </nav>
+
+  <div class="grid gap-8 lg:grid-cols-[1fr_340px]">
+    <div>
+      <!-- Title block + badge cluster + action bar -->
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="inline-flex items-center rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">{{ type_label }}</span>
+            <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium {% if freshness_code == "fresh" || freshness_code == "recently_verified" %}bg-fresh/10 text-fresh{% else if freshness_code == "aging" %}bg-aging/10 text-aging{% else %}bg-stale/10 text-stale{% endif %}">{{ freshness_label }}</span>
+            <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium {% if open_code == "open" %}bg-fresh/10 text-fresh{% else if open_code == "closed" %}bg-stale/10 text-stale{% else %}bg-bg text-muted{% endif %}">{{ open_label }}</span>
+          </div>
+          <h1 class="font-display mt-3 text-3xl font-bold tracking-tight">{{ name }}</h1>
+          <p class="mt-1.5 flex items-center gap-1.5 text-muted">
+            <svg aria-hidden="true" class="h-4 w-4 shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
+            {{ address }}
+          </p>
+        </div>
+        <a href="{{ google_url }}" target="_blank" rel="noopener" class="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">
+          <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
+          {{ tr.t("details.navigate.google") }}
+        </a>
+      </div>
+
+      {% if let Some(desc) = description %}
+        <p class="mt-4 text-muted">{{ desc }}</p>
+      {% endif %}
+
+      <!-- Photo gallery (P3) -->
+      <section class="mt-8" x-data="{ open: false, src: '', alt: '' }">
+        {% if gallery.is_empty() %}
+          <div class="rounded-2xl border border-dashed border-border bg-surface px-6 py-12 text-center">
+            <p class="font-display text-base font-semibold">{{ tr.t("details.gallery.empty") }}</p>
+            <p class="mx-auto mt-1.5 max-w-sm text-sm text-muted">{{ tr.t("details.gallery.empty_hint") }}</p>
+          </div>
+        {% else %}
+          <div class="grid gap-3 sm:grid-cols-4">
+            {% for photo in gallery %}
+              <button
+                type="button"
+                @click="open = true; src = '{{ photo.url }}'; alt = '{{ photo.alt }}'"
+                class="{% if loop.first %}sm:col-span-4 aspect-[16/9]{% else %}aspect-square{% endif %} overflow-hidden rounded-2xl border border-border"
+              >
+                <img src="{{ photo.url }}" alt="{{ photo.alt }}" loading="lazy" class="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
+              </button>
+            {% endfor %}
+          </div>
+          <!-- Lightbox -->
+          <div x-show="open" x-cloak @keydown.escape.window="open = false" class="fixed inset-0 z-50 flex items-center justify-center bg-[oklch(18%_0.015_240_/_0.85)] p-4" @click="open = false">
+            <img :src="src" :alt="alt" class="max-h-[90vh] max-w-full rounded-xl" @click.stop />
+            <button @click="open = false" aria-label="Close" class="absolute right-5 top-5 grid h-10 w-10 place-items-center rounded-full bg-white/90 text-fg">✕</button>
+          </div>
+        {% endif %}
+      </section>
+
+      <!-- Key facts (2×2 cards) -->
+      <section class="mt-8">
+        <h2 class="font-display text-lg font-semibold">{{ tr.t("details.facts.title") }}</h2>
+        <div class="mt-4 grid gap-3 sm:grid-cols-2">
+          <div class="rounded-2xl border border-border bg-surface p-4">
+            <p class="text-xs uppercase tracking-wide text-muted">{{ tr.t("details.facts.cost") }}</p>
+            <p class="mt-1 font-medium">{{ cost_label }}</p>
+          </div>
+          <div class="rounded-2xl border border-border bg-surface p-4">
+            <p class="text-xs uppercase tracking-wide text-muted">{{ tr.t("details.facts.freshness") }}</p>
+            <p class="mt-1 font-medium">{{ freshness_label }} · {{ verified_label }}</p>
+          </div>
+          <div class="rounded-2xl border border-border bg-surface p-4">
+            <p class="text-xs uppercase tracking-wide text-muted">{{ tr.t("details.facts.rating") }}</p>
+            <p class="mt-1 font-medium">{{ rating_label }}</p>
+          </div>
+          <div class="rounded-2xl border border-border bg-surface p-4">
+            <p class="text-xs uppercase tracking-wide text-muted">{{ tr.t("open.now") }}</p>
+            <p class="mt-1 font-medium">{{ open_label }}</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Opening hours -->
+      <section class="mt-8">
+        <h2 class="font-display text-lg font-semibold">{{ tr.t("details.hours.title") }}</h2>
+        <p class="mt-1 text-xs text-muted">{{ tr.t("details.hours.tz") }} {{ timezone_label }}.</p>
+        <table class="mt-3 w-full max-w-md text-sm">
+          <tbody>
+            {% for row in hours %}
+              <tr class="border-b border-border {% if row.is_today %}font-medium{% endif %}">
+                <td class="py-1.5 pr-4">{{ row.day }}{% if row.is_today %} <span class="text-accent-strong">•</span>{% endif %}</td>
+                <td class="py-1.5">{{ row.label }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Security attributes (yes / no / unknown, §28) -->
+      <section class="mt-8">
+        <h2 class="font-display text-lg font-semibold">{{ tr.t("details.security.title") }}</h2>
+        <ul class="mt-3 grid gap-2 sm:grid-cols-2 text-sm">
+          {% for f in security %}
+            <li class="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2">
+              {% if f.state == "yes" %}
+                <span class="grid h-5 w-5 place-items-center rounded-full bg-fresh/10 text-fresh" aria-label="{{ tr.t("details.security.yes") }}">✓</span><span>{{ f.label }}</span>
+              {% else if f.state == "no" %}
+                <span class="grid h-5 w-5 place-items-center rounded-full bg-stale/10 text-stale" aria-label="{{ tr.t("details.security.no") }}">✗</span><span class="text-muted">{{ f.label }}</span>
+              {% else %}
+                <span class="grid h-5 w-5 place-items-center rounded-full bg-bg text-muted" aria-label="{{ tr.t("details.security.unknown") }}">?</span><span class="text-muted">{{ f.label }}</span>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+
+      <!-- Reviews (arrive with community accounts — M3) -->
+      <section class="mt-8">
+        <h2 class="font-display text-lg font-semibold">{{ tr.t("details.reviews.title") }}</h2>
+        <p class="mt-2 rounded-2xl border border-dashed border-border bg-surface px-5 py-6 text-sm text-muted">{{ tr.t("details.reviews.empty") }}</p>
+      </section>
+    </div>
+
+    <aside class="space-y-4">
+      <div id="map-single"
+        data-lat="{{ lat }}"
+        data-lon="{{ lon }}"
+        data-name="{{ name }}"
+        class="h-72 rounded-2xl border border-border"
+      ></div>
+
+      <div class="rounded-2xl border border-border bg-surface p-4">
+        <div class="flex flex-col gap-2 text-sm">
+          <a href="{{ google_url }}" target="_blank" rel="noopener" class="rounded-lg bg-accent px-4 py-2 text-center font-medium text-white hover:bg-accent-dark">{{ tr.t("details.navigate.google") }}</a>
+          <a href="{{ osm_url }}" target="_blank" rel="noopener" class="rounded-lg border border-border px-4 py-2 text-center hover:border-accent">{{ tr.t("details.navigate.osm") }}</a>
+        </div>
+      </div>
+
+      <div class="rounded-2xl border border-border bg-surface p-4 text-sm">
+        <h2 class="font-display text-sm font-semibold">{{ tr.t("details.contribute.title") }}</h2>
+        <p class="mt-2 text-muted">{{ tr.t("details.contribute.body") }}</p>
+      </div>
+    </aside>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/vendor/maplibre-gl.js"></script>
+<script src="/static/js/details-map.js"></script>
+{% endblock %}

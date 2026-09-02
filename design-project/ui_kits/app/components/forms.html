@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BikeNest UI Kit — Forms</title>
+<link rel="stylesheet" href="../../../colors_and_type.css">
+<style>
+  body{font-family:var(--font-body)}
+  .wrap{max-width:52rem;margin:0 auto;padding:40px 32px}
+  h2{margin:40px 0 16px}
+  .demo{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-card);padding:24px}
+  .fieldset{border:0;padding:0;margin:0 0 20px}
+  label.lbl{display:block;font-size:14px;font-weight:500;margin-bottom:6px}
+  .hint{font-size:13px;color:var(--muted);margin:6px 0 0;line-height:1.5}
+  .err{font-size:13px;color:var(--danger);margin:6px 0 0}
+  textarea.field{height:auto;min-height:96px;padding:10px 12px;font-family:var(--font-body);resize:vertical}
+  .radios{display:grid;gap:8px}
+  .radios label{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;cursor:pointer;transition:background 150ms}
+  .radios label:hover{background:oklch(20% 0.02 240 / 0.04)}
+  .radios input{accent-color:var(--danger)}
+  select.field{appearance:auto}
+</style>
+</head>
+<body data-od-id="kit-forms">
+<main class="wrap">
+  <a href="../index.html" style="color:var(--accent-strong);font-size:14px;text-decoration:none;font-weight:600">← Overview</a>
+  <h1 class="type-title" style="margin:12px 0 8px">Forms</h1>
+  <p class="type-body" style="color:var(--muted);margin:0">Patterns from the registration, contribution and moderation flows. Labels above fields, hints at 13px, errors in danger with a bordered input.</p>
+
+  <h2 class="type-section">Text, select &amp; textarea</h2>
+  <form class="demo" data-od-id="form-basics" onsubmit="return false">
+    <fieldset class="fieldset">
+      <label class="lbl" for="f-title">Spot name</label>
+      <input id="f-title" class="field" value="Market Square shelter">
+      <p class="hint">A short, recognizable name cyclists will search for.</p>
+    </fieldset>
+    <fieldset class="fieldset">
+      <label class="lbl" for="f-type">Parking type</label>
+      <select id="f-type" class="field">
+        <option>Street rack</option><option>Shelter</option><option>Secure cage</option><option>Indoor room</option>
+      </select>
+    </fieldset>
+    <fieldset class="fieldset" style="margin-bottom:0">
+      <label class="lbl" for="f-notes">Notes for reviewers</label>
+      <textarea id="f-notes" class="field" placeholder="Anything a moderator should check before approving."></textarea>
+      <p class="err" data-od-id="form-error">Coordinates are required — drop a pin on the map.</p>
+    </fieldset>
+  </form>
+
+  <h2 class="type-section">Radio cards — reject reasons (from m2 photo queue)</h2>
+  <div class="demo" data-od-id="form-radios">
+    <div class="radios" role="radiogroup" aria-label="Rejection reason">
+      <label><input type="radio" name="reason"> Not of this location</label>
+      <label><input type="radio" name="reason"> Doesn't show the parking</label>
+      <label><input type="radio" name="reason" checked> Inappropriate content</label>
+      <label><input type="radio" name="reason"> Spam or advertising</label>
+    </div>
+    <button class="btn-danger" style="margin-top:16px;width:100%">Reject photo</button>
+  </div>
+
+  <h2 class="type-section">Auth field pair — email + password (from a1/a2)</h2>
+  <form class="demo" data-od-id="form-auth" onsubmit="return false">
+    <fieldset class="fieldset">
+      <label class="lbl" for="f-email">Email</label>
+      <input id="f-email" type="email" class="field" placeholder="you@example.com">
+    </fieldset>
+    <fieldset class="fieldset" style="margin-bottom:8px">
+      <label class="lbl" for="f-pass">Password</label>
+      <input id="f-pass" type="password" class="field" style="border-color:var(--danger)">
+      <p class="err">At least 8 characters, including a number.</p>
+    </fieldset>
+    <button class="btn-primary" style="width:100%">Create account</button>
+  </form>
+</main>
+</body>
+</html>

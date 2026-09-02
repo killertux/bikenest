@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BikeNest DS — Colors</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  .wrap{max-width:72rem;margin:0 auto;padding:40px 32px}
+  .sw{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow-card)}
+  .sw .chip{height:88px}
+  .sw .meta{padding:12px 16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
+  h1{margin:0 0 8px}h2{margin:40px 0 16px}
+  .lead{color:var(--muted);font-size:15px;margin:0}
+  .val{font-family:var(--font-mono);font-size:11.5px;color:var(--muted);margin:4px 0 0;word-break:break-all}
+  .name{font-weight:700;font-size:14px;margin:0}
+  .demo{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+</style>
+</head>
+<body data-od-id="preview-colors">
+<div class="wrap">
+  <span class="badge badge-accent">Design system · Color</span>
+  <h1 class="type-title" style="margin-top:12px">BikeNest palette</h1>
+  <p class="lead">Cool neutral base (hue 240), one green-teal accent (hue 170), and a semantic freshness scale. All values OKLch, extracted verbatim from the source token block.</p>
+
+  <h2 class="type-section">Core</h2>
+  <div class="grid" data-od-id="core-swatches">
+    <div class="sw"><div class="chip" style="background:var(--bg)"></div><div class="meta"><p class="name">bg</p><p class="val">oklch(98% 0.004 240)</p></div></div>
+    <div class="sw"><div class="chip" style="background:var(--surface)"></div><div class="meta"><p class="name">surface</p><p class="val">oklch(100% 0 0)</p></div></div>
+    <div class="sw"><div class="chip" style="background:var(--fg)"></div><div class="meta"><p class="name">fg</p><p class="val">oklch(20% 0.02 240)</p></div></div>
+    <div class="sw"><div class="chip" style="background:var(--muted)"></div><div class="meta"><p class="name">muted</p><p class="val">oklch(50% 0.018 240)</p></div></div>
+    <div class="sw"><div class="chip" style="background:var(--border)"></div><div class="meta"><p class="name">border <span class="type-meta">(source: line)</span></p><p class="val">oklch(90% 0.006 240)</p></div></div>
+    <div class="sw"><div class="chip" style="background:var(--accent)"></div><div class="meta"><p class="name">accent</p><p class="val">oklch(56% 0.12 170)</p></div></div>
+    <div class="sw"><div class="chip" style="background:var(--accent-strong)"></div><div class="meta"><p class="name">accent-strong</p><p class="val">oklch(45% 0.11 170)</p></div></div>
+    <div class="sw"><div class="chip" style="background:var(--accent-dark)"></div><div class="meta"><p class="name">accent-dark</p><p class="val">oklch(40% 0.10 170)</p></div></div>
+    <div class="sw"><div class="chip" style="background:linear-gradient(var(--surface),var(--surface)) , var(--accent-soft);background:var(--accent-soft)"></div><div class="meta"><p class="name">accent-soft</p><p class="val">56% 0.12 170 / 0.12</p></div></div>
+    <div class="sw"><div class="chip" style="background:var(--scrim)"></div><div class="meta"><p class="name">scrim</p><p class="val">oklch(18% 0.015 240)</p></div></div>
+  </div>
+
+  <h2 class="type-section">Semantic freshness scale — data status only</h2>
+  <div class="grid" data-od-id="semantic-swatches">
+    <div class="sw"><div class="chip" style="background:var(--fresh)"></div><div class="meta"><p class="name">fresh</p><p class="val">oklch(58% 0.13 155) · approved / verified</p></div></div>
+    <div class="sw"><div class="chip" style="background:var(--aging)"></div><div class="meta"><p class="name">aging</p><p class="val">oklch(68% 0.12 75) · open / re-check</p></div></div>
+    <div class="sw"><div class="chip" style="background:var(--stale)"></div><div class="meta"><p class="name">stale</p><p class="val">oklch(55% 0.16 35) · unverified</p></div></div>
+    <div class="sw"><div class="chip" style="background:var(--danger)"></div><div class="meta"><p class="name">danger</p><p class="val">oklch(47% 0.17 30) · rejected / destructive</p></div></div>
+  </div>
+
+  <h2 class="type-section">Badges in context</h2>
+  <div class="card" style="padding:24px" data-od-id="badge-demo">
+    <div class="demo">
+      <span class="badge badge-accent">Under review</span>
+      <span class="badge badge-fresh">Approved</span>
+      <span class="badge badge-aging">Needs re-check</span>
+      <span class="badge badge-danger">Rejected</span>
+      <span class="badge" style="background:oklch(20% 0.02 240 / 0.06);color:var(--muted)">Dismissed</span>
+    </div>
+    <p class="type-meta" style="margin:16px 0 0">Chips pair a 10–12% tint with the matching strong text color so contrast stays ≥ 4.5:1 in every state.</p>
+  </div>
+</div>
+</body>
+</html>
