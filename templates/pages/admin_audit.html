@@ -1,0 +1,55 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<section class="mx-auto max-w-shell px-4 py-12 lg:px-8">
+  <h1 class="font-display text-2xl font-bold tracking-tight">{{ tr.t("admin.audit.title") }}</h1>
+  <p class="mt-1 text-sm text-muted">{{ tr.t("admin.audit.subtitle") }}</p>
+
+  <form method="get" action="/admin/audit" class="mt-6 flex flex-wrap items-end gap-3 rounded-2xl border border-border p-4 text-sm">
+    <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.audit.action") }}<input name="action" value="{{ action }}" class="mt-1 rounded-lg border border-border px-2 py-2"></label>
+    <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.audit.target_type") }}<input name="target_type" value="{{ target_type }}" class="mt-1 rounded-lg border border-border px-2 py-2"></label>
+    <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.audit.actor") }}<input name="actor" type="number" min="1" value="{{ actor }}" class="mt-1 rounded-lg border border-border px-2 py-2"></label>
+    <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.audit.from") }}<input name="from" value="{{ from }}" class="mt-1 rounded-lg border border-border px-2 py-2"></label>
+    <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.audit.to") }}<input name="to" value="{{ to }}" class="mt-1 rounded-lg border border-border px-2 py-2"></label>
+    <button type="submit" class="rounded-lg bg-accent px-3 py-2 font-medium text-white">{{ tr.t("admin.audit.filter") }}</button>
+  </form>
+
+  {% if items.is_empty() %}
+    <div class="mt-8 rounded-2xl border border-border p-8 text-center text-sm text-muted">{{ tr.t("admin.audit.empty") }}</div>
+  {% else %}
+  <div class="mt-6 overflow-hidden rounded-2xl border border-border">
+    <table class="w-full text-left text-sm">
+      <thead class="bg-bg">
+        <tr>
+          <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.id") }}</th>
+          <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.actor") }}</th>
+          <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.action") }}</th>
+          <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.target") }}</th>
+          <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.result") }}</th>
+          <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.metadata") }}</th>
+          <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.when") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in items %}
+        <tr class="border-t border-border align-top">
+          <td class="px-4 py-3 font-mono text-xs text-muted">{{ e.id }}</td>
+          <td class="px-4 py-3">{{ e.actor_label }}</td>
+          <td class="px-4 py-3 font-mono text-xs">{{ e.action }}</td>
+          <td class="px-4 py-3 font-mono text-xs text-muted">{{ e.target_label }}</td>
+          <td class="px-4 py-3">{{ e.result_label }}</td>
+          <td class="px-4 py-3 font-mono text-xs text-muted">{{ e.metadata }}</td>
+          <td class="px-4 py-3 text-muted">{{ e.created_label }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if let Some(cursor) = next_cursor %}
+    <div class="mt-4">
+      <a href="/admin/audit?action={{ action }}&amp;target_type={{ target_type }}&amp;actor={{ actor }}&amp;from={{ from }}&amp;to={{ to }}&amp;cursor={{ cursor }}"
+         class="rounded-lg border border-border px-4 py-2 text-sm text-muted hover:text-fg">{{ tr.t("admin.audit.next") }}</a>
+    </div>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

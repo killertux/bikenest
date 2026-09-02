@@ -160,10 +160,18 @@ pub struct DetailsPage {
     pub reasons: Vec<view::ReasonVm>,
     /// A one-time notice banner (post-action confirmation, e.g. "will be reviewed").
     pub notice: Option<String>,
+    /// The location's §25 moderation state code (ACTIVE/PENDING_REVIEW/…). Public
+    /// viewers only ever reach ACTIVE; moderators see a banner for the rest.
+    pub moderation_state: &'static str,
+    /// Whether the viewer is a moderator/admin (sees the hidden/invalid banner).
+    pub is_moderator: bool,
+    /// The report-reason options for the P3 report modal (§43).
+    pub reason_options: Vec<view::OptionVm>,
 }
 
 /// One gallery photo: presigned URLs + accessible text. Grid tiles render the
 /// (smaller) thumbnail; the lightbox renders the full derivative.
+#[derive(Debug, Clone)]
 pub struct PhotoVm {
     pub url: String,
     pub thumb_url: String,
@@ -246,6 +254,9 @@ impl DetailsPage {
             own_rating: 0,
             reasons: Vec::new(),
             notice: None,
+            moderation_state: loc.moderation_state().as_code(),
+            is_moderator: false,
+            reason_options: view::report_reason_options(tr),
         }
     }
 
@@ -261,10 +272,38 @@ impl DetailsPage {
         community: Option<bikenest_application::CommunityParkingDetails>,
         viewer_verified: bool,
         viewer_authenticated: bool,
+        viewer_is_moderator: bool,
+        storage: &dyn bikenest_application::ObjectStorage,
     ) -> Self {
         let mut page = Self::build(tr, v, gallery, csrf);
         let Some(c) = community else { return page };
-        page.reviews = c.reviews.iter().map(|r| view::review_vm(tr, r, false)).collect();
+        page.reviews = c.reviews.iter().map(|r| {
+            let photos = c
+                .review_photos
+                .get(&r.id)
+                .map(|ps| {
+                    ps.iter()
+                        .filter_map(|p| {
+                            let url = view::resolve_photo(storage, Some(&p.key))?;
+                            let thumb_url = p
+                                .thumbnail_key
+                                .as_deref()
+                                .and_then(|k| view::resolve_photo(storage, Some(k)))
+                                .unwrap_or_else(|| url.clone());
+                            Some(PhotoVm {
+                                url,
+                                thumb_url,
+                                alt: p
+                                    .alt
+                                    .clone()
+                                    .unwrap_or_else(|| "Review photo".to_string()),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            view::review_vm(tr, r, false, photos)
+        }).collect();
         page.confidence_code = c.confidence.as_code();
         page.confidence_label = view::confidence_label(tr, c.confidence).to_string();
         page.disputed = c.disputed;
@@ -281,6 +320,7 @@ impl DetailsPage {
         page.has_own_review = c.own_review.is_some();
         page.own_rating = c.own_review.map(|r| r.rating.value()).unwrap_or(0);
         page.reasons = c.reasons.iter().map(|r| view::reason_vm(tr, r)).collect();
+        page.is_moderator = viewer_is_moderator;
         page
     }
 
@@ -528,6 +568,92 @@ pub struct ModerationPhotosPage {
 pub struct PhotoUploadResultVm {
     pub tr: Translator,
     /// "success" | "error".
+    pub state: &'static str,
+    pub message: String,
+}
+
+// ---------------------------------------------------------------------------
+// M5 moderation & reporting pages
+// ---------------------------------------------------------------------------
+
+/// M1 — moderation dashboard (counts + links to the queues).
+#[derive(Template)]
+#[template(path = "pages/moderation_dashboard.html")]
+pub struct ModerationDashboardPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub pending_photos: usize,
+    pub open_reports: usize,
+    pub under_review_reports: usize,
+    pub pending_proposals: usize,
+    pub is_admin: bool,
+}
+
+/// M3 — reports queue.
+#[derive(Template)]
+#[template(path = "pages/moderation_reports.html")]
+pub struct ModerationReportsPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub state_filter: String,
+    pub items: Vec<view::ReportVm>,
+    /// The current moderator's id — the template hides resolve/dismiss on one's
+    /// own report (the server guard still enforces it).
+    pub viewer_id: i64,
+    pub notice: Option<String>,
+}
+
+/// M4 — proposal review queue.
+#[derive(Template)]
+#[template(path = "pages/moderation_proposals.html")]
+pub struct ModerationProposalsPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub items: Vec<view::ProposalVm>,
+    pub notice: Option<String>,
+}
+
+/// M6 — admin audit-log viewer.
+#[derive(Template)]
+#[template(path = "pages/admin_audit.html")]
+pub struct AdminAuditPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub items: Vec<view::AuditRowVm>,
+    pub next_cursor: Option<i64>,
+    pub action: String,
+    pub target_type: String,
+    pub actor: String,
+    pub from: String,
+    pub to: String,
+    pub notice: Option<String>,
+}
+
+/// Admin: a target user's contribution history (C5 aggregation scoped to a user).
+#[derive(Template)]
+#[template(path = "pages/admin_user_contributions.html")]
+pub struct AdminUserContributionsPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub user_id: i64,
+    pub email: String,
+    pub items: Vec<view::ContributionVm>,
+}
+
+/// HTMX fragment: the report-submit result (success or error).
+#[derive(Template)]
+#[template(path = "partials/report_result.html")]
+pub struct ReportResultVm {
+    pub tr: Translator,
+    pub state: &'static str,
+    pub message: String,
+}
+
+/// HTMX fragment: a generic moderation-action toast.
+#[derive(Template)]
+#[template(path = "partials/moderation_action_result.html")]
+pub struct ModerationActionResultVm {
+    pub tr: Translator,
     pub state: &'static str,
     pub message: String,
 }

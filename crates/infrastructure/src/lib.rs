@@ -7,6 +7,7 @@ pub mod db;
 pub mod devdata;
 pub mod email;
 pub mod geocoding;
+pub mod moderation;
 pub mod parking;
 pub mod photo;
 pub mod probe;
@@ -27,7 +28,8 @@ pub use email::{
 pub use config::Config;
 pub use db::Db;
 pub use geocoding::FakeGeocoder;
+pub use moderation::{SqlxAuditLogReader, SqlxModerationRepository, SqlxReportRepository};
 pub use parking::{SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader};
-pub use photo::{LocalImageProcessor, SqlxPhotoRepository};
+pub use photo::{LocalImageProcessor, SqlxPhotoRepository, SqlxReviewPhotosReader};
 pub use storage::{LocalDiskStorage, MEDIA_BASE_PATH};
 pub use timezone::OfflineTimezoneResolver;

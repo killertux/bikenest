@@ -1,12 +1,15 @@
-//! SQL-backed photo repository (M4): queue insert, moderation flips and the
-//! pending-photo read model.
+//! SQL-backed photo repository (M4 → generalized in M5): the queue insert,
+//! moderation flips and the pending-photo read model — now dispatching across
+//! both `parking_photo` and `review_photo` through [`bikenest_application::PhotoKind`].
 
 use crate::Db;
 use async_trait::async_trait;
 use bikenest_application::{
-    NewPendingPhoto, PendingPhoto, PhotoError, PhotoForModeration, PhotoRepository, RejectedPhoto,
+    NewPendingPhoto, PendingPhoto, PhotoError, PhotoForModeration, PhotoKind, PhotoRepository,
+    PhotoTarget, RejectedPhoto,
 };
 use bikenest_domain::{PhotoDimensions, PhotoModerationState, UserId};
+use sqlx::FromRow;
 
 pub struct SqlxPhotoRepository {
     db: Db,
@@ -18,88 +21,137 @@ impl SqlxPhotoRepository {
     }
 }
 
+#[derive(FromRow)]
+struct IdRow {
+    id: i64,
+}
+
+#[derive(FromRow)]
+struct PendingRow {
+    id: i64,
+    kind: String,
+    parent_id: i64,
+    parent_name: String,
+    storage_key: String,
+    thumbnail_key: Option<String>,
+    alt: Option<String>,
+    width: Option<i32>,
+    height: Option<i32>,
+    uploader_id: Option<i64>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(FromRow)]
+struct ModRow {
+    id: i64,
+    parent_id: i64,
+    moderation_state: String,
+    storage_key: String,
+    thumbnail_key: Option<String>,
+}
+
+#[derive(FromRow)]
+struct RejectedRow {
+    storage_key: String,
+    thumbnail_key: Option<String>,
+}
+
+fn parent_col(kind: PhotoKind) -> &'static str {
+    match kind {
+        PhotoKind::Parking => "location_id",
+        PhotoKind::Review => "review_id",
+    }
+}
+
 #[async_trait]
 impl PhotoRepository for SqlxPhotoRepository {
     async fn insert_pending(&self, p: &NewPendingPhoto) -> Result<i64, PhotoError> {
-        struct IdRow {
-            id: i64,
-        }
-        let row = sqlx::query_as!(
-            IdRow,
-            r#"
-            INSERT INTO parking_photo
-                (location_id, storage_key, content_type, alt, position, moderation_state, uploader_id)
-            VALUES ($1, '', $2, $3, 0, 'PENDING_REVIEW', $4)
-            RETURNING id
-            "#,
-            p.location_id,
-            p.content_type,
-            p.alt,
-            p.uploader_id.0,
-        )
-        .fetch_one(self.db.pool())
-        .await
-        .map_err(map_err)?;
-        Ok(row.id)
+        let (table, parent_col) = (p.target.kind().table(), parent_col(p.target.kind()));
+        let id = if table == "parking_photo" {
+            let row = sqlx::query_as::<_, IdRow>(&format!(
+                "INSERT INTO parking_photo ({parent_col}, storage_key, content_type, alt, position, moderation_state, uploader_id) \
+                 VALUES ($1, '', $2, $3, 0, 'PENDING_REVIEW', $4) RETURNING id"
+            ))
+            .bind(p.target.parent_id())
+            .bind(&p.content_type)
+            .bind(p.alt.as_deref())
+            .bind(p.uploader_id.0)
+            .fetch_one(self.db.pool())
+            .await
+            .map_err(map_err)?;
+            row.id
+        } else {
+            // `review_photo` has no content_type/alt columns (review photos have
+            // no accessible caption yet) — insert only the shared columns.
+            let row = sqlx::query_as::<_, IdRow>(&format!(
+                "INSERT INTO review_photo ({parent_col}, storage_key, position, moderation_state, uploader_id) \
+                 VALUES ($1, '', 0, 'PENDING_REVIEW', $2) RETURNING id"
+            ))
+            .bind(p.target.parent_id())
+            .bind(p.uploader_id.0)
+            .fetch_one(self.db.pool())
+            .await
+            .map_err(map_err)?;
+            row.id
+        };
+        Ok(id)
     }
 
-    async fn max_position(&self, location_id: i64) -> Result<i32, PhotoError> {
-        let row = sqlx::query!(
-            r#"SELECT COALESCE(MAX(position), 0) AS position FROM parking_photo WHERE location_id = $1"#,
-            location_id
-        )
+    async fn max_position(&self, target: PhotoTarget) -> Result<i32, PhotoError> {
+        let (table, parent_col) = (target.kind().table(), parent_col(target.kind()));
+        let row = sqlx::query_as::<_, (Option<i32>,)>(&format!(
+            "SELECT COALESCE(MAX(position), 0) AS position FROM {table} WHERE {parent_col} = $1"
+        ))
+        .bind(target.parent_id())
         .fetch_one(self.db.pool())
         .await
         .map_err(map_err)?;
-        Ok(row.position.unwrap_or(0))
+        Ok(row.0.unwrap_or(0))
     }
 
     async fn mark_processed(
         &self,
+        kind: PhotoKind,
         id: i64,
         storage_key: &str,
         thumbnail_key: &str,
         dimensions: PhotoDimensions,
         processed_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), PhotoError> {
-        sqlx::query!(
-            r#"
-            UPDATE parking_photo
-            SET storage_key = $2, thumbnail_key = $3, width = $4, height = $5, processed_at = $6
-            WHERE id = $1
-            "#,
-            id,
-            storage_key,
-            thumbnail_key,
-            dimensions.width as i32,
-            dimensions.height as i32,
-            processed_at,
-        )
+        sqlx::query(&format!(
+            "UPDATE {} SET storage_key = $2, thumbnail_key = $3, width = $4, height = $5, processed_at = $6 WHERE id = $1",
+            kind.table()
+        ))
+        .bind(id)
+        .bind(storage_key)
+        .bind(thumbnail_key)
+        .bind(dimensions.width as i32)
+        .bind(dimensions.height as i32)
+        .bind(processed_at)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;
         Ok(())
     }
 
-    async fn delete(&self, id: i64) -> Result<(), PhotoError> {
-        sqlx::query!("DELETE FROM parking_photo WHERE id = $1", id)
+    async fn delete(&self, kind: PhotoKind, id: i64) -> Result<(), PhotoError> {
+        sqlx::query(&format!("DELETE FROM {} WHERE id = $1", kind.table()))
+            .bind(id)
             .execute(self.db.pool())
             .await
             .map_err(map_err)?;
         Ok(())
     }
 
-    async fn approve(&self, id: i64, moderator: UserId, position: i32) -> Result<(), PhotoError> {
-        let rows = sqlx::query!(
-            r#"
-            UPDATE parking_photo
-            SET moderation_state = 'APPROVED', position = $3, reviewed_by = $2, reviewed_at = now()
-            WHERE id = $1 AND moderation_state = 'PENDING_REVIEW'
-            "#,
-            id,
-            moderator.0,
-            position,
-        )
+    async fn approve(&self, kind: PhotoKind, id: i64, moderator: UserId, position: i32) -> Result<(), PhotoError> {
+        let rows = sqlx::query(&format!(
+            "UPDATE {} SET moderation_state = 'APPROVED', position = $3, reviewed_by = $2, reviewed_at = now() \
+             WHERE id = $1 AND moderation_state = 'PENDING_REVIEW'",
+            kind.table()
+        ))
+        .bind(id)
+        .bind(moderator.0)
+        .bind(position)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -111,26 +163,19 @@ impl PhotoRepository for SqlxPhotoRepository {
 
     async fn reject(
         &self,
+        kind: PhotoKind,
         id: i64,
         moderator: UserId,
         reason: &str,
     ) -> Result<RejectedPhoto, PhotoError> {
-        struct RejectedRow {
-            storage_key: String,
-            thumbnail_key: Option<String>,
-        }
-        let row = sqlx::query_as!(
-            RejectedRow,
-            r#"
-            UPDATE parking_photo
-            SET moderation_state = 'REJECTED', rejection_reason = $3, reviewed_by = $2, reviewed_at = now()
-            WHERE id = $1 AND moderation_state = 'PENDING_REVIEW'
-            RETURNING storage_key, thumbnail_key
-            "#,
-            id,
-            moderator.0,
-            reason,
-        )
+        let row = sqlx::query_as::<_, RejectedRow>(&format!(
+            "UPDATE {} SET moderation_state = 'REJECTED', rejection_reason = $3, reviewed_by = $2, reviewed_at = now() \
+             WHERE id = $1 AND moderation_state = 'PENDING_REVIEW' RETURNING storage_key, thumbnail_key",
+            kind.table()
+        ))
+        .bind(id)
+        .bind(moderator.0)
+        .bind(reason)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -144,27 +189,21 @@ impl PhotoRepository for SqlxPhotoRepository {
     }
 
     async fn list_pending(&self) -> Result<Vec<PendingPhoto>, PhotoError> {
-        struct PendingRow {
-            id: i64,
-            location_id: i64,
-            location_name: String,
-            storage_key: String,
-            thumbnail_key: Option<String>,
-            alt: Option<String>,
-            width: Option<i32>,
-            height: Option<i32>,
-            uploader_id: Option<i64>,
-            created_at: chrono::DateTime<chrono::Utc>,
-        }
-        let rows = sqlx::query_as!(
-            PendingRow,
+        let rows = sqlx::query_as::<_, PendingRow>(
             r#"
-            SELECT p.id, p.location_id, l.name AS location_name, p.storage_key,
-                   p.thumbnail_key, p.alt, p.width, p.height, p.uploader_id, p.created_at
+            SELECT p.id, 'parking' AS kind, p.location_id AS parent_id, l.name AS parent_name,
+                   p.storage_key, p.thumbnail_key, p.alt, p.width, p.height, p.uploader_id, p.created_at
             FROM parking_photo p
             JOIN parking_location l ON l.id = p.location_id
             WHERE p.moderation_state = 'PENDING_REVIEW'
-            ORDER BY p.created_at, p.id
+            UNION ALL
+            SELECT p.id, 'review' AS kind, r.location_id AS parent_id, l.name AS parent_name,
+                   p.storage_key, p.thumbnail_key, NULL::text AS alt, p.width, p.height, p.uploader_id, p.created_at
+            FROM review_photo p
+            JOIN review r ON r.id = p.review_id
+            JOIN parking_location l ON l.id = r.location_id
+            WHERE p.moderation_state = 'PENDING_REVIEW'
+            ORDER BY created_at, id
             "#,
         )
         .fetch_all(self.db.pool())
@@ -175,8 +214,9 @@ impl PhotoRepository for SqlxPhotoRepository {
             .into_iter()
             .map(|r| PendingPhoto {
                 id: r.id,
-                location_id: r.location_id,
-                location_name: r.location_name,
+                kind: PhotoKind::from_code(&r.kind).unwrap_or(PhotoKind::Parking),
+                parent_id: r.parent_id,
+                parent_name: r.parent_name,
                 storage_key: r.storage_key,
                 thumbnail_key: r.thumbnail_key,
                 alt: r.alt,
@@ -188,46 +228,28 @@ impl PhotoRepository for SqlxPhotoRepository {
             .collect())
     }
 
-    async fn get_for_moderation(&self, id: i64) -> Result<Option<PhotoForModeration>, PhotoError> {
-        struct PhotoRow {
-            id: i64,
-            location_id: i64,
-            moderation_state: String,
-            storage_key: String,
-            thumbnail_key: Option<String>,
-        }
-        let row = sqlx::query_as!(
-            PhotoRow,
-            r#"
-            SELECT id, location_id, moderation_state, storage_key, thumbnail_key
-            FROM parking_photo
-            WHERE id = $1
-            "#,
-            id,
-        )
+    async fn get_for_moderation(&self, kind: PhotoKind, id: i64) -> Result<Option<PhotoForModeration>, PhotoError> {
+        let (table, parent_col) = (kind.table(), parent_col(kind));
+        let row = sqlx::query_as::<_, ModRow>(&format!(
+            "SELECT id, {parent_col} AS parent_id, moderation_state, storage_key, thumbnail_key FROM {table} WHERE id = $1"
+        ))
+        .bind(id)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?;
 
         Ok(row.map(|r| PhotoForModeration {
             id: r.id,
-            location_id: r.location_id,
-            state: PhotoModerationState::from_code(&r.moderation_state).unwrap_or(
-                PhotoModerationState::PendingReview,
-            ),
+            kind,
+            parent_id: r.parent_id,
+            state: PhotoModerationState::from_code(&r.moderation_state)
+                .unwrap_or(PhotoModerationState::PendingReview),
             storage_key: r.storage_key,
             thumbnail_key: r.thumbnail_key,
         }))
     }
 }
 
-fn map_err(e: sqlx::Error) -> PhotoError {
-    match e {
-        // FK violation on insert → the location does not exist (§24).
-        sqlx::Error::Database(db) if db.code().as_deref() == Some("23503") => PhotoError::NotFound,
-        sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => {
-            PhotoError::Internal
-        }
-        _ => PhotoError::Internal,
-    }
+fn map_err(_e: sqlx::Error) -> PhotoError {
+    PhotoError::Internal
 }

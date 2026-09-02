@@ -353,6 +353,13 @@ pub trait ParkingPhotoReader: Send + Sync {
     async fn photos(&self, location_id: i64) -> Result<Vec<StoredPhoto>, ReaderError>;
 }
 
+/// Port: approved photos attached to a *review* (D3 §38), in display order.
+/// Only `APPROVED` review photos render on the review card.
+#[async_trait]
+pub trait ReviewPhotosReader: Send + Sync {
+    async fn photos(&self, review_id: i64) -> Result<Vec<StoredPhoto>, ReaderError>;
+}
+
 /// Shared freshness configuration for view-building use cases.
 #[derive(Debug, Clone, Copy)]
 pub struct FreshnessConfig {

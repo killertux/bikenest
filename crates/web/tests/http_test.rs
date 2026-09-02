@@ -851,8 +851,8 @@ async fn review_create_updates_aggregate(tx: &mut bikenest_test_support::TestTx)
 
     let (_, review_form) = get_c(&app, &format!("/parking/{id}/review"), Some(&cookie)).await;
     let rcsrf = extract_csrf(&review_form);
-    let (s, _, _) = post_form(&app, &format!("/parking/{id}/review"),
-        &[("csrf", &rcsrf), ("rating", "4"), ("body", "Great rack")], Some(&cookie)).await;
+    let rbody = multipart_review("4", "Great rack", "----bikenestphoto");
+    let (s, _) = post_multipart(&app, &format!("/parking/{id}/review"), rbody, &cookie, Some(&rcsrf)).await;
     assert_eq!(s, StatusCode::SEE_OTHER);
 
     let (count, avg): (i32, Option<f64>) = sqlx::query_as(
@@ -1007,6 +1007,21 @@ fn multipart_upload(jpeg: &[u8], alt: Option<&str>, boundary: &str) -> (String, 
     }
     body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
     (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+/// Build a multipart review body (rating + body fields) using the test boundary.
+fn multipart_review(rating: &str, body: &str, boundary: &str) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    b.extend_from_slice(b"Content-Disposition: form-data; name=\"rating\"\r\n\r\n");
+    b.extend_from_slice(rating.as_bytes());
+    b.extend_from_slice(b"\r\n");
+    b.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    b.extend_from_slice(b"Content-Disposition: form-data; name=\"body\"\r\n\r\n");
+    b.extend_from_slice(body.as_bytes());
+    b.extend_from_slice(b"\r\n");
+    b.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    b
 }
 
 async fn post_multipart(
@@ -1192,7 +1207,7 @@ async fn moderation_routes_require_moderator_role(tx: &mut bikenest_test_support
     let cookie = verified_cookie(&app, &email, "photo-nonmod@example.com").await;
     let (s, _) = get_c(&app, "/moderation/photos", Some(&cookie)).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "non-moderator cannot open queue");
-    let (s, _, _) = post_form(&app, "/moderation/photos/1/approve",
+    let (s, _, _) = post_form(&app, "/moderation/photos/parking/1/approve",
         &[("csrf", "bogus")], Some(&cookie)).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "non-moderator cannot approve");
     let _ = tx;
@@ -1216,7 +1231,7 @@ async fn moderator_approve_publishes_to_gallery(tx: &mut bikenest_test_support::
     let (s, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
     assert_eq!(s, StatusCode::OK);
     let mcs = extract_csrf(&queue);
-    let (s, _, _) = post_form(&app, &format!("/moderation/photos/{id}/approve"),
+    let (s, _, _) = post_form(&app, &format!("/moderation/photos/parking/{id}/approve"),
         &[("csrf", &mcs)], Some(&mod_cookie)).await;
     assert_eq!(s, StatusCode::OK, "moderator approves: {s}");
 
@@ -1249,7 +1264,7 @@ async fn moderator_reject_deletes_object_and_hides(tx: &mut bikenest_test_suppor
     let mod_cookie = moderator_cookie(&app, &email, "photo-reject-mod@example.com").await;
     let (_, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
     let mcs = extract_csrf(&queue);
-    let (s, _, _) = post_form(&app, &format!("/moderation/photos/{id}/reject"),
+    let (s, _, _) = post_form(&app, &format!("/moderation/photos/parking/{id}/reject"),
         &[("csrf", &mcs), ("reason", "unclear image")], Some(&mod_cookie)).await;
     assert_eq!(s, StatusCode::OK, "moderator rejects: {s}");
 
@@ -1312,7 +1327,7 @@ async fn served_derivative_has_no_exif(tx: &mut bikenest_test_support::TestTx) {
     let mod_cookie = moderator_cookie(&app, &email, "photo-exif-mod@example.com").await;
     let (_, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
     let mcs = extract_csrf(&queue);
-    post_form(&app, &format!("/moderation/photos/{id}/approve"),
+    post_form(&app, &format!("/moderation/photos/parking/{id}/approve"),
         &[("csrf", &mcs)], Some(&mod_cookie)).await;
 
     // Fetch the presigned derivative (from the gallery <img src>) and confirm it
@@ -1403,4 +1418,342 @@ async fn photo_upload_alt_too_long_is_bad_request(tx: &mut bikenest_test_support
     sqlx::query("DELETE FROM parking_location WHERE seed_key = 'photo-alt-long'")
         .execute(&pool().await).await.unwrap();
     cleanup_user_contributions("photo-alt-long-up@example.com").await;
+}
+
+// ---------------------------------------------------------------------------
+// M5 moderation & reporting — end-to-end (report → claim → resolve → hide;
+// invalidate/restore parking; suspend/restore; audit viewer gating; the
+// self-resolve guard; D3 multipart review-photo attach).
+// ---------------------------------------------------------------------------
+
+async fn last_report_id(reporter_email: &str, target_type: &str, target_id: i64) -> i64 {
+    let (id,): (i64,) = sqlx::query_as(
+        "SELECT id FROM report WHERE reporter_id = (SELECT id FROM users WHERE email = $1) \
+         AND target_type = $2 AND target_id = $3 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(reporter_email)
+    .bind(target_type)
+    .bind(target_id)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    id
+}
+
+#[db_test]
+async fn report_review_flow_claim_resolve_hides_and_audits(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    const UPLOADER: &str = "m5-up@example.com";
+    const REPORTER: &str = "m5-reporter@example.com";
+    const MOD: &str = "m5-mod@example.com";
+    let loc = fixture_location(tx, "m5-report-loc", "M5 Report Loc").await;
+
+    // Uploader (verified) writes a review (D3 multipart).
+    let uploader = verified_cookie(&app, &email, UPLOADER).await;
+    let (_, rev_form) = get_c(&app, &format!("/parking/{loc}/review"), Some(&uploader)).await;
+    let rcsrf = extract_csrf(&rev_form);
+    let rbody = multipart_review("5", "Great secured rack", "----bikenestphoto");
+    let (s, _) = post_multipart(&app, &format!("/parking/{loc}/review"), rbody, &uploader, Some(&rcsrf)).await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "review created: {s}");
+    let (review_id,): (i64,) = sqlx::query_as("SELECT id FROM review WHERE location_id = $1 ORDER BY id DESC LIMIT 1")
+        .bind(loc).fetch_one(&pool().await).await.unwrap();
+
+    // Reporter (authenticated, brand-new — not verified) reports the review.
+    let reporter = unverified_cookie(&app, REPORTER).await;
+    let (_, rep_page) = get_c(&app, &format!("/parking/{loc}"), Some(&reporter)).await;
+    let csrf = extract_csrf(&rep_page);
+    let (s, _, _) = post_form(&app, "/reports",
+        &[("csrf", &csrf), ("target_type", "review"), ("target_id", &review_id.to_string()), ("reason", "spam"), ("description", "Looks fake")],
+        Some(&reporter)).await;
+    assert_eq!(s, StatusCode::OK, "report submitted: {s}");
+    let report_id = last_report_id(REPORTER, "review", review_id).await;
+
+    let (state,): (String,) = sqlx::query_as("SELECT state FROM report WHERE id = $1")
+        .bind(report_id).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(state, "OPEN");
+    let (created_audits,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM audit_events WHERE action = 'report.created' AND target_id = $1")
+        .bind(report_id.to_string()).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(created_audits, 1);
+
+    // Moderator claims then resolves (hides the review).
+    let mod_cookie = moderator_cookie(&app, &email, MOD).await;
+    let (_, mod_page) = get_c(&app, "/moderation/reports?state=OPEN", Some(&mod_cookie)).await;
+    let mcsrf = extract_csrf(&mod_page);
+    let (s, _, _) = post_form(&app, &format!("/moderation/reports/{report_id}/claim"),
+        &[("csrf", &mcsrf)], Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK, "claim: {s}");
+    let (s, _, _) = post_form(&app, &format!("/moderation/reports/{report_id}/resolve"),
+        &[("csrf", &mcsrf), ("note", "spam review")], Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK, "resolve: {s}");
+
+    let (state,): (String,) = sqlx::query_as("SELECT state FROM report WHERE id = $1")
+        .bind(report_id).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(state, "RESOLVED");
+    let (rstate,): (String,) = sqlx::query_as("SELECT moderation_state FROM review WHERE id = $1")
+        .bind(review_id).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(rstate, "HIDDEN", "resolved report hides the review");
+
+    // The hidden review disappears from public P3.
+    let (_, pub_page) = get_c(&app, &format!("/parking/{loc}"), None).await;
+    assert!(!pub_page.contains("Great secured rack"), "hidden review not rendered");
+
+    // Audit trail records who did what.
+    let (claimed,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM audit_events WHERE action = 'report.claimed' AND target_id = $1")
+        .bind(report_id.to_string()).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(claimed, 1);
+    let (resolved,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM audit_events WHERE action = 'report.resolved' AND target_id = $1")
+        .bind(report_id.to_string()).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(resolved, 1);
+
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'm5-report-loc'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions(UPLOADER).await;
+    cleanup_user_contributions(REPORTER).await;
+    cleanup_user_contributions(MOD).await;
+}
+
+#[db_test]
+async fn moderator_cannot_resolve_own_report(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    const MOD: &str = "m5-selfmod@example.com";
+    let loc = fixture_location(tx, "m5-self-loc", "M5 Self Loc").await;
+    let mod_cookie = moderator_cookie(&app, &email, MOD).await;
+    let (_, mod_page) = get_c(&app, &format!("/parking/{loc}"), Some(&mod_cookie)).await;
+    let csrf = extract_csrf(&mod_page);
+
+    // The moderator submits a report, then tries to resolve it themselves.
+    let (s, _, _) = post_form(&app, "/reports",
+        &[("csrf", &csrf), ("target_type", "parking"), ("target_id", &loc.to_string()), ("reason", "spam")],
+        Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK);
+    let report_id = last_report_id(MOD, "parking", loc).await;
+
+    // Claim → allowed, but self-resolve → CONFLICT/self-resolve error.
+    let (_, mod_page2) = get_c(&app, "/moderation/reports?state=OPEN", Some(&mod_cookie)).await;
+    let mcsrf = extract_csrf(&mod_page2);
+    post_form(&app, &format!("/moderation/reports/{report_id}/claim"),
+        &[("csrf", &mcsrf)], Some(&mod_cookie)).await;
+    let (s, body, _) = post_form(&app, &format!("/moderation/reports/{report_id}/resolve"),
+        &[("csrf", &mcsrf), ("note", "x")], Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::CONFLICT, "self-resolve rejected: {s}");
+    assert!(body.contains("cannot resolve"), "friendly self-resolve message: {body}");
+
+    let (state,): (String,) = sqlx::query_as("SELECT state FROM report WHERE id = $1")
+        .bind(report_id).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(state, "UNDER_REVIEW", "report stays under review after rejected self-resolve");
+
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'm5-self-loc'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions(MOD).await;
+}
+
+#[db_test]
+async fn invalidate_parking_public_404_moderator_banner_and_restore(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    const MOD: &str = "m5-inv-mod@example.com";
+    let loc = fixture_location(tx, "m5-inv-loc", "M5 Invalidate Loc").await;
+
+    // Public sees the active listing.
+    let (s, _) = get_c(&app, &format!("/parking/{loc}"), None).await;
+    assert_eq!(s, StatusCode::OK);
+
+    let mod_cookie = moderator_cookie(&app, &email, MOD).await;
+    let (_, mod_page) = get_c(&app, "/moderation", Some(&mod_cookie)).await;
+    let mcsrf = extract_csrf(&mod_page);
+    let (s, _, _) = post_form(&app, &format!("/moderation/parking/{loc}/invalidate"),
+        &[("csrf", &mcsrf)], Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK, "invalidate: {s}");
+
+    // Public P3 now 404s; the moderator still sees it with a banner.
+    let (s, _) = get_c(&app, &format!("/parking/{loc}"), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "public cannot see invalidated parking");
+    let (s, body) = get_c(&app, &format!("/parking/{loc}"), Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK, "moderator still sees the page");
+    assert!(body.contains("under moderation"), "moderator banner rendered");
+
+    // Also absent from search (search filters ACTIVE).
+    let (_, search) = get_c(&app, "/search?lat=-25.4284&lon=-49.2733&radius=2000", None).await;
+    assert!(!search.contains("M5 Invalidate Loc"));
+
+    // Restore brings it back (grab a fresh CSRF from the dashboard).
+    let (_, mod_page2) = get_c(&app, "/moderation", Some(&mod_cookie)).await;
+    let mcsrf2 = extract_csrf(&mod_page2);
+    let (s, _, _) = post_form(&app, &format!("/moderation/parking/{loc}/restore"),
+        &[("csrf", &mcsrf2)], Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK, "restore: {s}");
+    let (s, _) = get_c(&app, &format!("/parking/{loc}"), None).await;
+    assert_eq!(s, StatusCode::OK, "public sees restored listing");
+
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'm5-inv-loc'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions(MOD).await;
+}
+
+#[db_test]
+async fn admin_suspend_revokes_sessions_blocks_and_restore(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    const USER: &str = "m5-suspend@example.com";
+    const ADMIN: &str = "m5-admin@example.com";
+    // A verified user with a live session.
+    let user_cookie = verified_cookie(&app, &email, USER).await;
+    let admin_cookie = admin_cookie(&app, &email, ADMIN).await;
+    let (_, admin_page) = get_c(&app, "/admin/users", Some(&admin_cookie)).await;
+    let acsrf = extract_csrf(&admin_page);
+    let (uid,): (i64,) = sqlx::query_as("SELECT id FROM users WHERE email = $1")
+        .bind(USER).fetch_one(&pool().await).await.unwrap();
+
+    // Suspend: session revoked + state SUSPENDED + audited.
+    let (s, _, _) = post_form(&app, &format!("/admin/users/{uid}/suspend"),
+        &[("csrf", &acsrf)], Some(&admin_cookie)).await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "suspend redirects: {s}");
+    let (state,): (String,) = sqlx::query_as("SELECT account_state FROM users WHERE id = $1")
+        .bind(uid).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(state, "SUSPENDED");
+    let (revoked,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM sessions WHERE user_id = $1 AND revoked_at IS NOT NULL")
+        .bind(uid).fetch_one(&pool().await).await.unwrap();
+    assert!(revoked >= 1, "suspension revokes sessions");
+    let (audit,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM audit_events WHERE action = 'user.suspended' AND target_id = $1")
+        .bind(uid.to_string()).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(audit, 1);
+
+    // The suspended user's existing session is now dead → redirected to login.
+    let (s, _) = get_c(&app, "/account", Some(&user_cookie)).await;
+    assert!(matches!(s, StatusCode::SEE_OTHER | StatusCode::FOUND), "mid-session gate: {s}");
+
+    // Login is blocked with the generic message.
+    let (_, body, _) = post_form(&app, "/login",
+        &[("email", USER), ("password", "password123")], None).await;
+    assert!(body.contains("Email or password is incorrect"), "suspended login blocked: {body}");
+
+    // Restore → ACTIVE + login works.
+    let (_, admin_page2) = get_c(&app, "/admin/users", Some(&admin_cookie)).await;
+    let acsrf2 = extract_csrf(&admin_page2);
+    let (s, _, _) = post_form(&app, &format!("/admin/users/{uid}/restore"),
+        &[("csrf", &acsrf2)], Some(&admin_cookie)).await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "restore redirects: {s}");
+    let (_, _, new_cookie) = post_form(&app, "/login",
+        &[("email", USER), ("password", "password123")], None).await;
+    assert!(new_cookie.as_deref().unwrap_or("").contains("session_id="), "restored user can log in");
+
+    let _ = tx;
+    cleanup_user_contributions(USER).await;
+    cleanup_user_contributions(ADMIN).await;
+}
+
+#[db_test]
+async fn moderation_and_audit_routes_are_gated(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    // Anonymous → redirected to login.
+    for uri in ["/moderation", "/moderation/reports", "/moderation/proposals"] {
+        let (s, _) = get_c(&app, uri, None).await;
+        assert!(matches!(s, StatusCode::SEE_OTHER | StatusCode::FOUND), "{uri} anonymous: {s}");
+    }
+    // Non-moderator verified user → 403 on every moderation route.
+    let cookie = verified_cookie(&app, &email, "m5-nonmod@example.com").await;
+    let (s, _) = get_c(&app, "/moderation", Some(&cookie)).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "non-moderator cannot open dashboard");
+    let (s, _) = get_c(&app, "/admin/audit", Some(&cookie)).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "audit viewer is admin-only");
+    // A moderator (not admin) cannot open the audit viewer.
+    let mod_cookie = moderator_cookie(&app, &email, "m5-mod-gate@example.com").await;
+    let (s, _) = get_c(&app, "/admin/audit", Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "moderator (not admin) cannot open audit viewer");
+    let _ = tx;
+    cleanup_user_contributions("m5-nonmod@example.com").await;
+    cleanup_user_contributions("m5-mod-gate@example.com").await;
+}
+
+#[db_test]
+async fn d3_review_photos_held_pending_until_approved(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    const AUTHOR: &str = "m5-review-photo@example.com";
+    let loc = fixture_location(tx, "m5-rp-loc", "M5 Review Photo Loc").await;
+    let cookie = verified_cookie(&app, &email, AUTHOR).await;
+    let (_, form) = get_c(&app, &format!("/parking/{loc}/review"), Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+
+    // D3 multipart review with an attached photo (rating + body + photo in one body).
+    let jpeg = tiny_jpeg();
+    let mut body = Vec::new();
+    body.extend_from_slice(b"------bikenestphoto\r\nContent-Disposition: form-data; name=\"rating\"\r\n\r\n4\r\n");
+    body.extend_from_slice(b"------bikenestphoto\r\nContent-Disposition: form-data; name=\"body\"\r\n\r\nNice locker\r\n");
+    body.extend_from_slice(b"------bikenestphoto\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"r.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n");
+    body.extend_from_slice(&jpeg);
+    body.extend_from_slice(b"\r\n------bikenestphoto--\r\n");
+    let (s, _) = post_multipart(&app, &format!("/parking/{loc}/review"), body, &cookie, Some(&csrf)).await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "review with photo: {s}");
+
+    let (review_id,): (i64,) = sqlx::query_as("SELECT id FROM review WHERE location_id = $1 ORDER BY id DESC LIMIT 1")
+        .bind(loc).fetch_one(&pool().await).await.unwrap();
+    let (rstate,): (String,) = sqlx::query_as("SELECT moderation_state FROM review WHERE id = $1")
+        .bind(review_id).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(rstate, "ACTIVE", "review text publishes immediately");
+
+    // The review photo is held PENDING_REVIEW; only approved render.
+    let (pstate,): (String,) = sqlx::query_as(
+        "SELECT moderation_state FROM review_photo WHERE review_id = $1")
+        .bind(review_id).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(pstate, "PENDING_REVIEW", "review photo held pending");
+
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'm5-rp-loc'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions(AUTHOR).await;
+}
+
+#[db_test]
+async fn approved_review_photo_renders_on_p3(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    const AUTHOR: &str = "m5-rp-render@example.com";
+    const MOD: &str = "m5-rp-mod@example.com";
+    let loc = fixture_location(tx, "m5-rp-render-loc", "M5 Review Render Loc").await;
+    let cookie = verified_cookie(&app, &email, AUTHOR).await;
+    let (_, form) = get_c(&app, &format!("/parking/{loc}/review"), Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+
+    // D3 multipart review with an attached (pending) photo.
+    let jpeg = tiny_jpeg();
+    let mut body = Vec::new();
+    body.extend_from_slice(b"------bikenestphoto\r\nContent-Disposition: form-data; name=\"rating\"\r\n\r\n5\r\n");
+    body.extend_from_slice(b"------bikenestphoto\r\nContent-Disposition: form-data; name=\"body\"\r\n\r\nGreat locker\r\n");
+    body.extend_from_slice(b"------bikenestphoto\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"r.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n");
+    body.extend_from_slice(&jpeg);
+    body.extend_from_slice(b"\r\n------bikenestphoto--\r\n");
+    let (s, _) = post_multipart(&app, &format!("/parking/{loc}/review"), body, &cookie, Some(&csrf)).await;
+    assert_eq!(s, StatusCode::SEE_OTHER);
+
+    let (review_id,): (i64,) = sqlx::query_as("SELECT id FROM review WHERE location_id = $1 ORDER BY id DESC LIMIT 1")
+        .bind(loc).fetch_one(&pool().await).await.unwrap();
+    let (rp_id,): (i64,) = sqlx::query_as("SELECT id FROM review_photo WHERE review_id = $1")
+        .bind(review_id).fetch_one(&pool().await).await.unwrap();
+
+    // Pending → not yet rendered on the public P3.
+    let (_, pub_page) = get_c(&app, &format!("/parking/{loc}"), None).await;
+    assert!(!pub_page.contains("/media/uploads/"), "pending review photo not rendered");
+
+    // Moderator approves it from the unified queue (kind=review).
+    let mod_cookie = moderator_cookie(&app, &email, MOD).await;
+    let (_, mod_page) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
+    let mcsrf = extract_csrf(&mod_page);
+    let (s, _, _) = post_form(&app, &format!("/moderation/photos/review/{rp_id}/approve"),
+        &[("csrf", &mcsrf)], Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // Now the approved review photo renders on P3.
+    let (_, pub_page) = get_c(&app, &format!("/parking/{loc}"), None).await;
+    assert!(pub_page.contains("/media/uploads/"), "approved review photo renders on P3");
+
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'm5-rp-render-loc'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions(AUTHOR).await;
+    cleanup_user_contributions(MOD).await;
 }

@@ -2,6 +2,8 @@
 
 pub mod processor;
 pub mod repository;
+pub mod review_photos;
 
 pub use processor::LocalImageProcessor;
 pub use repository::SqlxPhotoRepository;
+pub use review_photos::SqlxReviewPhotosReader;

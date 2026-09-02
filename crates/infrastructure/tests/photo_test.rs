@@ -2,7 +2,8 @@
 //! format gate, thumbnailing) and the SQL photo repository.
 
 use bikenest_application::{
-    ImageProcessor, NewPendingPhoto, ParkingPhotoReader, PhotoError, PhotoRepository,
+    ImageProcessor, NewPendingPhoto, ParkingPhotoReader, PhotoError, PhotoKind, PhotoRepository,
+    PhotoTarget,
 };
 use bikenest_domain::{PhotoDimensions, UserId};
 use bikenest_infrastructure::{
@@ -231,7 +232,7 @@ async fn cleanup(fx: &Fixture) {
 
 fn new_pending(fx: &Fixture) -> NewPendingPhoto {
     NewPendingPhoto {
-        location_id: fx.location_id,
+        target: PhotoTarget::Parking(fx.location_id),
         uploader_id: fx.user_id,
         content_type: "image/jpeg".to_string(),
         alt: Some("An alt text".to_string()),
@@ -265,7 +266,7 @@ async fn repo_mark_processed_sets_keys_and_dimensions(tx: &mut bikenest_test_sup
     let repo = SqlxPhotoRepository::new(db().await);
     let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
 
-    repo.mark_processed(
+    repo.mark_processed(PhotoKind::Parking, 
         id,
         "uploads/1/full.jpg",
         "uploads/1/thumb.jpg",
@@ -296,7 +297,7 @@ async fn repo_approve_sets_position_and_reviewer(tx: &mut bikenest_test_support:
     let fx = fresh_fixture(tx, "photo-approve@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
     let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
-    repo.mark_processed(
+    repo.mark_processed(PhotoKind::Parking, 
         id,
         "uploads/1/full.jpg",
         "uploads/1/thumb.jpg",
@@ -307,7 +308,7 @@ async fn repo_approve_sets_position_and_reviewer(tx: &mut bikenest_test_support:
     .unwrap();
 
     let moderator = fx.moderator_id;
-    repo.approve(id, moderator, 5).await.unwrap();
+    repo.approve(PhotoKind::Parking, id, moderator, 5).await.unwrap();
 
     let row = sqlx::query!(
         "SELECT moderation_state, position, reviewed_by FROM parking_photo WHERE id = $1",
@@ -321,7 +322,7 @@ async fn repo_approve_sets_position_and_reviewer(tx: &mut bikenest_test_support:
     assert_eq!(row.reviewed_by, Some(moderator.0));
 
     // Approving a non-pending photo again → NotPending.
-    assert!(matches!(repo.approve(id, moderator, 6).await, Err(PhotoError::NotPending)));
+    assert!(matches!(repo.approve(PhotoKind::Parking, id, moderator, 6).await, Err(PhotoError::NotPending)));
 
     cleanup(&fx).await;
 }
@@ -331,7 +332,7 @@ async fn repo_reject_records_reason_and_returns_keys(tx: &mut bikenest_test_supp
     let fx = fresh_fixture(tx, "photo-reject@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
     let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
-    repo.mark_processed(
+    repo.mark_processed(PhotoKind::Parking, 
         id,
         "uploads/2/full.jpg",
         "uploads/2/thumb.jpg",
@@ -342,7 +343,7 @@ async fn repo_reject_records_reason_and_returns_keys(tx: &mut bikenest_test_supp
     .unwrap();
 
     let moderator = fx.moderator_id;
-    let rejected = repo.reject(id, moderator, "unclear image").await.unwrap();
+    let rejected = repo.reject(PhotoKind::Parking, id, moderator, "unclear image").await.unwrap();
     assert_eq!(rejected.storage_key, "uploads/2/full.jpg");
     assert_eq!(rejected.thumbnail_key.as_deref(), Some("uploads/2/thumb.jpg"));
 
@@ -365,11 +366,11 @@ async fn repo_max_position_and_queue_ordering(tx: &mut bikenest_test_support::Te
     let fx = fresh_fixture(tx, "photo-order@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
 
-    assert_eq!(repo.max_position(fx.location_id).await.unwrap(), 0);
+    assert_eq!(repo.max_position(PhotoTarget::Parking(fx.location_id)).await.unwrap(), 0);
     let first = repo.insert_pending(&new_pending(&fx)).await.unwrap();
     let second = repo.insert_pending(&new_pending(&fx)).await.unwrap();
     // max_position counts APPROVED + all photos (position default 0 here).
-    assert_eq!(repo.max_position(fx.location_id).await.unwrap(), 0);
+    assert_eq!(repo.max_position(PhotoTarget::Parking(fx.location_id)).await.unwrap(), 0);
 
     // Both fixture photos must appear in the queue (it may also hold other
     // tests' pending rows — DB is shared), oldest first relative to each other.
@@ -388,7 +389,7 @@ async fn reader_returns_thumbnail_key_for_processed_photo(tx: &mut bikenest_test
     let fx = fresh_fixture(tx, "photo-thumb@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
     let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
-    repo.mark_processed(
+    repo.mark_processed(PhotoKind::Parking, 
         id,
         "uploads/3/full.jpg",
         "uploads/3/thumb.jpg",
@@ -398,7 +399,7 @@ async fn reader_returns_thumbnail_key_for_processed_photo(tx: &mut bikenest_test
     .await
     .unwrap();
     // Approve so the gallery reader returns it.
-    repo.approve(id, fx.moderator_id, 1).await.unwrap();
+    repo.approve(PhotoKind::Parking, id, fx.moderator_id, 1).await.unwrap();
 
     let reader = SqlxParkingPhotoReader::new(db().await);
     let photos = reader.photos(fx.location_id).await.unwrap();

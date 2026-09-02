@@ -59,6 +59,32 @@ A community-maintained bicycle parking finder. See `REQUIREMENTS.md` (what/how),
       control; moderation i18n (en/pt-BR). **D1 photo-attach deferred** — the P3 path is primary;
       a location can be created first and its photo attached via P3 (same pipeline).
 
+### M5 — moderation & reporting
+
+- [x] Schema (`0010_moderation.sql`, `0011_review_photos.sql`): `report` table (polymorphic
+      `target_type`/`target_id`, states `OPEN/UNDER_REVIEW/RESOLVED/DISMISSED`); `parking_photo`
+      moderation CHECK widened to accept `HIDDEN`; audit-viewer indexes; `review_photo` table (D3
+      photo attach, `PENDING_REVIEW → APPROVED/REJECTED/HIDDEN`)
+- [x] Domain: `ReportState`/`ReportTargetType`/`ReportOutcome`, the `REPORT_REASONS` code list +
+      `reason_allowed_for` mapping, `ReportDescription` (0..=1000 chars); `PhotoModerationState::Hidden`
+- [x] Application: `ModerationService` (submit/claim/resolve report with the **server-side
+      self-resolve guard**, hide/restore review/photo, invalidate/restore parking, approve/reject
+      proposal, audit viewer, contribution inspection); report rate limits (10/day/user + 20/day/IP);
+      `AuthService::suspend_user`/`restore_user` (revokes sessions); `PhotoService` generalized over
+      `PhotoTarget { Parking, Review }`
+- [x] Infrastructure: `SqlxReportRepository`, `SqlxModerationRepository` (target-existence,
+      hide/restore, parking state + `moderation` revision, proposal apply + **supersede** older
+      PENDING), `SqlxAuditLogReader` (filter + keyset pagination), review-photo + unified photo queue
+- [x] Web: report modal + `POST /reports`; P3 returns **404 for a non-ACTIVE location** to the
+      public (moderators see a banner); `/moderation` dashboard, `/moderation/reports`(claim/resolve/
+      dismiss), `/moderation/proposals`(approve/reject), hide/restore review/photo/parking;
+      `/admin/users/{id}/suspend|restore`, `/admin/users/{id}/contributions`, `/admin/audit`; D3
+      review form is multipart (text publishes `ACTIVE`, photos held `PENDING_REVIEW`); i18n (en/pt-BR)
+
+- [x] Beyond the base milestone: every article resolves to the audit trail (`report.*`, `review.*`,
+      `photo.*`, `parking.*`, `user.suspended/restored`, `proposal.*`); `PhotoService` hides/restores
+      parking-photos for the unified moderation queue.
+
 ### Pulled forward from later milestones
 
 - [x] **Object storage** (from M4): `ObjectStorage` port + `LocalDiskStorage` issuing HMAC-signed,

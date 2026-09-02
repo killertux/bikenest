@@ -203,6 +203,8 @@ domain code list + i18n (migration `0004`); dataset relocated to **Curitiba**; `
 - Moderation dashboard, report queue, proposal review, contribution-history inspection.
 - Admin audit-log viewer.
 
+See `plans/m5-moderation.md` for the full plan and decisions.
+
 **Working app means:** a user reports content; a moderator resolves it; the offending content is hidden; the audit trail shows who did what; a user cannot resolve their own report.
 
 **Mocks/fakes:** none new.
@@ -292,7 +294,7 @@ Bookkeeping for anything temporary, mocked, or knowingly incomplete. **Each entr
 | 3 | Mock map tile usage in dev | mock data | M1 | M7 | MapLibre demo tiles. Never point production at public OSM tiles (§83); choose a provider. |
 | 4 | Email providers | fake | M2 | M7 | **Generic `EmailProvider` port (§84)**: `fake` (capture + outbox), `smtp` (lettre) and `resend` (API) impls selected via `EMAIL_PROVIDER`. Dev uses **smtp → Mailpit** (docker-compose, UI `:8025`); the `fake` remains for tests. |
 | 5 | `FakeOAuthProvider` (Google stub) | fake/stub | M2 | M7 | Replace with real Google OAuth client + credentials. |
-| 6 | In-memory `RateLimiter` | stub | **M2** (moved earlier from M3, §45) | M7 | Auth limits in M2; contribution limits (parking/edit/proposal/review/verification/parked-here) in M3; photo-upload limits (10/day/user + 20/day/IP) in M4. Replace with shared/Redis-backed store if multi-instance. |
+| 6 | In-memory `RateLimiter` | stub | **M2** (moved earlier from M3, §45) | M7 | Auth limits in M2; contribution limits (parking/edit/proposal/review/verification/parked-here) in M3; photo-upload limits (10/day/user + 20/day/IP) in M4; report-creation limits (10/day/user + 20/day/IP) in M5. Replace with shared/Redis-backed store if multi-instance. |
 | 7 | `LocalDiskStorage` (local-filesystem `ObjectStorage`) | dev impl | **M1** (moved earlier from M4) | M7 | Signed, expiring `/media` URLs (S3-presign parity). Replace with S3-compatible storage. |
 | 8 | Hardcoded recommendation weights | improve | M1 | M7 | Make configurable in application code (§34). |
 | 9 | Hardcoded freshness thresholds (review-side) | improve | M3 | M7 | Parking-side thresholds already configurable via `FreshnessConfig` (M1); the review-side thresholds are now exercised by M3's confidence rule (`Verified`/`RecentlyVerified`/`Stale`). |
@@ -304,3 +306,4 @@ Bookkeeping for anything temporary, mocked, or knowingly incomplete. **Each entr
 | 16 | `OfflineTimezoneResolver` (bundled polygon data) | improve/dev | M3 | M7 | Real offline coordinate→IANA resolver replacing M1's static Curitiba mapping; re-evaluate against a provider reverse-timezone, keep as fallback. |
 | 17 | Confidence-state thresholds + conflict rule hardcoded in domain | improve | M3 | M7 | Make configurable like `FreshnessConfig`; document for tuning (§106). |
 | 18 | Photo upload/processing constants hardcoded (10 MiB, 20 MP, JPEG q85, 400 px thumb, rate-limit defaults) | improve | M4 | M7 | Make size/dimension/quality/limits configurable; document for tuning (§30). |
+| 19 | Moderation constants hardcoded (report description length, report rate-limit defaults 10/day/user + 20/day/IP, proposal/adjust values) | improve | M5 | M7 | Made configurable + documented for tuning, like Ledger #18. |

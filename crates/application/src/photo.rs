@@ -4,6 +4,12 @@
 //! the web layer calls the service for every upload/moderation action. The
 //! verified-email gate (§16), rate limiting (§45), the upload validation rules
 //! and the moderation lifecycle all live here.
+//!
+//! M5 generalizes the service over [`PhotoTarget`] so a single queue serves
+//! both location photos (`PhotoTarget::Parking`) and review photos
+//! (`PhotoTarget::Review`, §38). The `ImageProcessor` / domain constants /
+//! derivative policy are unchanged; only the repository dispatch and the target
+//! type changed (plans/m5-moderation.md §2).
 
 use crate::audit::{AuditEvent, AuditLog};
 use crate::auth::Clock;
@@ -82,24 +88,85 @@ pub struct ProcessedImage {
     pub content_type: &'static str,
 }
 
+/// The kind of photo: attached to a parking location or to a review (§38).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PhotoKind {
+    Parking,
+    Review,
+}
+
+impl PhotoKind {
+    pub fn as_code(self) -> &'static str {
+        match self {
+            PhotoKind::Parking => "parking",
+            PhotoKind::Review => "review",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "parking" => Some(PhotoKind::Parking),
+            "review" => Some(PhotoKind::Review),
+            _ => None,
+        }
+    }
+
+    /// The table this kind's rows live in (dispatch helper for repositories).
+    pub fn table(self) -> &'static str {
+        match self {
+            PhotoKind::Parking => "parking_photo",
+            PhotoKind::Review => "review_photo",
+        }
+    }
+}
+
+/// Which photo a target is: the parent row id (a parking `location_id` or a
+/// `review_id`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PhotoTarget {
+    Parking(i64),
+    Review(i64),
+}
+
+impl PhotoTarget {
+    pub fn kind(self) -> PhotoKind {
+        match self {
+            PhotoTarget::Parking(_) => PhotoKind::Parking,
+            PhotoTarget::Review(_) => PhotoKind::Review,
+        }
+    }
+
+    /// The parent row id (location_id or review_id).
+    pub fn parent_id(self) -> i64 {
+        match self {
+            PhotoTarget::Parking(id) => id,
+            PhotoTarget::Review(id) => id,
+        }
+    }
+}
+
 /// Insert a newly-uploaded photo in `PENDING_REVIEW`. `thumbnail_key`,
 /// dimensions and `processed_at` are filled by [`PhotoService`] once the
 /// derivative objects are written (the keys depend on the generated id).
 #[derive(Debug, Clone)]
 pub struct NewPendingPhoto {
-    pub location_id: i64,
+    pub target: PhotoTarget,
     pub uploader_id: UserId,
     pub content_type: String,
     pub alt: Option<String>,
 }
 
-/// A photo in the moderator queue (M2 screen), oldest first. `uploader_id` is
-/// never rendered publicly — the queue only ever shows "Contributor #id".
+/// A photo in the moderator queue (M2 screen), oldest first, across both photo
+/// kinds. `uploader_id` is never rendered publicly — the queue only ever shows
+/// "Contributor #id".
 #[derive(Debug, Clone)]
 pub struct PendingPhoto {
     pub id: i64,
-    pub location_id: i64,
-    pub location_name: String,
+    pub kind: PhotoKind,
+    /// Location id for a parking photo; the review's location id for a review photo.
+    pub parent_id: i64,
+    /// The parking location name (both kinds attach to a location).
+    pub parent_name: String,
     pub storage_key: String,
     pub thumbnail_key: Option<String>,
     pub alt: Option<String>,
@@ -113,7 +180,8 @@ pub struct PendingPhoto {
 #[derive(Debug, Clone)]
 pub struct PhotoForModeration {
     pub id: i64,
-    pub location_id: i64,
+    pub kind: PhotoKind,
+    pub parent_id: i64,
     pub state: PhotoModerationState,
     pub storage_key: String,
     pub thumbnail_key: Option<String>,
@@ -132,6 +200,7 @@ pub struct RejectedPhoto {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadedPhoto {
     pub id: i64,
+    pub kind: PhotoKind,
 }
 
 // ---------------------------------------------------------------------------
@@ -151,14 +220,16 @@ pub trait ImageProcessor: Send + Sync {
 
 #[async_trait]
 pub trait PhotoRepository: Send + Sync {
-    /// Insert the photo as `PENDING_REVIEW` and return its id.
+    /// Insert the photo as `PENDING_REVIEW` and return its id (the caller then
+    /// writes derivatives keyed off the generated id).
     async fn insert_pending(&self, p: &NewPendingPhoto) -> Result<i64, PhotoError>;
-    /// Highest `position` currently used by a location's photos.
-    async fn max_position(&self, location_id: i64) -> Result<i32, PhotoError>;
+    /// Highest `position` currently used by a target's photos.
+    async fn max_position(&self, target: PhotoTarget) -> Result<i32, PhotoError>;
     /// Record the processed derivative keys + dimensions once the objects are
     /// stored. `storage_key` is set here (it depends on the generated id).
     async fn mark_processed(
         &self,
+        kind: PhotoKind,
         id: i64,
         storage_key: &str,
         thumbnail_key: &str,
@@ -166,21 +237,22 @@ pub trait PhotoRepository: Send + Sync {
         processed_at: DateTime<Utc>,
     ) -> Result<(), PhotoError>;
     /// Remove a photo row (compensation for a failed storage write).
-    async fn delete(&self, id: i64) -> Result<(), PhotoError>;
+    async fn delete(&self, kind: PhotoKind, id: i64) -> Result<(), PhotoError>;
     /// Flip to `APPROVED` and set `position`/reviewer columns (one transaction).
-    async fn approve(&self, id: i64, moderator: UserId, position: i32) -> Result<(), PhotoError>;
+    async fn approve(&self, kind: PhotoKind, id: i64, moderator: UserId, position: i32) -> Result<(), PhotoError>;
     /// Flip to `REJECTED`, record the reason + reviewer, and return the keys to
     /// delete (one transaction).
     async fn reject(
         &self,
+        kind: PhotoKind,
         id: i64,
         moderator: UserId,
         reason: &str,
     ) -> Result<RejectedPhoto, PhotoError>;
-    /// The full pending queue, oldest first, with the linked location name.
+    /// The full pending queue, oldest first, across both kinds and tables.
     async fn list_pending(&self) -> Result<Vec<PendingPhoto>, PhotoError>;
     /// A single photo's moderation view (state + derivative keys).
-    async fn get_for_moderation(&self, id: i64) -> Result<Option<PhotoForModeration>, PhotoError>;
+    async fn get_for_moderation(&self, kind: PhotoKind, id: i64) -> Result<Option<PhotoForModeration>, PhotoError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -271,6 +343,13 @@ impl PhotoService {
         }
     }
 
+    fn target_type_code(&self, kind: PhotoKind) -> &'static str {
+        match kind {
+            PhotoKind::Parking => "parking_photo",
+            PhotoKind::Review => "review_photo",
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Upload (§30)
     // -----------------------------------------------------------------------
@@ -282,7 +361,7 @@ impl PhotoService {
         &self,
         user: &crate::auth::AuthenticatedUser,
         ip: &str,
-        location_id: i64,
+        target: PhotoTarget,
         bytes: &[u8],
         alt: Option<&str>,
     ) -> Result<UploadedPhoto, PhotoError> {
@@ -306,8 +385,9 @@ impl PhotoService {
         let alt = Self::normalize_alt(alt)?;
         let processed = self.deps.processor.process(bytes).await?;
 
+        let kind = target.kind();
         let new = NewPendingPhoto {
-            location_id,
+            target,
             uploader_id: user.id,
             content_type: processed.content_type.to_string(),
             alt,
@@ -330,7 +410,7 @@ impl PhotoService {
             })
             .await
         {
-            let _ = self.deps.repository.delete(id).await;
+            let _ = self.deps.repository.delete(kind, id).await;
             return Err(PhotoError::Storage(e));
         }
         if let Err(e) = self
@@ -344,64 +424,67 @@ impl PhotoService {
             .await
         {
             let _ = self.deps.storage.delete(&full_key).await;
-            let _ = self.deps.repository.delete(id).await;
+            let _ = self.deps.repository.delete(kind, id).await;
             return Err(PhotoError::Storage(e));
         }
 
         self.deps
             .repository
-            .mark_processed(id, &full_key, &thumb_key, processed.dimensions, self.now())
+            .mark_processed(kind, id, &full_key, &thumb_key, processed.dimensions, self.now())
             .await?;
 
         self.audit(
             Some(user.id),
             "photo.uploaded",
-            "parking_photo",
+            self.target_type_code(kind),
             id.to_string(),
-            serde_json::json!({ "location_id": location_id }),
+            serde_json::json!({ "parent_id": target.parent_id() }),
         )
         .await?;
 
-        Ok(UploadedPhoto { id })
+        Ok(UploadedPhoto { id, kind })
     }
 
     // -----------------------------------------------------------------------
     // Moderation (§44)
     // -----------------------------------------------------------------------
 
-    /// Approve a pending photo: place it at the end of the location's gallery.
+    /// Approve a pending photo: place it at the end of the target's gallery.
     /// Idempotent — approving an already-approved photo is a no-op.
     pub async fn approve_photo(
         &self,
         moderator: &crate::auth::AuthenticatedUser,
+        kind: PhotoKind,
         id: i64,
     ) -> Result<(), PhotoError> {
         self.require_moderator(moderator)?;
         let photo = self
             .deps
             .repository
-            .get_for_moderation(id)
+            .get_for_moderation(kind, id)
             .await?
             .ok_or(PhotoError::NotFound)?;
         match photo.state {
             PhotoModerationState::PendingReview => {}
             PhotoModerationState::Approved => return Ok(()), // idempotent
-            PhotoModerationState::Rejected => return Err(PhotoError::NotPending),
+            PhotoModerationState::Rejected | PhotoModerationState::Hidden => {
+                return Err(PhotoError::NotPending);
+            }
         }
         let position = self
             .deps
             .repository
-            .max_position(photo.location_id)
+            .max_position(PhotoTarget::for_kind(kind, photo.parent_id))
             .await?
             + 1;
         self.deps
             .repository
-            .approve(id, moderator.id, position)
+            .approve(kind, id, moderator.id, position)
             .await?;
         self.audit(
             Some(moderator.id),
             "photo.approved",
-            "parking_photo",
+            self.target_type_code(kind),
             id.to_string(),
             serde_json::json!({ "position": position }),
         )
@@ -414,6 +497,7 @@ impl PhotoService {
     pub async fn reject_photo(
         &self,
         moderator: &crate::auth::AuthenticatedUser,
+        kind: PhotoKind,
         id: i64,
         reason: &str,
     ) -> Result<(), PhotoError> {
@@ -425,18 +509,20 @@ impl PhotoService {
         let photo = self
             .deps
             .repository
-            .get_for_moderation(id)
+            .get_for_moderation(kind, id)
             .await?
             .ok_or(PhotoError::NotFound)?;
         match photo.state {
             PhotoModerationState::PendingReview => {}
             PhotoModerationState::Rejected => return Ok(()), // idempotent
-            PhotoModerationState::Approved => return Err(PhotoError::NotPending),
+            PhotoModerationState::Approved | PhotoModerationState::Hidden => {
+                return Err(PhotoError::NotPending);
+            }
         }
         let rejected = self
             .deps
             .repository
-            .reject(id, moderator.id, reason)
+            .reject(kind, id, moderator.id, reason)
             .await?;
         // Best-effort deletes (a missing object is not an error) during M4 a
         // rejected photo's bytes are gone; leftover in-flight objects are M6.
@@ -447,7 +533,7 @@ impl PhotoService {
         self.audit(
             Some(moderator.id),
             "photo.rejected",
-            "parking_photo",
+            self.target_type_code(kind),
             id.to_string(),
             serde_json::json!({ "reason": reason }),
         )
@@ -455,7 +541,7 @@ impl PhotoService {
         Ok(())
     }
 
-    /// The full pending queue. The web layer resolves presigned URLs.
+    /// The full pending queue (both kinds). The web layer resolves presigned URLs.
     pub async fn list_pending_photos(
         &self,
         moderator: &crate::auth::AuthenticatedUser,
@@ -484,5 +570,16 @@ impl PhotoService {
             ))
             .await?;
         Ok(())
+    }
+}
+
+impl PhotoTarget {
+    /// Rebuild a `PhotoTarget` from a kind + parent id (used by approve/reject
+    /// to compute a target's gallery position).
+    pub fn for_kind(kind: PhotoKind, parent_id: i64) -> PhotoTarget {
+        match kind {
+            PhotoKind::Parking => PhotoTarget::Parking(parent_id),
+            PhotoKind::Review => PhotoTarget::Review(parent_id),
+        }
     }
 }

@@ -11,24 +11,26 @@ use axum::{
     middleware,
 };
 use bikenest_application::{
-    AuthError, AuthService, CheckReadiness, ContributionDeps, ContributionError, ContributionService,
-    EmailProvider, GetParkingDetails, NewParkingLocation, NewVerification, ObjectStorage,
-    ParkingEdit, ParkingPhotoReader, PasswordHasher, PhotoDeps, PhotoError, PhotoService,
-    Readiness, SearchInput, SearchParking, TokenGenerator,
+    AuditFilter, AuthError, AuthService, CheckReadiness, ContributionDeps, ContributionError,
+    ContributionService, EmailProvider, GetParkingDetails, ModerationDeps, ModerationError,
+    ModerationService, NewParkingLocation, NewVerification, ObjectStorage, ParkingEdit,
+    ParkingPhotoReader, PasswordHasher, PhotoDeps, PhotoError, PhotoKind, PhotoService,
+    PhotoTarget, ProposalApplication, Readiness, SearchInput, SearchParking, TokenGenerator,
 };
 use bikenest_domain::{
-    Cost, CurrencyCode, GeoPoint, Money, OpeningHours, ParkingLocation, ParkingType, PricingUnit,
-    ReviewBody, SecurityFeature, SecurityState, StarRating, TimeRange, is_known_attribute_code,
-    is_known_security_code,
+    Cost, CurrencyCode, GeoPoint, Money, ModerationState, OpeningHours, ParkingLocation, ParkingType,
+    PricingUnit, ReportOutcome, ReportState, ReportTargetType, ReviewBody, SecurityFeature,
+    SecurityState, StarRating, TimeRange, is_known_attribute_code, is_known_security_code,
 };
 use bikenest_domain::{ExistenceResult, ProposalKind, Role, UserEmail, UserId};
 use bikenest_infrastructure::probe::SqlxDatabaseProbe;
 use bikenest_infrastructure::{
     Argon2PasswordHasher, Db, FakeGeocoder, FakeOAuthProvider, InMemoryRateLimiter,
     LocalDiskStorage, LocalImageProcessor, OfflineTimezoneResolver, RealTokenGenerator,
-    SqlxAccountRepository, SqlxAuditLog, SqlxContributionHistoryReader, SqlxFavoriteRepository,
-    SqlxParkingContributionRepository, SqlxParkingDetailsReader, SqlxParkingPhotoReader,
-    SqlxParkingSearchReader, SqlxPhotoRepository, SqlxReviewRepository, SqlxSessionStore,
+    SqlxAccountRepository, SqlxAuditLog, SqlxAuditLogReader, SqlxContributionHistoryReader,
+    SqlxFavoriteRepository, SqlxModerationRepository, SqlxParkingContributionRepository,
+    SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader, SqlxPhotoRepository,
+    SqlxReportRepository, SqlxReviewPhotosReader, SqlxReviewRepository, SqlxSessionStore,
     SqlxTokenStore, SqlxVerificationRepository, SystemClock,
 };
 use serde_json::json;
@@ -38,11 +40,12 @@ use crate::auth::{anon_csrf_token, Auth, clear_session_cookie, set_anon_csrf_coo
 use crate::i18n::{Locale, Translator};
 use crate::view::{self, CardVm, ResultsData};
 use crate::{
-    AboutPage, AccountEmailPage, AccountPage, AccountPasswordPage, AdminUsersPage,
-    ContributionsPage, DetailsPage, ErrorPage, FavoritesPage, HomePage, LoginPage,
-    ModerationPhotosPage, PageLayout, ParkingEditPage, ParkingNewPage, PasswordResetNewPage,
-    PasswordResetPage, PhotoVm, RegisterPage, ReviewFormPage, SearchPageVm, SearchResultsVm,
-    VerifyEmailPage,
+    AboutPage, AccountEmailPage, AccountPage, AccountPasswordPage, AdminAuditPage,
+    AdminUserContributionsPage, AdminUsersPage, ContributionsPage, DetailsPage, ErrorPage,
+    FavoritesPage, HomePage, LoginPage, ModerationActionResultVm, ModerationDashboardPage,
+    ModerationPhotosPage, ModerationProposalsPage, ModerationReportsPage, PageLayout,
+    ParkingEditPage, ParkingNewPage, PasswordResetNewPage, PasswordResetPage, PhotoVm,
+    RegisterPage, ReportResultVm, ReviewFormPage, SearchPageVm, SearchResultsVm, VerifyEmailPage,
 };
 
 /// Shared application state wired at startup.
@@ -56,6 +59,7 @@ pub struct AppState {
     pub auth: Arc<AuthService>,
     pub contributions: Arc<ContributionService>,
     pub photo: Arc<PhotoService>,
+    pub moderation: Arc<ModerationService>,
 }
 
 /// Builds the full application router with a real database handle and the
@@ -112,6 +116,7 @@ pub fn app_router_with(
         verifications: Box::new(SqlxVerificationRepository::new(db.clone())),
         favorites: Box::new(SqlxFavoriteRepository::new(db.clone())),
         history: Box::new(SqlxContributionHistoryReader::new(db.clone())),
+        review_photos: Box::new(SqlxReviewPhotosReader::new(db.clone())),
         rate_limiter: Box::new(InMemoryRateLimiter::new()), // Ledger #6
         audit: Box::new(SqlxAuditLog::new(db.clone())),
         clock: Box::new(SystemClock),
@@ -126,6 +131,14 @@ pub fn app_router_with(
         audit: Box::new(SqlxAuditLog::new(db.clone())),
         clock: Box::new(SystemClock),
     });
+    let moderation_service = ModerationService::new(ModerationDeps {
+        reports: Box::new(SqlxReportRepository::new(db.clone())),
+        moderation: Box::new(SqlxModerationRepository::new(db.clone())),
+        audit: Box::new(SqlxAuditLog::new(db.clone())),
+        audit_reader: Box::new(SqlxAuditLogReader::new(db.clone())),
+        history: Box::new(SqlxContributionHistoryReader::new(db.clone())),
+        rate_limiter: Box::new(InMemoryRateLimiter::new()), // Ledger #6
+    });
     let state = AppState {
         readiness: Arc::new(CheckReadiness::new(probe)),
         search: Arc::new(search_uc),
@@ -135,6 +148,7 @@ pub fn app_router_with(
         auth: Arc::new(auth_service),
         contributions: Arc::new(contribution_service),
         photo: Arc::new(photo_service),
+        moderation: Arc::new(moderation_service),
     };
     Router::new()
         .route("/", get(home))
@@ -178,8 +192,28 @@ pub fn app_router_with(
                 .layer(DefaultBodyLimit::max(bikenest_domain::MAX_PHOTO_BYTES + 64 * 1024)),
         )
         .route("/moderation/photos", get(moderation_photos))
-        .route("/moderation/photos/{id}/approve", post(moderation_photo_approve))
-        .route("/moderation/photos/{id}/reject", post(moderation_photo_reject))
+        .route("/moderation/photos/{kind}/{id}/approve", post(moderation_photo_approve))
+        .route("/moderation/photos/{kind}/{id}/reject", post(moderation_photo_reject))
+        .route("/moderation/photos/{kind}/{id}/hide", post(moderation_photo_hide))
+        .route("/moderation/photos/{kind}/{id}/restore", post(moderation_photo_restore))
+        // --- M5 reports + moderation actions + audit viewer ---
+        .route("/reports", post(report_submit))
+        .route("/moderation", get(moderation_dashboard))
+        .route("/moderation/reports", get(moderation_reports))
+        .route("/moderation/reports/{id}/claim", post(moderation_report_claim))
+        .route("/moderation/reports/{id}/resolve", post(moderation_report_resolve))
+        .route("/moderation/reports/{id}/dismiss", post(moderation_report_dismiss))
+        .route("/moderation/proposals", get(moderation_proposals))
+        .route("/moderation/proposals/{id}/approve", post(moderation_proposal_approve))
+        .route("/moderation/proposals/{id}/reject", post(moderation_proposal_reject))
+        .route("/moderation/reviews/{id}/hide", post(moderation_review_hide))
+        .route("/moderation/reviews/{id}/restore", post(moderation_review_restore))
+        .route("/moderation/parking/{id}/invalidate", post(moderation_parking_invalidate))
+        .route("/moderation/parking/{id}/restore", post(moderation_parking_restore))
+        .route("/admin/users/{id}/suspend", post(admin_user_suspend))
+        .route("/admin/users/{id}/restore", post(admin_user_restore))
+        .route("/admin/users/{id}/contributions", get(admin_user_contributions))
+        .route("/admin/audit", get(admin_audit))
         .nest_service(
             "/static",
             tower_http::services::ServeDir::new(concat!(
@@ -449,6 +483,16 @@ async fn parking_details(
     let tr = Translator::new(locale);
     match state.details.execute(id).await {
         Ok(Some(view)) => {
+            // §25/§46: public P3 returns 404 for a non-ACTIVE location (removed/
+            // invalid/flagged). Moderators/admins still see the page with a banner.
+            let is_moderator = auth
+                .user
+                .as_ref()
+                .map(|u| u.has_role(Role::Moderator) || u.has_role(Role::Admin))
+                .unwrap_or(false);
+            if view.location.moderation_state() != ModerationState::Active && !is_moderator {
+                return not_found_page(tr);
+            }
             // Approved photos (P3 gallery). A read failure degrades to no
             // gallery rather than failing the page.
             let gallery = match state.photos.photos(id).await {
@@ -493,6 +537,8 @@ async fn parking_details(
                 community,
                 verified,
                 auth.authenticated(),
+                is_moderator,
+                &*state.storage,
             )
             .notice(notice);
             render(page, StatusCode::OK)
@@ -604,7 +650,8 @@ async fn upload_photo(
         );
     };
 
-    match state.photo.upload_photo(user, &ip, id, &bytes, alt.as_deref()).await {
+    let target = PhotoTarget::Parking(id);
+    match state.photo.upload_photo(user, &ip, target, &bytes, alt.as_deref()).await {
         Ok(_) => photo_upload_result(tr, "success", tr.t("photo.upload.success"), StatusCode::OK),
         Err(e) => {
             let (status, message) = photo_error(tr, &e);
@@ -646,8 +693,302 @@ async fn moderation_photos(
     )
 }
 
-/// POST /moderation/photos/{id}/approve (HTMX).
+/// Parse a `{kind}` path segment into a [`PhotoKind`].
+fn parse_photo_kind(s: &str) -> Option<PhotoKind> {
+    PhotoKind::from_code(s)
+}
+
+/// POST /moderation/photos/{kind}/{id}/approve (HTMX).
 async fn moderation_photo_approve(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path((kind, id)): Path<(String, i64)>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let Some(kind) = parse_photo_kind(&kind) else {
+        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+    };
+    match state.photo.approve_photo(user, kind, id).await {
+        Ok(()) => photo_upload_result(tr, "success", tr.t("moderation.approved"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = photo_error(tr, &e);
+            photo_upload_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// POST /moderation/photos/{kind}/{id}/reject (HTMX).
+async fn moderation_photo_reject(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path((kind, id)): Path<(String, i64)>,
+    Form(form): Form<RejectReasonForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let Some(kind) = parse_photo_kind(&kind) else {
+        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+    };
+    match state.photo.reject_photo(user, kind, id, &form.reason).await {
+        Ok(()) => photo_upload_result(tr, "success", tr.t("moderation.rejected"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = photo_error(tr, &e);
+            photo_upload_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// POST /moderation/photos/{kind}/{id}/hide (HTMX) — flips an approved photo to `HIDDEN` (§44).
+async fn moderation_photo_hide(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path((kind, id)): Path<(String, i64)>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let Some(kind) = parse_photo_kind(&kind) else {
+        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+    };
+    match state.moderation.hide_photo(user, kind, id).await {
+        Ok(()) => moderation_result(tr, "success", tr.t("moderation.photo_hidden"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = moderation_error_message(tr, &e);
+            moderation_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// POST /moderation/photos/{kind}/{id}/restore (HTMX) — flips a hidden photo back to `APPROVED` (§44).
+async fn moderation_photo_restore(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path((kind, id)): Path<(String, i64)>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let Some(kind) = parse_photo_kind(&kind) else {
+        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+    };
+    match state.moderation.restore_photo(user, kind, id).await {
+        Ok(()) => moderation_result(tr, "success", tr.t("moderation.photo_restored"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = moderation_error_message(tr, &e);
+            moderation_result(tr, "error", &message, status)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M5 moderation & reporting handlers
+// ---------------------------------------------------------------------------
+
+/// Render a swap-safe moderation-action toast.
+fn moderation_result(tr: Translator, state: &'static str, message: &str, status: StatusCode) -> Response {
+    render(
+        ModerationActionResultVm {
+            tr,
+            state,
+            message: message.to_string(),
+        },
+        status,
+    )
+}
+
+/// Map a [`ModerationError`] to a non-leaking status + friendly message.
+fn moderation_error_message(tr: Translator, e: &ModerationError) -> (StatusCode, String) {
+    use ModerationError::*;
+    let (status, key) = match e {
+        NotAuthorized => (StatusCode::FORBIDDEN, "moderation.unauthorized"),
+        SelfResolve => (StatusCode::CONFLICT, "moderation.self_resolve"),
+        NotFound => (StatusCode::NOT_FOUND, "moderation.not_found"),
+        TargetNotFound => (StatusCode::NOT_FOUND, "moderation.target_not_found"),
+        InvalidState => (StatusCode::CONFLICT, "moderation.invalid_state"),
+        InvalidReason => (StatusCode::BAD_REQUEST, "report.error.invalid_reason"),
+        InvalidField(_) => (StatusCode::BAD_REQUEST, "moderation.invalid"),
+        RateLimited => (StatusCode::TOO_MANY_REQUESTS, "report.error.rate_limited"),
+        Internal => (StatusCode::INTERNAL_SERVER_ERROR, "moderation.error.internal"),
+    };
+    (status, tr.t(key).to_string())
+}
+
+fn report_result(tr: Translator, state: &'static str, message: &str, status: StatusCode) -> Response {
+    render(
+        ReportResultVm {
+            tr,
+            state,
+            message: message.to_string(),
+        },
+        status,
+    )
+}
+
+/// POST /reports — a user reports content (authenticated; not necessarily verified).
+#[derive(Debug, Default, serde::Deserialize)]
+struct ReportForm {
+    #[serde(default)]
+    target_type: String,
+    #[serde(default)]
+    target_id: i64,
+    #[serde(default)]
+    reason: String,
+    #[serde(default)]
+    description: String,
+}
+
+async fn report_submit(
+    State(state): State<AppState>,
+    locale: Locale,
+    headers: HeaderMap,
+    auth: Auth,
+    Form(form): Form<ReportForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    if form.target_id <= 0 {
+        return report_result(tr, "error", tr.t("moderation.invalid"), StatusCode::BAD_REQUEST);
+    }
+    let Ok(target_type) = ReportTargetType::from_code(&form.target_type) else {
+        return report_result(tr, "error", tr.t("report.error.invalid_reason"), StatusCode::BAD_REQUEST);
+    };
+    let ip = client_ip(&headers);
+    let description = if form.description.trim().is_empty() {
+        None
+    } else {
+        Some(form.description.clone())
+    };
+    match state
+        .moderation
+        .submit_report(user, &ip, target_type, form.target_id, &form.reason, description)
+        .await
+    {
+        Ok(_) => report_result(tr, "success", tr.t("report.submitted"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = moderation_error_message(tr, &e);
+            report_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// GET /moderation — the M1 moderation dashboard (counts + links).
+async fn moderation_dashboard(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let pending_photos = state
+        .photo
+        .list_pending_photos(user)
+        .await
+        .map(|p| p.len())
+        .unwrap_or(0);
+    let open_reports = state
+        .moderation
+        .list_reports(user, Some(ReportState::Open))
+        .await
+        .map(|r| r.len())
+        .unwrap_or(0);
+    let under_review_reports = state
+        .moderation
+        .list_reports(user, Some(ReportState::UnderReview))
+        .await
+        .map(|r| r.len())
+        .unwrap_or(0);
+    let pending_proposals = state
+        .moderation
+        .list_pending_proposals(user)
+        .await
+        .map(|p| p.len())
+        .unwrap_or(0);
+    let is_admin = user.has_role(Role::Admin);
+    render(
+        ModerationDashboardPage {
+            layout: PageLayout::with_csrf(
+                tr.t("moderation.dashboard.title").to_string(),
+                "moderation",
+                auth.csrf_value(),
+            ),
+            tr,
+            pending_photos,
+            open_reports,
+            under_review_reports,
+            pending_proposals,
+            is_admin,
+        },
+        StatusCode::OK,
+    )
+}
+
+/// GET /moderation/reports — the M3 reports queue (optional `?state=` filter).
+#[derive(Debug, Default, serde::Deserialize)]
+struct ReportFilterQuery {
+    #[serde(default)]
+    state: String,
+}
+
+async fn moderation_reports(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Query(q): Query<ReportFilterQuery>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let state_filter = if q.state.is_empty() {
+        None
+    } else {
+        ReportState::from_code(&q.state).ok()
+    };
+    let items = state
+        .moderation
+        .list_reports(user, state_filter)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| view::report_vm(tr, &r))
+        .collect();
+    render(
+        ModerationReportsPage {
+            layout: PageLayout::with_csrf(
+                tr.t("moderation.reports.title").to_string(),
+                "moderation",
+                auth.csrf_value(),
+            ),
+            tr,
+            state_filter: q.state,
+            items,
+            viewer_id: user.id.0,
+            notice: None,
+        },
+        StatusCode::OK,
+    )
+}
+
+/// POST /moderation/reports/{id}/claim — claim an open report.
+async fn moderation_report_claim(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
@@ -658,17 +999,203 @@ async fn moderation_photo_approve(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    match state.photo.approve_photo(user, id).await {
-        Ok(()) => photo_upload_result(tr, "success", tr.t("moderation.approved"), StatusCode::OK),
+    match state.moderation.claim_report(user, id).await {
+        Ok(()) => moderation_result(tr, "success", tr.t("report.claimed"), StatusCode::OK),
         Err(e) => {
-            let (status, message) = photo_error(tr, &e);
-            photo_upload_result(tr, "error", &message, status)
+            let (status, message) = moderation_error_message(tr, &e);
+            moderation_result(tr, "error", &message, status)
         }
     }
 }
 
-/// POST /moderation/photos/{id}/reject (HTMX).
-async fn moderation_photo_reject(
+#[derive(Debug, Default, serde::Deserialize)]
+struct ResolutionForm {
+    #[serde(default)]
+    note: String,
+}
+
+/// POST /moderation/reports/{id}/resolve — resolve a claimed report (HTMX).
+async fn moderation_report_resolve(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+    Form(form): Form<ResolutionForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    match state.moderation.resolve_report(user, id, ReportOutcome::Resolved, &form.note).await {
+        Ok(()) => moderation_result(tr, "success", tr.t("report.resolved_msg"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = moderation_error_message(tr, &e);
+            moderation_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// POST /moderation/reports/{id}/dismiss — dismiss a claimed report (HTMX).
+async fn moderation_report_dismiss(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+    Form(form): Form<ResolutionForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    match state.moderation.resolve_report(user, id, ReportOutcome::Dismissed, &form.note).await {
+        Ok(()) => moderation_result(tr, "success", tr.t("report.dismissed_msg"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = moderation_error_message(tr, &e);
+            moderation_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// GET /moderation/proposals — the M4 proposal review queue.
+async fn moderation_proposals(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let items = state
+        .moderation
+        .list_pending_proposals(user)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| view::proposal_vm(tr, &p))
+        .collect();
+    render(
+        ModerationProposalsPage {
+            layout: PageLayout::with_csrf(
+                tr.t("moderation.proposals.title").to_string(),
+                "moderation",
+                auth.csrf_value(),
+            ),
+            tr,
+            items,
+            notice: None,
+        },
+        StatusCode::OK,
+    )
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ApproveProposalForm {
+    #[serde(default)]
+    lat: String,
+    #[serde(default)]
+    lon: String,
+    #[serde(default)]
+    timezone: String,
+    #[serde(default)]
+    existence: String,
+}
+
+/// Build the application to apply. When the approve form carries adjusted values
+/// ("modify"), they win; otherwise the proposal's own `proposed` is used.
+fn proposal_application(
+    proposal: &bikenest_application::Proposal,
+    form: &ApproveProposalForm,
+) -> Result<ProposalApplication, ModerationError> {
+    match proposal.kind {
+        ProposalKind::MoveLocation => {
+            let lat = if form.lat.trim().is_empty() {
+                proposal
+                    .proposed
+                    .get("lat")
+                    .and_then(|v| v.as_f64())
+                    .ok_or(ModerationError::InvalidField("lat is required".to_string()))?
+            } else {
+                form.lat.trim().parse::<f64>().map_err(|_| ModerationError::InvalidField("lat is required".to_string()))?
+            };
+            let lon = if form.lon.trim().is_empty() {
+                proposal
+                    .proposed
+                    .get("lon")
+                    .and_then(|v| v.as_f64())
+                    .ok_or(ModerationError::InvalidField("lon is required".to_string()))?
+            } else {
+                form.lon.trim().parse::<f64>().map_err(|_| ModerationError::InvalidField("lon is required".to_string()))?
+            };
+            let tz_raw = if form.timezone.trim().is_empty() {
+                proposal
+                    .proposed
+                    .get("timezone")
+                    .and_then(|v| v.as_str())
+                    .ok_or(ModerationError::InvalidField("timezone is required".to_string()))?
+            } else {
+                form.timezone.as_str()
+            };
+            let timezone = tz_raw
+                .parse()
+                .map_err(|_| ModerationError::InvalidField("invalid timezone".to_string()))?;
+            Ok(ProposalApplication::MoveLocation { lat, lon, timezone })
+        }
+        ProposalKind::ChangeExistence => {
+            let exists = match form.existence.as_str() {
+                "removed" => false,
+                "exists" => true,
+                _ => {
+                    let raw = proposal
+                        .proposed
+                        .get("existence")
+                        .and_then(|v| v.as_str())
+                        .ok_or(ModerationError::InvalidField("existence is required".to_string()))?;
+                    if raw == "removed" { false } else { true }
+                }
+            };
+            Ok(ProposalApplication::ChangeExistence { exists })
+        }
+    }
+}
+
+/// POST /moderation/proposals/{id}/approve — approve a proposal (optionally adjusted).
+async fn moderation_proposal_approve(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+    Form(form): Form<ApproveProposalForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let proposal = match state.moderation.get_proposal(user, id).await {
+        Ok(Some(p)) => p,
+        _ => {
+            let (status, message) = moderation_error_message(tr, &ModerationError::NotFound);
+            return moderation_result(tr, "error", &message, status);
+        }
+    };
+    let applied = match proposal_application(&proposal, &form) {
+        Ok(a) => a,
+        Err(e) => {
+            let (status, message) = moderation_error_message(tr, &e);
+            return moderation_result(tr, "error", &message, status);
+        }
+    };
+    match state.moderation.approve_proposal(user, id, applied).await {
+        Ok(()) => moderation_result(tr, "success", tr.t("proposal.approved"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = moderation_error_message(tr, &e);
+            moderation_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// POST /moderation/proposals/{id}/reject — reject with a reason.
+async fn moderation_proposal_reject(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
@@ -680,13 +1207,247 @@ async fn moderation_photo_reject(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    match state.photo.reject_photo(user, id, &form.reason).await {
-        Ok(()) => photo_upload_result(tr, "success", tr.t("moderation.rejected"), StatusCode::OK),
+    match state.moderation.reject_proposal(user, id, &form.reason).await {
+        Ok(()) => moderation_result(tr, "success", tr.t("proposal.rejected"), StatusCode::OK),
         Err(e) => {
-            let (status, message) = photo_error(tr, &e);
-            photo_upload_result(tr, "error", &message, status)
+            let (status, message) = moderation_error_message(tr, &e);
+            moderation_result(tr, "error", &message, status)
         }
     }
+}
+
+/// POST /moderation/reviews/{id}/hide — hide a review.
+async fn moderation_review_hide(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    match state.moderation.hide_review(user, id).await {
+        Ok(()) => moderation_result(tr, "success", tr.t("review.hidden"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = moderation_error_message(tr, &e);
+            moderation_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// POST /moderation/reviews/{id}/restore — restore a hidden review.
+async fn moderation_review_restore(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    match state.moderation.restore_review(user, id).await {
+        Ok(()) => moderation_result(tr, "success", tr.t("review.restored"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = moderation_error_message(tr, &e);
+            moderation_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// POST /moderation/parking/{id}/invalidate — invalidate a location.
+async fn moderation_parking_invalidate(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    match state.moderation.invalidate_parking(user, id).await {
+        Ok(()) => moderation_result(tr, "success", tr.t("parking.invalidated"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = moderation_error_message(tr, &e);
+            moderation_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// POST /moderation/parking/{id}/restore — restore an invalid/removed location.
+async fn moderation_parking_restore(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    match state.moderation.restore_parking(user, id).await {
+        Ok(()) => moderation_result(tr, "success", tr.t("parking.restored"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = moderation_error_message(tr, &e);
+            moderation_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// POST /admin/users/{id}/suspend — ADMIN-only; revokes sessions + audits.
+async fn admin_user_suspend(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let actor = match auth.require_role(Role::Admin) {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+    match state.auth.suspend_user(actor, UserId(id)).await {
+        Ok(()) => axum::response::Redirect::to("/admin/users?suspended=1").into_response(),
+        Err(_) => axum::response::Redirect::to("/admin/users?error=1").into_response(),
+    }
+}
+
+/// POST /admin/users/{id}/restore — ADMIN-only; restores to Active + audits.
+async fn admin_user_restore(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let actor = match auth.require_role(Role::Admin) {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+    match state.auth.restore_user(actor, UserId(id)).await {
+        Ok(()) => axum::response::Redirect::to("/admin/users?restored=1").into_response(),
+        Err(_) => axum::response::Redirect::to("/admin/users?error=1").into_response(),
+    }
+}
+
+/// GET /admin/users/{id}/contributions — a target user's C5 feed (MODERATOR/ADMIN).
+async fn admin_user_contributions(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_moderator() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let target = UserId(id);
+    let email = state
+        .auth
+        .list_users()
+        .await
+        .ok()
+        .and_then(|users| users.into_iter().find(|u| u.id == target))
+        .map(|u| u.email.to_string())
+        .unwrap_or_else(|| format!("#{id}"));
+    let items = state
+        .moderation
+        .user_contribution_history(user, target)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|i| view::contribution_vm(tr, &i))
+        .collect();
+    render(
+        AdminUserContributionsPage {
+            layout: PageLayout::with_csrf(
+                tr.t("admin.contrib.title").to_string(),
+                "admin",
+                auth.csrf_value(),
+            ),
+            tr,
+            user_id: id,
+            email,
+            items,
+        },
+        StatusCode::OK,
+    )
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct AuditFilterQuery {
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    target_type: String,
+    #[serde(default)]
+    actor: i64,
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    to: String,
+    #[serde(default)]
+    cursor: i64,
+}
+
+/// GET /admin/audit — the ADMIN-only audit-log viewer.
+async fn admin_audit(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Query(q): Query<AuditFilterQuery>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let admin = match auth.require_role(Role::Admin) {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+    let filter = AuditFilter {
+        actor_id: (q.actor > 0).then(|| UserId(q.actor)),
+        action: (!q.action.is_empty()).then(|| q.action.clone()),
+        target_type: (!q.target_type.is_empty()).then(|| q.target_type.clone()),
+        from: parse_datetime(&q.from),
+        to: parse_datetime(&q.to),
+        cursor: (q.cursor > 0).then_some(q.cursor),
+        limit: 50,
+    };
+    let page = state
+        .moderation
+        .list_audit_events(admin, filter)
+        .await
+        .map(|p| (p.items, p.next_cursor))
+        .unwrap_or_default();
+    let items = page.0.into_iter().map(|e| view::audit_row_vm(tr, &e)).collect();
+    render(
+        AdminAuditPage {
+            layout: PageLayout::with_csrf(
+                tr.t("admin.audit.title").to_string(),
+                "admin",
+                auth.csrf_value(),
+            ),
+            tr,
+            items,
+            next_cursor: page.1,
+            action: q.action.clone(),
+            target_type: q.target_type.clone(),
+            actor: q.actor.to_string(),
+            from: q.from.clone(),
+            to: q.to.clone(),
+            notice: None,
+        },
+        StatusCode::OK,
+    )
+}
+
+fn parse_datetime(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
 /// A tiny rejected-photo form: the moderator's reason.
@@ -1373,6 +2134,10 @@ struct AdminNotices {
     #[serde(default)]
     revoked: Option<String>,
     #[serde(default)]
+    suspended: Option<String>,
+    #[serde(default)]
+    restored: Option<String>,
+    #[serde(default)]
     error: Option<String>,
 }
 
@@ -1400,6 +2165,10 @@ async fn admin_users(
                 Some(tr.t("admin.granted").to_string())
             } else if q.revoked.is_some() {
                 Some(tr.t("admin.revoked").to_string())
+            } else if q.suspended.is_some() {
+                Some(tr.t("admin.suspended").to_string())
+            } else if q.restored.is_some() {
+                Some(tr.t("admin.restored").to_string())
             } else {
                 None
             },
@@ -2107,31 +2876,83 @@ async fn review_page(
 async fn review_post(
     State(state): State<AppState>,
     locale: Locale,
+    headers: HeaderMap,
     auth: Auth,
     Path(id): Path<i64>,
-    Form(form): Form<ReviewForm>,
+    mut multipart: Multipart,
 ) -> Response {
     let tr = Translator::new(locale);
     let user = match auth.require_verified() {
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    let rating = match StarRating::new(form.rating) {
+
+    // Multipart form (D3 now carries 0..N photos, §38). Gather text fields, then
+    // any uploaded `photo` files. The text publishes immediately; photos hold PENDING_REVIEW.
+    let mut rating_u8 = 0u8;
+    let mut body = String::new();
+    let mut photos: Vec<Vec<u8>> = Vec::new();
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(_) => {
+                return render_review_error(tr, auth, id, ReviewForm { rating: rating_u8, body }, tr.t("review.error.generic").to_string());
+            }
+        };
+        match field.name().unwrap_or("") {
+            "rating" => {
+                if let Ok(text) = field.text().await {
+                    rating_u8 = text.trim().parse().unwrap_or(0);
+                }
+            }
+            "body" => {
+                if let Ok(text) = field.text().await {
+                    body = text;
+                }
+            }
+            "photo" => {
+                if let Ok(bytes) = field.bytes().await {
+                    photos.push(bytes.to_vec());
+                }
+            }
+            _ => {
+                let _ = field.bytes().await;
+            }
+        }
+    }
+
+    let rating = match StarRating::new(rating_u8) {
         Ok(r) => r,
         Err(_) => {
-            return render_review_error(tr, auth, id, form, tr.t("review.error.invalid").to_string());
+            return render_review_error(tr, auth, id, ReviewForm { rating: rating_u8, body }, tr.t("review.error.invalid").to_string());
         }
     };
-    let body = match ReviewBody::new(&form.body) {
+    let review_body = match ReviewBody::new(&body) {
         Ok(b) => b,
         Err(_) => {
-            return render_review_error(tr, auth, id, form, tr.t("review.error.length").to_string());
+            return render_review_error(tr, auth, id, ReviewForm { rating: rating_u8, body }, tr.t("review.error.length").to_string());
         }
     };
-    match state.contributions.upsert_review(user, id, rating, &body).await {
-        Ok(()) => axum::response::Redirect::to(&format!("/parking/{id}?reviewed=1")).into_response(),
-        Err(ContributionError::RateLimited) => render_review_error(tr, auth, id, form, tr.t("contribution.error.rate_limited").to_string()),
-        Err(_) => render_review_error(tr, auth, id, form, tr.t("review.error.generic").to_string()),
+    match state.contributions.upsert_review(user, id, rating, &review_body).await {
+        Ok(()) => {
+            // Attach any uploaded photos to the (just-upserted) review, held PENDING_REVIEW.
+            if !photos.is_empty()
+                && let Ok(Some(own)) = state.contributions.community_details(id, Some(user.id)).await
+                && let Some(review) = own.own_review
+            {
+                let ip = client_ip(&headers);
+                for p in photos {
+                    let _ = state
+                        .photo
+                        .upload_photo(user, &ip, PhotoTarget::Review(review.id), &p, None)
+                        .await;
+                }
+            }
+            axum::response::Redirect::to(&format!("/parking/{id}?reviewed=1")).into_response()
+        }
+        Err(ContributionError::RateLimited) => render_review_error(tr, auth, id, ReviewForm { rating: rating_u8, body }, tr.t("contribution.error.rate_limited").to_string()),
+        Err(_) => render_review_error(tr, auth, id, ReviewForm { rating: rating_u8, body }, tr.t("review.error.generic").to_string()),
     }
 }
 

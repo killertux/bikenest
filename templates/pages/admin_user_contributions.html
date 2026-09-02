@@ -1,0 +1,27 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<section class="mx-auto max-w-shell px-4 py-12 lg:px-8">
+  <p class="text-sm text-muted"><a href="/admin/users" class="text-accent-strong hover:underline">&larr; {{ tr.t("admin.users_title") }}</a></p>
+  <h1 class="mt-2 font-display text-2xl font-bold tracking-tight">{{ tr.t("admin.contrib.title") }} — {{ email }}</h1>
+  <p class="mt-1 text-sm text-muted">{{ tr.t("admin.contrib.subtitle") }}</p>
+
+  {% if items.is_empty() %}
+    <div class="mt-8 rounded-2xl border border-border p-8 text-center text-sm text-muted">{{ tr.t("contrib.empty") }}</div>
+  {% else %}
+  <ul class="mt-6 space-y-3">
+    {% for i in items %}
+    <li class="rounded-2xl border border-border px-5 py-3">
+      <div class="flex items-center justify-between">
+        <span class="text-sm font-medium">{{ i.target }}</span>
+        <span class="text-xs text-muted">{{ i.at_label }}</span>
+      </div>
+      <div class="mt-1 flex gap-2 text-xs">
+        <span class="rounded-full bg-accent/10 px-2 py-0.5 text-accent-strong">{{ i.kind_label }}</span>
+        <span class="rounded-full bg-bg px-2 py-0.5 text-muted">{{ i.state_label }}</span>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endblock %}

@@ -9,6 +9,7 @@ pub mod auth;
 pub mod community;
 pub mod freshness;
 pub mod hours;
+pub mod moderation;
 pub mod parking;
 pub mod photo;
 
@@ -20,6 +21,10 @@ pub use community::{
     AttributeResult, ChangeKind, Confidence, ExistenceResult, ExistenceSignal, ProposalKind,
     ProposalStatus, ReviewBody, RevisionSummary, StarRating, VerificationKind, confidence,
     is_known_attribute_code,
+};
+pub use moderation::{
+    ReportDescription, ReportOutcome, ReportState, ReportTargetType, REPORT_REASONS,
+    is_known_report_reason, reason_allowed_for,
 };
 pub use freshness::{categorize, FreshnessCategory, FreshnessThresholds, DEFAULT_THRESHOLDS};
 pub use hours::{OpeningHours, OpenStatus, TimeRange, hms};

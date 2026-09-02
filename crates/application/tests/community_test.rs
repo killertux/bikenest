@@ -303,6 +303,14 @@ impl ContributionHistoryReader for FakeHistory {
     }
 }
 
+struct FakeReviewPhotos;
+#[async_trait]
+impl bikenest_application::ReviewPhotosReader for FakeReviewPhotos {
+    async fn photos(&self, _id: i64) -> Result<Vec<bikenest_application::StoredPhoto>, bikenest_application::ReaderError> {
+        Ok(vec![])
+    }
+}
+
 struct FakeDetails(Option<ParkingLocation>);
 #[async_trait]
 impl ParkingDetailsReader for FakeDetails {
@@ -336,6 +344,7 @@ fn service(
         verifications: Box::new(verification),
         favorites: Box::new(favorite),
         history: Box::new(FakeHistory),
+        review_photos: Box::new(FakeReviewPhotos),
         rate_limiter: Box::new(AllowRateLimiter),
         audit: Box::new(RecordingAudit { events: Mutex::new(vec![]) }),
         clock: Box::new(FakeClock(clock)),
@@ -394,6 +403,7 @@ async fn add_location_is_rate_limited() {
         verifications: Box::new(FakeVerificationRepo::new()),
         favorites: Box::new(FakeFavoriteRepo { favorited: false }),
         history: Box::new(FakeHistory),
+        review_photos: Box::new(FakeReviewPhotos),
         rate_limiter: Box::new(DenyRateLimiter),
         audit: Box::new(RecordingAudit { events: Mutex::new(vec![]) }),
         clock: Box::new(FakeClock(chrono::Utc::now())),

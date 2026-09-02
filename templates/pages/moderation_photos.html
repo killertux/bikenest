@@ -28,7 +28,10 @@
           <div class="min-w-0">
             <div class="flex items-start justify-between gap-3">
               <div>
-                <a href="/parking/{{ p.location_id }}" class="font-display text-lg font-semibold hover:text-accent-strong">{{ p.location_name }}</a>
+                <div class="flex items-center gap-2">
+                  <a href="/parking/{{ p.location_id }}" class="font-display text-lg font-semibold hover:text-accent-strong">{{ p.location_name }}</a>
+                  <span class="rounded-full bg-bg px-2 py-0.5 text-xs text-muted">{{ p.kind }}</span>
+                </div>
                 <p class="mt-0.5 text-sm text-muted">{{ tr.t("moderation.locations") }} <span class="text-fg">#{{ p.location_id }}</span></p>
               </div>
               <span class="shrink-0 text-xs text-muted">{{ tr.t("moderation.uploaded") }} {{ p.uploaded_label }}</span>
@@ -53,14 +56,14 @@
             <p class="mt-3 text-sm text-muted">{{ p.alt }}</p>
 
             <div class="mt-4 flex flex-wrap items-center gap-3">
-              <form action="/moderation/photos/{{ p.id }}/approve" method="post"
-                    hx-post="/moderation/photos/{{ p.id }}/approve"
+              <form action="/moderation/photos/{{ p.kind }}/{{ p.id }}/approve" method="post"
+                    hx-post="/moderation/photos/{{ p.kind }}/{{ p.id }}/approve"
                     hx-target="#moderation-feedback" hx-swap="innerHTML" class="contents">
                 <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
                 <button type="submit" class="rounded-lg bg-fresh/10 px-4 py-2 text-sm font-medium text-fresh hover:bg-fresh/20">{{ tr.t("moderation.approve") }}</button>
               </form>
-              <form action="/moderation/photos/{{ p.id }}/reject" method="post"
-                    hx-post="/moderation/photos/{{ p.id }}/reject"
+              <form action="/moderation/photos/{{ p.kind }}/{{ p.id }}/reject" method="post"
+                    hx-post="/moderation/photos/{{ p.kind }}/{{ p.id }}/reject"
                     hx-target="#moderation-feedback" hx-swap="innerHTML"
                     class="flex flex-wrap items-center gap-2">
                 <input type="hidden" name="csrf" value="{{ layout.csrf }}" />

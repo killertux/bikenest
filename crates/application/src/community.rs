@@ -7,7 +7,7 @@
 
 use crate::audit::{AuditEvent, AuditLog};
 use crate::auth::Clock;
-use crate::ports::{FreshnessConfig, ParkingDetailsReader, ReaderError};
+use crate::ports::{FreshnessConfig, ParkingDetailsReader, ReaderError, ReviewPhotosReader, StoredPhoto};
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use crate::timezone::{TimezoneError, TimezoneResolver};
 use async_trait::async_trait;
@@ -218,6 +218,8 @@ pub struct ContributionItem {
 pub struct CommunityParkingDetails {
     pub location: ParkingLocation,
     pub reviews: Vec<Review>,
+    /// Approved review photos (D3 §38), keyed by review id — only APPROVED render.
+    pub review_photos: std::collections::HashMap<i64, Vec<StoredPhoto>>,
     pub confidence: Confidence,
     pub disputed: bool,
     pub attribute_summary: Vec<AttributeSummary>,
@@ -454,6 +456,7 @@ pub struct ContributionDeps {
     pub verifications: Box<dyn VerificationRepository>,
     pub favorites: Box<dyn FavoriteRepository>,
     pub history: Box<dyn ContributionHistoryReader>,
+    pub review_photos: Box<dyn ReviewPhotosReader>,
     pub rate_limiter: Box<dyn RateLimiter>,
     pub audit: Box<dyn AuditLog>,
     pub clock: Box<dyn Clock>,
@@ -753,6 +756,10 @@ let new_version = self
         let now = self.now();
 
         let reviews = self.deps.reviews.list_active(id).await?;
+        let mut review_photos = std::collections::HashMap::new();
+        for r in &reviews {
+            review_photos.insert(r.id, self.deps.review_photos.photos(r.id).await?);
+        }
         let signals = self.deps.verifications.latest_existence_per_user(id).await?;
         let confidence = bikenest_domain::confidence(&signals, now, &self.deps.freshness.thresholds);
         let attribute_summary = self.deps.verifications.attribute_summary(id).await?;
@@ -790,6 +797,7 @@ let new_version = self
         Ok(Some(CommunityParkingDetails {
             location,
             reviews,
+            review_photos,
             confidence,
             disputed,
             attribute_summary,

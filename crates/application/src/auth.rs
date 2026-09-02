@@ -903,6 +903,49 @@ impl AuthService {
     }
 
     // -----------------------------------------------------------------------
+    // Suspend / restore (§20/§44) — ADMIN-only. Suspension revokes every active
+    // session so it takes effect immediately, not just at the next login.
+    // -----------------------------------------------------------------------
+
+    /// Suspend an account: set `Suspended`, revoke all sessions, audit.
+    pub async fn suspend_user(&self, actor: &AuthenticatedUser, target: UserId) -> Result<(), AuthError> {
+        if !actor.has_role(Role::Admin) {
+            return Err(AuthError::Unauthorized);
+        }
+        self.accounts.set_state(target, AccountState::Suspended).await?;
+        // Revoke every session (keep none): immediate mid-session suspension.
+        self.sessions
+            .revoke_all_for_user_except(target, &SessionId::new([0u8; 32]))
+            .await?;
+        self.audit
+            .record(AuditEvent::success(
+                Some(actor.id),
+                "user.suspended",
+                "user",
+                target.0.to_string(),
+            ))
+            .await?;
+        Ok(())
+    }
+
+    /// Restore a suspended account to `Active`, audit.
+    pub async fn restore_user(&self, actor: &AuthenticatedUser, target: UserId) -> Result<(), AuthError> {
+        if !actor.has_role(Role::Admin) {
+            return Err(AuthError::Unauthorized);
+        }
+        self.accounts.set_state(target, AccountState::Active).await?;
+        self.audit
+            .record(AuditEvent::success(
+                Some(actor.id),
+                "user.restored",
+                "user",
+                target.0.to_string(),
+            ))
+            .await?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Session resolution for middleware
     // -----------------------------------------------------------------------
 

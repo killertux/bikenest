@@ -3,8 +3,8 @@
 
 use async_trait::async_trait;
 use bikenest_application::{
-    AuditLog, Clock, ImageProcessor, ObjectStorage, PhotoDeps, PhotoError, PhotoRepository,
-    PhotoService, ProcessedImage, PutObject,
+    AuditLog, Clock, ImageProcessor, ObjectStorage, PhotoDeps, PhotoError, PhotoKind,
+    PhotoRepository, PhotoService, PhotoTarget, ProcessedImage, PutObject,
 };
 use bikenest_domain::{AccountState, PhotoDimensions, PhotoModerationState, Role, UserEmail, UserId};
 use std::collections::HashMap;
@@ -92,7 +92,8 @@ impl ObjectStorage for FakeStorage {
 #[derive(Clone)]
 struct MemPhoto {
     id: i64,
-    location_id: i64,
+    kind: PhotoKind,
+    parent_id: i64,
     state: PhotoModerationState,
     storage_key: String,
     thumbnail_key: Option<String>,
@@ -131,7 +132,8 @@ impl PhotoRepository for FakePhotoRepo {
             id,
             MemPhoto {
                 id,
-                location_id: p.location_id,
+                kind: p.target.kind(),
+                parent_id: p.target.parent_id(),
                 state: PhotoModerationState::PendingReview,
                 storage_key: String::new(),
                 thumbnail_key: None,
@@ -143,11 +145,11 @@ impl PhotoRepository for FakePhotoRepo {
         self.inserted.lock().unwrap().push(id);
         Ok(id)
     }
-    async fn max_position(&self, location_id: i64) -> Result<i32, PhotoError> {
+    async fn max_position(&self, target: bikenest_application::PhotoTarget) -> Result<i32, PhotoError> {
         let photos = self.photos.lock().unwrap();
         let max = photos
             .values()
-            .filter(|p| p.location_id == location_id)
+            .filter(|p| p.kind == target.kind() && p.parent_id == target.parent_id())
             .map(|p| p.position)
             .max()
             .unwrap_or(0);
@@ -155,6 +157,7 @@ impl PhotoRepository for FakePhotoRepo {
     }
     async fn mark_processed(
         &self,
+        _kind: PhotoKind,
         id: i64,
         storage_key: &str,
         thumbnail_key: &str,
@@ -167,12 +170,12 @@ impl PhotoRepository for FakePhotoRepo {
         p.thumbnail_key = Some(thumbnail_key.to_string());
         Ok(())
     }
-    async fn delete(&self, id: i64) -> Result<(), PhotoError> {
+    async fn delete(&self, _kind: PhotoKind, id: i64) -> Result<(), PhotoError> {
         self.photos.lock().unwrap().remove(&id);
         self.deleted.lock().unwrap().push(id);
         Ok(())
     }
-    async fn approve(&self, id: i64, _moderator: UserId, position: i32) -> Result<(), PhotoError> {
+    async fn approve(&self, _kind: PhotoKind, id: i64, _moderator: UserId, position: i32) -> Result<(), PhotoError> {
         let mut photos = self.photos.lock().unwrap();
         let p = photos.get_mut(&id).ok_or(PhotoError::NotFound)?;
         if p.state != PhotoModerationState::PendingReview {
@@ -184,6 +187,7 @@ impl PhotoRepository for FakePhotoRepo {
     }
     async fn reject(
         &self,
+        _kind: PhotoKind,
         id: i64,
         _moderator: UserId,
         _reason: &str,
@@ -206,8 +210,9 @@ impl PhotoRepository for FakePhotoRepo {
             .filter(|p| p.state == PhotoModerationState::PendingReview)
             .map(|p| bikenest_application::PendingPhoto {
                 id: p.id,
-                location_id: p.location_id,
-                location_name: format!("Location {}", p.location_id),
+                kind: p.kind,
+                parent_id: p.parent_id,
+                parent_name: format!("Location {}", p.parent_id),
                 storage_key: p.storage_key.clone(),
                 thumbnail_key: p.thumbnail_key.clone(),
                 alt: p.alt.clone(),
@@ -220,12 +225,14 @@ impl PhotoRepository for FakePhotoRepo {
     }
     async fn get_for_moderation(
         &self,
+        _kind: PhotoKind,
         id: i64,
     ) -> Result<Option<bikenest_application::PhotoForModeration>, PhotoError> {
         let photos = self.photos.lock().unwrap();
         Ok(photos.get(&id).map(|p| bikenest_application::PhotoForModeration {
             id: p.id,
-            location_id: p.location_id,
+            kind: p.kind,
+            parent_id: p.parent_id,
             state: p.state,
             storage_key: p.storage_key.clone(),
             thumbnail_key: p.thumbnail_key.clone(),
@@ -307,13 +314,13 @@ fn harness(processor: FakeImageProcessor) -> Harness {
 #[tokio::test]
 async fn upload_happy_path_inserts_pending_and_writes_both_derivatives() {
     let h = harness(FakeImageProcessor::ok());
-    let out = h.service.upload_photo(&verified_user(), "1.2.3.4", 10, b"xyz", Some("alt")).await.unwrap();
+    let out = h.service.upload_photo(&verified_user(), "1.2.3.4", PhotoTarget::Parking(10), b"xyz", Some("alt")).await.unwrap();
     assert!(out.id >= 100);
     // Both derivative objects written.
     assert_eq!(h.storage.puts.lock().unwrap().len(), 2);
     assert!(h.audit.0.lock().unwrap().contains(&"photo.uploaded".to_string()));
     // Inserted as PENDING (gallery reader only returns APPROVED).
-    let state = h.repo.get_for_moderation(out.id).await.unwrap().unwrap();
+    let state = h.repo.get_for_moderation(PhotoKind::Parking, out.id).await.unwrap().unwrap();
     assert_eq!(state.state, PhotoModerationState::PendingReview);
 }
 
@@ -322,7 +329,7 @@ async fn upload_rejects_unverified_user() {
     let h = harness(FakeImageProcessor::ok());
     let user = authed_user(1, false, vec![]);
     assert!(matches!(
-        h.service.upload_photo(&user, "1.2.3.4", 10, b"xyz", None).await,
+        h.service.upload_photo(&user, "1.2.3.4", PhotoTarget::Parking(10), b"xyz", None).await,
         Err(PhotoError::NotVerified)
     ));
     assert_eq!(h.repo.inserted.lock().unwrap().len(), 0);
@@ -333,7 +340,7 @@ async fn upload_rejects_over_size_before_processing() {
     let h = harness(FakeImageProcessor::ok());
     let too_big = vec![0u8; bikenest_domain::MAX_PHOTO_BYTES + 1];
     assert!(matches!(
-        h.service.upload_photo(&verified_user(), "1.2.3.4", 10, &too_big, None).await,
+        h.service.upload_photo(&verified_user(), "1.2.3.4", PhotoTarget::Parking(10), &too_big, None).await,
         Err(PhotoError::TooLarge)
     ));
     assert_eq!(h.repo.inserted.lock().unwrap().len(), 0);
@@ -353,7 +360,7 @@ async fn upload_is_rate_limited() {
         clock: Box::new(FakeClock(chrono::Utc::now())),
     });
     assert!(matches!(
-        service.upload_photo(&verified_user(), "1.2.3.4", 10, b"x", None).await,
+        service.upload_photo(&verified_user(), "1.2.3.4", PhotoTarget::Parking(10), b"x", None).await,
         Err(PhotoError::RateLimited)
     ));
     assert_eq!(repo.inserted.lock().unwrap().len(), 0);
@@ -363,7 +370,7 @@ async fn upload_is_rate_limited() {
 async fn upload_propagates_processor_format_error() {
     let h = harness(FakeImageProcessor::fail(FakeProcError::UnsupportedFormat));
     assert!(matches!(
-        h.service.upload_photo(&verified_user(), "1.2.3.4", 10, b"xyz", None).await,
+        h.service.upload_photo(&verified_user(), "1.2.3.4", PhotoTarget::Parking(10), b"xyz", None).await,
         Err(PhotoError::UnsupportedFormat)
     ));
 }
@@ -372,13 +379,13 @@ async fn upload_propagates_processor_format_error() {
 async fn upload_propagates_undecodable_and_too_many_pixels() {
     let h = harness(FakeImageProcessor::fail(FakeProcError::Undecodable));
     assert!(matches!(
-        h.service.upload_photo(&verified_user(), "1.2.3.4", 10, b"x", None).await,
+        h.service.upload_photo(&verified_user(), "1.2.3.4", PhotoTarget::Parking(10), b"x", None).await,
         Err(PhotoError::Undecodable)
     ));
 
     let h = harness(FakeImageProcessor::fail(FakeProcError::TooManyPixels));
     assert!(matches!(
-        h.service.upload_photo(&verified_user(), "1.2.3.4", 10, b"x", None).await,
+        h.service.upload_photo(&verified_user(), "1.2.3.4", PhotoTarget::Parking(10), b"x", None).await,
         Err(PhotoError::TooManyPixels)
     ));
 }
@@ -422,7 +429,7 @@ async fn upload_compensates_deletes_row_when_second_put_fails() {
         clock: Box::new(FakeClock(chrono::Utc::now())),
     });
     assert!(matches!(
-        service.upload_photo(&verified_user(), "1.2.3.4", 10, b"xyz", None).await,
+        service.upload_photo(&verified_user(), "1.2.3.4", PhotoTarget::Parking(10), b"xyz", None).await,
         Err(PhotoError::Storage(_))
     ));
     assert_eq!(repo.deleted.lock().unwrap().len(), 1, "row must be compensated");
@@ -433,7 +440,7 @@ async fn upload_compensates_deletes_row_when_second_put_fails() {
 async fn approve_requires_moderator_role() {
     let h = harness(FakeImageProcessor::ok());
     assert!(matches!(
-        h.service.approve_photo(&verified_user(), 99).await,
+        h.service.approve_photo(&verified_user(), PhotoKind::Parking, 99).await,
         Err(PhotoError::Unauthorized)
     ));
 }
@@ -442,7 +449,7 @@ async fn approve_requires_moderator_role() {
 async fn reject_requires_moderator_role() {
     let h = harness(FakeImageProcessor::ok());
     assert!(matches!(
-        h.service.reject_photo(&verified_user(), 99, "reason").await,
+        h.service.reject_photo(&verified_user(), PhotoKind::Parking, 99, "reason").await,
         Err(PhotoError::Unauthorized)
     ));
 }
@@ -452,11 +459,11 @@ async fn approve_flow_audits_and_repositions() {
     let h = harness(FakeImageProcessor::ok());
     let out = h
         .service
-        .upload_photo(&verified_user(), "1.2.3.4", 10, b"xyz", None)
+        .upload_photo(&verified_user(), "1.2.3.4", PhotoTarget::Parking(10), b"xyz", None)
         .await
         .unwrap();
-    h.service.approve_photo(&moderator(), out.id).await.unwrap();
-    let state = h.repo.get_for_moderation(out.id).await.unwrap().unwrap();
+    h.service.approve_photo(&moderator(), PhotoKind::Parking, out.id).await.unwrap();
+    let state = h.repo.get_for_moderation(PhotoKind::Parking, out.id).await.unwrap().unwrap();
     assert_eq!(state.state, PhotoModerationState::Approved);
     assert!(h.audit.0.lock().unwrap().contains(&"photo.approved".to_string()));
 }
@@ -466,11 +473,11 @@ async fn reject_flow_deletes_both_derivatives_and_audits() {
     let h = harness(FakeImageProcessor::ok());
     let out = h
         .service
-        .upload_photo(&verified_user(), "1.2.3.4", 10, b"xyz", None)
+        .upload_photo(&verified_user(), "1.2.3.4", PhotoTarget::Parking(10), b"xyz", None)
         .await
         .unwrap();
     h.service
-        .reject_photo(&moderator(), out.id, "unclear")
+        .reject_photo(&moderator(), PhotoKind::Parking, out.id, "unclear")
         .await
         .unwrap();
 
@@ -482,7 +489,7 @@ async fn reject_flow_deletes_both_derivatives_and_audits() {
     assert!(h.audit.0.lock().unwrap().contains(&"photo.rejected".to_string()));
     // Re-reject is idempotent.
     assert!(matches!(
-        h.service.reject_photo(&moderator(), out.id, "again").await,
+        h.service.reject_photo(&moderator(), PhotoKind::Parking, out.id, "again").await,
         Ok(())
     ));
 }
@@ -492,15 +499,15 @@ async fn approve_of_rejected_photo_is_not_pending() {
     let h = harness(FakeImageProcessor::ok());
     let out = h
         .service
-        .upload_photo(&verified_user(), "1.2.3.4", 10, b"xyz", None)
+        .upload_photo(&verified_user(), "1.2.3.4", PhotoTarget::Parking(10), b"xyz", None)
         .await
         .unwrap();
     h.service
-        .reject_photo(&moderator(), out.id, "unclear")
+        .reject_photo(&moderator(), PhotoKind::Parking, out.id, "unclear")
         .await
         .unwrap();
     assert!(matches!(
-        h.service.approve_photo(&moderator(), out.id).await,
+        h.service.approve_photo(&moderator(), PhotoKind::Parking, out.id).await,
         Err(PhotoError::NotPending)
     ));
 }

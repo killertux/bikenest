@@ -10,6 +10,7 @@ pub mod audit;
 pub mod auth;
 pub mod community;
 pub mod email;
+pub mod moderation;
 pub mod photo;
 pub mod ports;
 pub mod rate_limit;
@@ -17,17 +18,21 @@ pub mod search;
 pub mod storage;
 pub mod timezone;
 
-pub use audit::{AuditError, AuditEvent, AuditLog};
+pub use audit::{AuditError, AuditEvent, AuditLog, AuditLogReader, AuditFilter, AuditPage, AuditStoredEvent};
 pub use auth::{
     AccountRepository, AuthError, AuthenticatedUser, AuthService, Clock, IdentityRecord,
     LoginOutcome, NewAccount, OAuthProvider, PasswordHasher, ResolvedSession, Session, SessionStore,
     TokenGenerator, TokenStore,
 };
 pub use email::{EmailError, EmailProvider, OutboundEmail};
+pub use moderation::{
+    ModerationDeps, ModerationError, ModerationRepository, ModerationService, NewReport,
+    Proposal, ProposalApplication, Report, ReportRepository,
+};
 pub use ports::{
     CostFilter, Cursor, Filters, FreshnessConfig, GeoHit, GeocodeError, Geocoder,
     ParkingDetailsReader, ParkingPhotoReader, ParkingSearchReader, ParkingSummary, ReaderError,
-    SearchInput, SearchPage, SearchRequest, Sort, StoredPhoto,
+    ReviewPhotosReader, SearchInput, SearchPage, SearchRequest, Sort, StoredPhoto,
 };
 pub use community::{
     AddParkingLocationOutcome, AttributeSummary, CommunityParkingDetails, ContributionDeps,
@@ -38,7 +43,8 @@ pub use community::{
 };
 pub use photo::{
     ImageProcessor, NewPendingPhoto, PendingPhoto, PhotoDeps, PhotoError, PhotoForModeration,
-    PhotoRepository, PhotoService, ProcessedImage, RejectedPhoto, UploadedPhoto,
+    PhotoKind, PhotoRepository, PhotoService, PhotoTarget, ProcessedImage, RejectedPhoto,
+    UploadedPhoto,
 };
 pub use rate_limit::{RateLimitError, RateLimiter};
 pub use storage::{ObjectStorage, PutObject, StorageError};

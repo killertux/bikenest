@@ -49,11 +49,15 @@ impl PhotoDimensions {
 
 /// Moderation lifecycle of a photo (§30/§116.2). Distinct from the location
 /// [`ModerationState`](crate::parking::ModerationState) in the domain.
+///
+/// M5 adds `Hidden` (§44 hide/restore): it **retains** the derivatives
+/// (restorable) and is distinct from `Rejected` (bytes deleted — M4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhotoModerationState {
     PendingReview,
     Approved,
     Rejected,
+    Hidden,
 }
 
 impl PhotoModerationState {
@@ -62,6 +66,7 @@ impl PhotoModerationState {
             PhotoModerationState::PendingReview => "PENDING_REVIEW",
             PhotoModerationState::Approved => "APPROVED",
             PhotoModerationState::Rejected => "REJECTED",
+            PhotoModerationState::Hidden => "HIDDEN",
         }
     }
 
@@ -70,6 +75,7 @@ impl PhotoModerationState {
             "PENDING_REVIEW" => Ok(PhotoModerationState::PendingReview),
             "APPROVED" => Ok(PhotoModerationState::Approved),
             "REJECTED" => Ok(PhotoModerationState::Rejected),
+            "HIDDEN" => Ok(PhotoModerationState::Hidden),
             other => Err(DomainError::Invalid(format!(
                 "unknown photo moderation state: {other}"
             ))),
@@ -102,6 +108,7 @@ mod tests {
             PhotoModerationState::PendingReview,
             PhotoModerationState::Approved,
             PhotoModerationState::Rejected,
+            PhotoModerationState::Hidden,
         ] {
             assert_eq!(PhotoModerationState::from_code(s.as_code()), Ok(s));
         }
@@ -114,6 +121,7 @@ mod tests {
         assert!(!PhotoModerationState::PendingReview.is_publicly_visible());
         assert!(PhotoModerationState::Approved.is_publicly_visible());
         assert!(!PhotoModerationState::Rejected.is_publicly_visible());
+        assert!(!PhotoModerationState::Hidden.is_publicly_visible());
     }
 
     #[test]

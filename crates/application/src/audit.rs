@@ -68,3 +68,43 @@ pub enum AuditError {
 pub trait AuditLog: Send + Sync {
     async fn record(&self, event: AuditEvent) -> Result<(), AuditError>;
 }
+
+// ---------------------------------------------------------------------------
+// Audit reader (§47) — the admin audit-log viewer (M6 screen).
+// ---------------------------------------------------------------------------
+
+/// Filter for the audit viewer. All fields optional; each present field is ANDed.
+#[derive(Debug, Clone, Default)]
+pub struct AuditFilter {
+    pub actor_id: Option<bikenest_domain::UserId>,
+    pub action: Option<String>,
+    pub target_type: Option<String>,
+    pub from: Option<chrono::DateTime<chrono::Utc>>,
+    pub to: Option<chrono::DateTime<chrono::Utc>>,
+    /// Keyset cursor on `id DESC`: the last seen event id.
+    pub cursor: Option<i64>,
+    pub limit: usize,
+}
+
+/// One page of audit events (keyset pagination on `id DESC`).
+#[derive(Debug, Clone)]
+pub struct AuditPage {
+    pub items: Vec<AuditStoredEvent>,
+    /// Present when another page exists.
+    pub next_cursor: Option<i64>,
+}
+
+/// A single audit row as read back, with its id + created_at.
+#[derive(Debug, Clone)]
+pub struct AuditStoredEvent {
+    pub id: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub event: AuditEvent,
+}
+
+/// Port: read the audit trail. The viewer is ADMIN-only; metadata is rendered
+/// as an escaped JSON blob and by construction carries no secrets/PII (§47).
+#[async_trait]
+pub trait AuditLogReader: Send + Sync {
+    async fn list(&self, filter: AuditFilter) -> Result<AuditPage, AuditError>;
+}

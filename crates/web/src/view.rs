@@ -5,6 +5,7 @@
 //! formats, maps and localizes (§7). Every user-facing label goes through the
 //! request's [`Translator`] (§12).
 
+use crate::PhotoVm;
 use crate::i18n::Translator;
 use bikenest_application::{AuthenticatedUser, GeoHit, ObjectStorage, ParkingSummary, PendingPhoto};
 use bikenest_domain::{AccountState, Cost, FreshnessCategory, OpenStatus, OpeningHours, ParkingType, PricingUnit, Role};
@@ -375,6 +376,8 @@ pub struct AdminUserVm {
     pub email: String,
     pub roles_label: String,
     pub state_label: &'static str,
+    /// Account-state code (ACTIVE/SUSPENDED/…) for conditional rendering.
+    pub state: &'static str,
     pub is_verified: bool,
     pub has_moderator: bool,
     pub has_admin: bool,
@@ -384,25 +387,35 @@ pub struct AdminUserVm {
 // Community (M3) view models
 // ---------------------------------------------------------------------------
 
-/// One rendered review (D3 / P3).
+/// One rendered review (D3 / P3). `photos` are the review's APPROVED photos
+/// (§38), already resolved to presigned URLs for the card's thumbnails.
 #[derive(Debug, Clone)]
 pub struct ReviewVm {
+    pub id: i64,
     pub rating: u8,
     pub stars: String,
     pub body: String,
     pub created_label: String,
     pub is_own: bool,
+    pub photos: Vec<PhotoVm>,
 }
 
-pub fn review_vm(t: Translator, r: &bikenest_application::Review, is_own: bool) -> ReviewVm {
+pub fn review_vm(
+    t: Translator,
+    r: &bikenest_application::Review,
+    is_own: bool,
+    photos: Vec<PhotoVm>,
+) -> ReviewVm {
     let stars = "★".repeat(r.rating.value() as usize);
     let created_label = time_ago_label(t, r.created_at);
     ReviewVm {
+        id: r.id,
         rating: r.rating.value(),
         stars,
         body: r.body.as_str().to_string(),
         created_label,
         is_own,
+        photos,
     }
 }
 
@@ -438,6 +451,7 @@ pub fn admin_users(t: Translator, users: &[AuthenticatedUser]) -> Vec<AdminUserV
                     .collect::<Vec<_>>()
                     .join(", "),
                 state_label: account_state_label(t, u.account_state),
+                state: u.account_state.as_code(),
                 is_verified: u.is_verified,
                 has_moderator: u.has_role(Role::Moderator),
                 has_admin: u.has_role(Role::Admin),
@@ -545,6 +559,7 @@ pub fn duplicate_vm(_t: Translator, d: &bikenest_application::DuplicateCandidate
 #[derive(Debug, Clone)]
 pub struct ModerationPhotoVm {
     pub id: i64,
+    pub kind: &'static str,
     pub location_id: i64,
     pub location_name: String,
     pub full_url: String,
@@ -568,7 +583,7 @@ pub fn moderation_photo_vm(
     let alt = p
         .alt
         .clone()
-        .unwrap_or_else(|| format!("Photo of {}", p.location_name));
+        .unwrap_or_else(|| format!("Photo of {}", p.parent_name));
     let dimensions = match (p.width, p.height) {
         (Some(w), Some(h)) => Some(format!("{w} × {h}")),
         _ => None,
@@ -579,14 +594,207 @@ pub fn moderation_photo_vm(
         .unwrap_or_default();
     ModerationPhotoVm {
         id: p.id,
-        location_id: p.location_id,
-        location_name: p.location_name.clone(),
+        kind: match p.kind {
+            bikenest_application::PhotoKind::Parking => "parking",
+            bikenest_application::PhotoKind::Review => "review",
+        },
+        location_id: p.parent_id,
+        location_name: p.parent_name.clone(),
         full_url,
         thumb_url,
         alt,
         dimensions,
         contributor_label,
         uploaded_label: time_ago_label(t, p.created_at),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Moderation & reporting (M5) view models
+// ---------------------------------------------------------------------------
+
+/// One row of the M3 reports queue.
+#[derive(Debug, Clone)]
+pub struct ReportVm {
+    pub id: i64,
+    /// The submitting user's id (moderators may compare against the viewer to
+    /// hide resolve/dismiss on one's own report); never rendered on public pages.
+    pub reporter_id: i64,
+    pub target_type_label: &'static str,
+    pub target_id: i64,
+    pub reason_label: &'static str,
+    pub description: String,
+    pub state_code: &'static str,
+    pub state_label: &'static str,
+    /// Tailwind color token for the state badge ("fresh" | "aging" | "stale").
+    pub state_color: &'static str,
+    pub reporter_label: String,
+    pub claimed_by_label: String,
+    pub created_label: String,
+}
+
+/// The report-reason option list (value = code, label = i18n) for the modal/select.
+use bikenest_domain::REPORT_REASONS;
+
+pub fn report_reason_options(t: Translator) -> Vec<OptionVm> {
+    REPORT_REASONS
+        .iter()
+        .map(|code| OptionVm {
+            value: code,
+            label: report_reason_label(t, code),
+            checked: false,
+        })
+        .collect()
+}
+
+fn report_target_label(t: Translator, code: &str) -> &'static str {
+    match code {
+        "parking" => t.t("report.target.parking"),
+        "parking_photo" => t.t("report.target.parking_photo"),
+        "review" => t.t("report.target.review"),
+        "review_photo" => t.t("report.target.review_photo"),
+        _ => t.t("report.target.other"),
+    }
+}
+
+fn report_reason_label(t: Translator, reason: &str) -> &'static str {
+    match reason {
+        "nonexistent_parking" => t.t("report.reason.nonexistent_parking"),
+        "incorrect_location" => t.t("report.reason.incorrect_location"),
+        "incorrect_price" => t.t("report.reason.incorrect_price"),
+        "incorrect_hours" => t.t("report.reason.incorrect_hours"),
+        "incorrect_security" => t.t("report.reason.incorrect_security"),
+        "duplicate" => t.t("report.reason.duplicate"),
+        "inappropriate_photo" => t.t("report.reason.inappropriate_photo"),
+        "inappropriate_review" => t.t("report.reason.inappropriate_review"),
+        "spam" => t.t("report.reason.spam"),
+        "abuse" => t.t("report.reason.abuse"),
+        "other" => t.t("report.reason.other"),
+        _ => t.t("report.reason.other"),
+    }
+}
+
+fn report_state_label(t: Translator, s: bikenest_domain::ReportState) -> &'static str {
+    match s {
+        bikenest_domain::ReportState::Open => t.t("report.state.open"),
+        bikenest_domain::ReportState::UnderReview => t.t("report.state.under_review"),
+        bikenest_domain::ReportState::Resolved => t.t("report.state.resolved"),
+        bikenest_domain::ReportState::Dismissed => t.t("report.state.dismissed"),
+    }
+}
+
+pub fn report_vm(t: Translator, r: &bikenest_application::Report) -> ReportVm {
+    ReportVm {
+        id: r.id,
+        reporter_id: r.reporter_id.0,
+        target_type_label: report_target_label(t, r.target_type.as_code()),
+        target_id: r.target_id,
+        reason_label: report_reason_label(t, &r.reason),
+        description: r.description.clone().unwrap_or_default(),
+        state_code: r.state.as_code(),
+        state_label: report_state_label(t, r.state),
+        state_color: match r.state {
+            bikenest_domain::ReportState::Open => "error",
+            bikenest_domain::ReportState::UnderReview => "aging",
+            bikenest_domain::ReportState::Resolved | bikenest_domain::ReportState::Dismissed => "fresh",
+        },
+        reporter_label: format!("{} #{}", t.t("moderation.contributor"), r.reporter_id.0),
+        claimed_by_label: r
+            .claimed_by
+            .map(|c| format!("{} #{}", t.t("moderation.moderator"), c.0))
+            .unwrap_or_else(|| t.t("report.claimed.none").to_string()),
+        created_label: time_ago_label(t, r.created_at),
+    }
+}
+
+/// One row of the M4 proposal review queue.
+#[derive(Debug, Clone)]
+pub struct ProposalVm {
+    pub id: i64,
+    pub location_id: i64,
+    pub location_name: String,
+    /// Stable kind code ("move_location" | "change_existence") — templates must
+    /// branch on this, never on the localized label.
+    pub kind_code: &'static str,
+    pub kind_label: &'static str,
+    pub detail: String,
+    pub proposer_label: String,
+    pub base_version: i64,
+    pub created_label: String,
+}
+
+fn proposal_kind_label(t: Translator, kind: bikenest_domain::ProposalKind) -> &'static str {
+    match kind {
+        bikenest_domain::ProposalKind::MoveLocation => t.t("proposal.kind.move"),
+        bikenest_domain::ProposalKind::ChangeExistence => t.t("proposal.kind.existence"),
+    }
+}
+
+fn proposal_detail(t: Translator, kind: bikenest_domain::ProposalKind, proposed: &serde_json::Value) -> String {
+    match kind {
+        bikenest_domain::ProposalKind::MoveLocation => {
+            let lat = proposed.get("lat").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let lon = proposed.get("lon").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let tz = proposed.get("timezone").and_then(|v| v.as_str()).unwrap_or("");
+            format!("{:.5}, {:.5} · {tz}", lat, lon)
+        }
+        bikenest_domain::ProposalKind::ChangeExistence => {
+            let ex = proposed.get("existence").and_then(|v| v.as_str()).unwrap_or("");
+            if ex == "removed" {
+                t.t("proposal.existence.removed").to_string()
+            } else {
+                t.t("proposal.existence.exists").to_string()
+            }
+        }
+    }
+}
+
+pub fn proposal_vm(t: Translator, p: &bikenest_application::Proposal) -> ProposalVm {
+    ProposalVm {
+        id: p.id,
+        location_id: p.location_id,
+        location_name: p.location_name.clone(),
+        kind_code: p.kind.as_code(),
+        kind_label: proposal_kind_label(t, p.kind),
+        detail: proposal_detail(t, p.kind, &p.proposed),
+        proposer_label: format!("{} #{}", t.t("moderation.proposer"), p.proposer_id.0),
+        base_version: p.base_version,
+        created_label: time_ago_label(t, p.created_at),
+    }
+}
+
+/// One row of the admin audit-log viewer (M6). Metadata rendered as an escaped
+/// JSON blob — by construction it carries no secrets/PII (§47).
+#[derive(Debug, Clone)]
+pub struct AuditRowVm {
+    pub id: i64,
+    pub actor_label: String,
+    pub action: String,
+    pub target_label: String,
+    pub result_label: &'static str,
+    pub metadata: String,
+    pub created_label: String,
+}
+
+pub fn audit_row_vm(t: Translator, e: &bikenest_application::AuditStoredEvent) -> AuditRowVm {
+    let actor_label = e
+        .event
+        .actor_user_id
+        .map(|a| format!("{} #{}", t.t("moderation.actor"), a.0))
+        .unwrap_or_else(|| t.t("audit.system").to_string());
+    let result_label = if e.event.result == "success" {
+        t.t("audit.result.success")
+    } else {
+        t.t("audit.result.failure")
+    };
+    AuditRowVm {
+        id: e.id,
+        actor_label,
+        action: e.event.action.clone(),
+        target_label: format!("{}:{}", e.event.target_type, e.event.target_id),
+        result_label,
+        metadata: e.event.metadata.to_string(),
+        created_label: time_ago_label(t, e.created_at),
     }
 }
 

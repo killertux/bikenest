@@ -40,6 +40,12 @@
               {% else %}
                 <form action="/admin/users/{{ u.id }}/role" method="post" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><input type="hidden" name="action" value="grant"><input type="hidden" name="role" value="ADMIN"><button type="submit" class="rounded bg-accent/10 px-2 py-1 text-xs font-medium text-accent-strong">{{ tr.t("admin.grant_admin") }}</button></form>
               {% endif %}
+              {% if u.state == "SUSPENDED" %}
+                <form action="/admin/users/{{ u.id }}/restore" method="post" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><button type="submit" class="rounded bg-fresh/10 px-2 py-1 text-xs font-medium text-fresh">{{ tr.t("admin.restore") }}</button></form>
+              {% else %}
+                <form action="/admin/users/{{ u.id }}/suspend" method="post" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><button type="submit" class="rounded bg-error/10 px-2 py-1 text-xs font-medium text-error">{{ tr.t("admin.suspend") }}</button></form>
+              {% endif %}
+              <a href="/admin/users/{{ u.id }}/contributions" class="rounded border border-border px-2 py-1 text-xs text-muted hover:text-fg">{{ tr.t("admin.contrib_link") }}</a>
             </div>
           </td>
         </tr>
