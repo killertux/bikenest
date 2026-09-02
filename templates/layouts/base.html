@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ layout.title }}</title>
+  <meta name="csrf" content="{{ layout.csrf }}">
   <link rel="stylesheet" href="/static/css/app.css">
   <!-- MapLibre base styles (map clipping, canvas layout, control/attribution
        positioning). Must load before map.css so the page's map overrides win. -->
@@ -30,9 +31,16 @@
           <a href="/lang/pt-br" lang="pt-BR" {% if tr.is_pt() %}aria-current="true" class="rounded-md bg-fg px-2 py-1 font-medium text-bg"{% else %}class="rounded-md px-2 py-1 text-muted hover:text-fg"{% endif %} aria-label="{{ tr.t("lang.pt_aria") }}">PT</a>
           <a href="/lang/en" lang="en" {% if tr.is_en() %}aria-current="true" class="rounded-md bg-fg px-2 py-1 font-medium text-bg"{% else %}class="rounded-md px-2 py-1 text-muted hover:text-fg"{% endif %} aria-label="{{ tr.t("lang.en_aria") }}">EN</a>
         </div>
-        <!-- Community accounts arrive in M2; the links land on the community page meanwhile -->
-        <a href="/about" class="rounded-lg px-3 py-2 text-sm font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]">{{ tr.t("auth.login") }}</a>
-        <a href="/about" class="rounded-lg bg-accent-strong px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("auth.signup") }}</a>
+        {% if layout.csrf != "" %}
+          <a href="/account" class="rounded-lg px-3 py-2 text-sm font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]">{{ tr.t("account.nav") }}</a>
+          <form action="/logout" method="post" class="inline">
+            <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+            <button type="submit" class="rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted hover:text-fg">{{ tr.t("auth.logout") }}</button>
+          </form>
+        {% else %}
+          <a href="/login" class="rounded-lg px-3 py-2 text-sm font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]">{{ tr.t("auth.login") }}</a>
+          <a href="/register" class="rounded-lg bg-accent-strong px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("auth.signup") }}</a>
+        {% endif %}
       </div>
       <button
         x-data="{ open: false }" @click="open = !open" :aria-expanded="open"
@@ -93,6 +101,7 @@
   <script src="/static/vendor/htmx.js"></script>
   <script src="/static/vendor/hx-alpine-compat.js"></script>
   <script defer src="/static/vendor/alpine.min.js"></script>
+  <script src="/static/js/auth.js"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

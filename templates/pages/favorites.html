@@ -1,0 +1,28 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<div class="mx-auto max-w-shell px-4 py-10 lg:px-8">
+  <h1 class="font-display text-2xl font-bold tracking-tight">{{ tr.t("favorites.title") }}</h1>
+  <p class="mt-2 text-muted">{{ tr.t("favorites.subtitle") }}</p>
+
+  {% if notice.is_some() %}
+    <div class="mt-4 rounded-lg border border-accent/30 bg-accent-soft px-4 py-3 text-sm">{{ notice.as_deref().unwrap_or("") }}</div>
+  {% endif %}
+
+  {% if items.is_empty() %}
+    <div class="mt-8 rounded-2xl border border-dashed border-border bg-surface px-6 py-12 text-center">
+      <p class="font-display text-base font-semibold">{{ tr.t("favorites.empty") }}</p>
+      <p class="mx-auto mt-1.5 max-w-sm text-sm text-muted">{{ tr.t("favorites.empty_hint") }}</p>
+    </div>
+  {% else %}
+    <div class="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {% for c in items %}
+        <a href="{{ c.url }}" class="group rounded-2xl border border-border bg-surface p-4 transition-shadow hover:shadow-card">
+          <h2 class="font-display text-base font-semibold">{{ c.name }}</h2>
+          <p class="mt-1 text-sm text-muted">{{ c.address }}</p>
+          <p class="mt-2 text-sm">{{ c.type_label }} · {{ c.cost_label }}</p>
+        </a>
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

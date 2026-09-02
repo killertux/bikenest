@@ -6,8 +6,8 @@
 //! request's [`Translator`] (§12).
 
 use crate::i18n::Translator;
-use bikenest_application::{GeoHit, ObjectStorage, ParkingSummary};
-use bikenest_domain::{Cost, FreshnessCategory, OpenStatus, OpeningHours, ParkingType, PricingUnit};
+use bikenest_application::{AuthenticatedUser, GeoHit, ObjectStorage, ParkingSummary};
+use bikenest_domain::{AccountState, Cost, FreshnessCategory, OpenStatus, OpeningHours, ParkingType, PricingUnit, Role};
 use chrono::{Datelike, Timelike};
 use std::time::Duration;
 
@@ -347,4 +347,218 @@ pub fn hours_rows(
             }
         })
         .collect()
+}
+
+/// Localized role label.
+pub fn role_label(t: Translator, role: Role) -> &'static str {
+    match role {
+        Role::User => t.t("role.user"),
+        Role::Moderator => t.t("role.moderator"),
+        Role::Admin => t.t("role.admin"),
+    }
+}
+
+/// Localized account-state label (C1 / M5).
+pub fn account_state_label(t: Translator, s: AccountState) -> &'static str {
+    match s {
+        AccountState::PendingEmailVerification => t.t("account.state.pending"),
+        AccountState::Active => t.t("account.state.active"),
+        AccountState::Suspended => t.t("account.state.suspended"),
+        AccountState::Deleted => t.t("account.state.deleted"),
+    }
+}
+
+/// One row of the admin user-management table (M5).
+#[derive(Debug, Clone)]
+pub struct AdminUserVm {
+    pub id: i64,
+    pub email: String,
+    pub roles_label: String,
+    pub state_label: &'static str,
+    pub is_verified: bool,
+    pub has_moderator: bool,
+    pub has_admin: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Community (M3) view models
+// ---------------------------------------------------------------------------
+
+/// One rendered review (D3 / P3).
+#[derive(Debug, Clone)]
+pub struct ReviewVm {
+    pub rating: u8,
+    pub stars: String,
+    pub body: String,
+    pub created_label: String,
+    pub is_own: bool,
+}
+
+pub fn review_vm(t: Translator, r: &bikenest_application::Review, is_own: bool) -> ReviewVm {
+    let stars = "★".repeat(r.rating.value() as usize);
+    let created_label = time_ago_label(t, r.created_at);
+    ReviewVm {
+        rating: r.rating.value(),
+        stars,
+        body: r.body.as_str().to_string(),
+        created_label,
+        is_own,
+    }
+}
+
+fn time_ago_label(t: Translator, at: chrono::DateTime<chrono::Utc>) -> String {
+    let now = chrono::Utc::now();
+    let days = (now - at).num_days();
+    if days == 0 {
+        t.t("time.today").to_string()
+    } else if days == 1 {
+        t.t("time.yesterday").to_string()
+    } else if days < 30 {
+        t.t("time.days_ago").replace("{n}", &days.to_string())
+    } else {
+        let months = days / 30;
+        t.t("time.months_ago").replace("{n}", &months.to_string())
+    }
+}
+
+/// Build the admin user list as presentation-ready rows.
+pub fn admin_users(t: Translator, users: &[AuthenticatedUser]) -> Vec<AdminUserVm> {
+    users
+        .iter()
+        .map(|u| {
+            let mut roles = u.roles.clone();
+            roles.sort();
+            roles.dedup();
+            AdminUserVm {
+                id: u.id.0,
+                email: u.email.to_string(),
+                roles_label: roles
+                    .iter()
+                    .map(|r| role_label(t, *r))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                state_label: account_state_label(t, u.account_state),
+                is_verified: u.is_verified,
+                has_moderator: u.has_role(Role::Moderator),
+                has_admin: u.has_role(Role::Admin),
+            }
+        })
+        .collect()
+}
+
+/// Localized confidence label (P3 confidence badge, §106).
+pub fn confidence_label(t: Translator, c: bikenest_domain::Confidence) -> &'static str {
+    match c {
+        bikenest_domain::Confidence::Reported => t.t("confidence.reported"),
+        bikenest_domain::Confidence::Verified => t.t("confidence.verified"),
+        bikenest_domain::Confidence::RecentlyVerified => t.t("confidence.recently_verified"),
+        bikenest_domain::Confidence::Stale => t.t("confidence.stale"),
+        bikenest_domain::Confidence::Conflicting => t.t("confidence.conflicting"),
+    }
+}
+
+/// One rendered confidence badge.
+#[derive(Debug, Clone)]
+pub struct ConfidenceVm {
+    pub code: &'static str,
+    pub label: &'static str,
+}
+
+pub fn confidence_vm(t: Translator, c: bikenest_domain::Confidence) -> ConfidenceVm {
+    ConfidenceVm {
+        code: c.as_code(),
+        label: confidence_label(t, c),
+    }
+}
+
+/// One rendered attribution dispute tally (§106).
+#[derive(Debug, Clone)]
+pub struct AttrDisputeVm {
+    pub label: &'static str,
+    pub incorrect: i64,
+}
+
+pub fn attr_dispute_vm(t: Translator, code: &str, incorrect: i64) -> AttrDisputeVm {
+    AttrDisputeVm {
+        label: attribute_label(t, code),
+        incorrect,
+    }
+}
+
+fn attribute_label(t: Translator, code: &str) -> &'static str {
+    match code {
+        "name" => t.t("attr.name"),
+        "address" => t.t("attr.address"),
+        "type" => t.t("attr.type"),
+        "cost" => t.t("attr.cost"),
+        "hours" => t.t("attr.hours"),
+        "security" => t.t("attr.security"),
+        "location" => t.t("attr.location"),
+        _ => t.t("attr.unknown"),
+    }
+}
+
+/// One rendered "recommended because…" reason (§105).
+#[derive(Debug, Clone)]
+pub struct ReasonVm {
+    pub label: &'static str,
+    pub detail: String,
+}
+
+pub fn reason_vm(t: Translator, r: &bikenest_application::Reason) -> ReasonVm {
+    ReasonVm {
+        label: t.t(r.label_key),
+        detail: r.detail.clone(),
+    }
+}
+
+/// One rendered row of the C5 contribution history feed.
+#[derive(Debug, Clone)]
+pub struct ContributionVm {
+    pub kind_label: &'static str,
+    pub target: String,
+    pub state_label: &'static str,
+    pub at_label: String,
+}
+
+/// One advisory duplicate candidate (D1/§36).
+#[derive(Debug, Clone)]
+pub struct DuplicateVm {
+    pub id: i64,
+    pub name: String,
+    pub distance_label: String,
+    pub similarity_label: String,
+}
+
+pub fn duplicate_vm(_t: Translator, d: &bikenest_application::DuplicateCandidate) -> DuplicateVm {
+    DuplicateVm {
+        id: d.id,
+        name: d.name.clone(),
+        distance_label: distance_label(d.distance_m),
+        similarity_label: format!("{:.0}%", d.similarity * 100.0),
+    }
+}
+
+pub fn contribution_vm(t: Translator, i: &bikenest_application::ContributionItem) -> ContributionVm {
+    let kind = match i.kind.as_str() {
+        "added" => t.t("contrib.kind.added"),
+        "edited" => t.t("contrib.kind.edited"),
+        "proposed" => t.t("contrib.kind.proposed"),
+        "reviewed" => t.t("contrib.kind.reviewed"),
+        "verified" => t.t("contrib.kind.verified"),
+        "favorited" => t.t("contrib.kind.favorited"),
+        _ => t.t("contrib.kind.other"),
+    };
+    let state = match i.state.as_str() {
+        "active" => t.t("contrib.state.active"),
+        "pending" => t.t("contrib.state.pending"),
+        "history" => t.t("contrib.state.history"),
+        _ => t.t("contrib.state.other"),
+    };
+    ContributionVm {
+        kind_label: kind,
+        target: i.target.clone(),
+        state_label: state,
+        at_label: time_ago_label(t, i.at),
+    }
 }

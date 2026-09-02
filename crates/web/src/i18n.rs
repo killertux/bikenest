@@ -452,6 +452,299 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "error.home" => ("Back to home", "Voltar ao início"),
         "error.search" => ("Search parking", "Buscar vagas"),
 
+        // --- auth: register / login (A1/A2) -------------------------------
+        "auth.register_title" => ("Create your account", "Crie sua conta"),
+        "auth.register_subtitle" => (
+            "A community account keeps your contributions and the map honest.",
+            "Uma conta da comunidade mantém suas contribuições e o mapa honestos.",
+        ),
+        "auth.login_title" => ("Log in", "Entrar"),
+        "auth.login_subtitle" => ("Welcome back.", "Bem-vindo de volta."),
+        "auth.email" => ("Email", "E-mail"),
+        "auth.display_name" => ("Display name (optional)", "Nome de exibição (opcional)"),
+        "auth.password" => ("Password", "Senha"),
+        "auth.password_hint" => ("At least 8 characters", "No mínimo 8 caracteres"),
+        "auth.have_account" => ("Already have an account?", "Já tem uma conta?"),
+        "auth.forgot" => ("Forgot password?", "Esqueceu a senha?"),
+        "auth.logout" => ("Log out", "Sair"),
+        "auth.google" => ("Continue with Google", "Continuar com o Google"),
+        "auth.oauth_note" => ("Or", "Ou"),
+
+        // --- auth: verification (A3) ---------------------------------------
+        "auth.verify_title" => ("Verify your email", "Verifique seu e-mail"),
+        "auth.verify_success" => ("Email verified", "E-mail verificado"),
+        "auth.verify_success_body" => (
+            "Your account is active. You can now log in and contribute.",
+            "Sua conta está ativa. Agora você pode entrar e contribuir.",
+        ),
+        "auth.verify_invalid" => ("Verification link invalid or expired", "Link de verificação inválido ou expirado"),
+        "auth.resend_hint" => ("Enter your email to resend the link:", "Digite seu e-mail para reenviar o link:"),
+        "auth.resend_link" => ("Resend verification email", "Reenviar e-mail de verificação"),
+
+        // --- auth: password reset (A4/A5) ---------------------------------
+        "auth.reset_title" => ("Reset your password", "Redefinir sua senha"),
+        "auth.reset_subtitle" => (
+            "Enter your email and we will send a reset link if it exists.",
+            "Digite seu e-mail e enviaremos um link de redefinição se ele existir.",
+        ),
+        "auth.reset_button" => ("Send reset link", "Enviar link de redefinição"),
+        "auth.reset_new_title" => ("Set a new password", "Defina uma nova senha"),
+        "auth.reset_new_subtitle" => ("Choose a strong new password.", "Escolha uma nova senha forte."),
+
+        // --- auth: notices / errors ---------------------------------------
+        "auth.registered" => (
+            "Check your inbox to verify your email, then log in.",
+            "Confira seu e-mail para verificar seu endereço e depois entre.",
+        ),
+        "auth.verified" => ("Email verified — you can log in.", "E-mail verificado — você pode entrar."),
+        "auth.reset_sent" => (
+            "If that address exists, a reset link has been sent.",
+            "Se esse endereço existir, um link de redefinição foi enviado.",
+        ),
+        "auth.resend_sent" => (
+            "If that address exists, a verification email has been sent.",
+            "Se esse endereço existir, um e-mail de verificação foi enviado.",
+        ),
+        "auth.oauth_failed" => ("Google sign-in failed. Try again.", "Falha ao entrar com o Google. Tente novamente."),
+        "auth.error.invalid_credentials" => (
+            "Email or password is incorrect.",
+            "E-mail ou senha incorretos.",
+        ),
+        "auth.error.weak_password" => ("Password must be at least 8 characters.", "A senha deve ter pelo menos 8 caracteres."),
+        "auth.error.invalid_email" => ("That email is not valid.", "Esse e-mail não é válido."),
+        "auth.error.rate_limited" => ("Too many attempts. Try again later.", "Muitas tentativas. Tente novamente mais tarde."),
+        "auth.error.invalid_token" => ("That link is invalid or has expired.", "Esse link é inválido ou expirou."),
+        "auth.error.last_admin" => ("You cannot remove your own last admin role.", "Você não pode remover sua própria última função de admin."),
+        "auth.error.generic" => ("Something went wrong. Try again.", "Algo deu errado. Tente novamente."),
+
+        // --- account (C1) --------------------------------------------------
+        "account.title" => ("Your account", "Sua conta"),
+        "account.nav" => ("Account", "Conta"),
+        "account.profile" => ("Profile", "Perfil"),
+        "account.display_name" => ("Display name", "Nome de exibição"),
+        "account.roles" => ("Roles", "Funções"),
+        "account.email_verified" => ("Email verified", "E-mail verificado"),
+        "account.verified_yes" => ("Yes", "Sim"),
+        "account.verified_no" => ("No", "Não"),
+        "account.settings" => ("Security", "Segurança"),
+        "account.change_password" => ("Change password", "Alterar senha"),
+        "account.change_email" => ("Change email", "Alterar e-mail"),
+        "account.back" => ("Back to account", "Voltar à conta"),
+        "account.banner_title" => ("Verify your email to contribute", "Verifique seu e-mail para contribuir"),
+        "account.banner_body" => (
+            "Your account is active, but you must confirm your email address before adding or editing parking.",
+            "Sua conta está ativa, mas você precisa confirmar seu e-mail antes de adicionar ou editar vagas.",
+        ),
+        "account.pw_changed" => ("Your password was changed.", "Sua senha foi alterada."),
+        "account.email_pending" => (
+            "A confirmation link was sent to your new email.",
+            "Um link de confirmação foi enviado para seu novo e-mail.",
+        ),
+
+        // --- change password (C2) / change email (C3) ----------------------
+        "account.pw_title" => ("Change password", "Alterar senha"),
+        "account.pw_current" => ("Current password", "Senha atual"),
+        "account.pw_new" => ("New password", "Nova senha"),
+        "account.pw_submit" => ("Update password", "Atualizar senha"),
+        "account.email_title" => ("Change email", "Alterar e-mail"),
+        "account.email_current" => ("Current email:", "E-mail atual:"),
+        "account.email_new" => ("New email", "Novo e-mail"),
+        "account.email_submit" => ("Request change", "Solicitar alteração"),
+
+        // --- roles / account state labels ---------------------------------
+        "role.user" => ("User", "Usuário"),
+        "role.moderator" => ("Moderator", "Moderador"),
+        "role.admin" => ("Admin", "Administrador"),
+        "account.state.pending" => ("Pending verification", "Aguardando verificação"),
+        "account.state.active" => ("Active", "Ativa"),
+        "account.state.suspended" => ("Suspended", "Suspensa"),
+        "account.state.deleted" => ("Deleted", "Excluída"),
+        "account.unverified" => ("Unverified", "Não verificado"),
+
+        // --- admin user management (M5) ------------------------------------
+        "admin.users_title" => ("Users", "Usuários"),
+        "admin.user" => ("User", "Usuário"),
+        "admin.state" => ("State", "Estado"),
+        "admin.roles" => ("Roles", "Funções"),
+        "admin.actions" => ("Actions", "Ações"),
+        "admin.granted" => ("Role granted.", "Função concedida."),
+        "admin.revoked" => ("Role revoked.", "Função revogada."),
+        "admin.role_error" => ("That action could not be completed.", "Não foi possível concluir essa ação."),
+        "admin.grant_moderator" => ("+ Moderator", "+ Moderador"),
+        "admin.revoke_moderator" => ("− Moderator", "− Moderador"),
+        "admin.grant_admin" => ("+ Admin", "+ Admin"),
+        "admin.revoke_admin" => ("− Admin", "− Admin"),
+
+        // --- M3 contributions: add (D1) ---------------------------------
+        "new.title" => ("Add a parking spot", "Adicionar uma vaga"),
+        "new.subtitle" => (
+            "Mark where bicycle parking exists — type, cost, hours, security.",
+            "Marque onde há bicicletário — tipo, custo, horário, segurança.",
+        ),
+        "new.added" => ("Added as spot", "Vaga adicionada"),
+        "new.duplicate.title" => ("This may already be listed", "Pode já estar cadastrado"),
+        "new.duplicate.warning" => (
+            "It looks similar to existing listings. You can still keep the new spot, but consider that it may already be mapped.",
+            "Parece similar a vagas existentes. Você ainda pode manter a nova, mas considere que talvez já esteja mapeada.",
+        ),
+        "new.field.name" => ("Name", "Nome"),
+        "new.field.address" => ("Address", "Endereço"),
+        "new.field.description" => ("Description (optional)", "Descrição (opcional)"),
+        "new.field.type" => ("Type", "Tipo"),
+        "new.field.cost" => ("Cost", "Custo"),
+        "new.field.lat" => ("Latitude", "Latitude"),
+        "new.field.lon" => ("Longitude", "Longitude"),
+        "new.field.tz" => ("Timezone", "Fuso horário"),
+        "new.field.tz_hint" => (
+            "Left blank, we derive it from the pin. You can override.",
+            "Em branco, o derivamos do ponto. Você pode alterar.",
+        ),
+        "new.field.open_24h" => ("Open 24 hours", "Aberto 24 horas"),
+        "new.field.security" => ("Security attributes", "Itens de segurança"),
+        "new.field.price" => ("Price", "Preço"),
+        "new.field.currency" => ("Currency", "Moeda"),
+        "new.field.unit" => ("Per", "Por"),
+        "new.submit" => ("Add parking spot", "Adicionar vaga"),
+
+        // --- M3 contributions: edit (D2) --------------------------------
+        "edit.title" => ("Edit parking spot", "Editar vaga"),
+        "edit.subtitle" => (
+            "Update the details of this spot. Moving the pin or removal are separate actions below.",
+            "Atualize os detalhes desta vaga. Mover o ponto ou remover são ações separadas abaixo.",
+        ),
+        "edit.submit" => ("Save changes", "Salvar alterações"),
+        "edit.link" => ("Edit this spot", "Editar esta vaga"),
+        "edit.sensitive.title" => ("Sensitive changes", "Mudanças sensíveis"),
+        "edit.sensitive.body" => (
+            "Moving the pin or removing a spot could mislead other riders, so these are proposed and reviewed.",
+            "Mover o ponto ou remover uma vaga pode enganar outros ciclistas, então isso é proposto e revisado.",
+        ),
+        "edit.move.title" => ("Move the pin", "Mover o ponto"),
+        "edit.move.submit" => ("Propose new location", "Propor novo local"),
+        "edit.remove.title" => ("Remove / mark gone", "Remover / marcar como sumido"),
+        "edit.remove.submit" => ("Propose change", "Propor mudança"),
+        "edit.reason" => ("Reason", "Motivo"),
+
+        // --- M3 reviews (D3) -------------------------------------------
+        "review.title" => ("Write a review", "Escrever uma avaliação"),
+        "review.subtitle" => ("How was it to park here?", "Como foi estacionar aqui?"),
+        "review.rating" => ("Rating", "Avaliação"),
+        "review.select" => ("Choose a rating", "Escolha uma nota"),
+        "review.body" => ("Your review", "Sua avaliação"),
+        "review.length_hint" => ("Between 1 and 2000 characters.", "Entre 1 e 2000 caracteres."),
+        "review.submit" => ("Save review", "Salvar avaliação"),
+        "review.write" => ("Write a review", "Escrever uma avaliação"),
+        "review.edit" => ("Edit your review", "Editar sua avaliação"),
+        "review.error.invalid" => ("Rating must be 1 to 5 stars.", "A nota deve ser de 1 a 5 estrelas."),
+        "review.error.length" => ("Review must be 1 to 2000 characters.", "A avaliação deve ter de 1 a 2000 caracteres."),
+        "review.error.generic" => ("Could not save your review.", "Não foi possível salvar sua avaliação."),
+
+        // --- M3 favorites (C4) -----------------------------------------
+        "favorites.title" => ("Your favorites", "Seus favoritos"),
+        "favorites.subtitle" => ("Spots you saved for later.", "Vagas que você salvou."),
+        "favorites.save" => ("Save to favorites", "Salvar nos favoritos"),
+        "favorites.saved" => ("Saved", "Salvo"),
+        "favorites.empty" => ("No favorites yet", "Nenhum favorito ainda"),
+        "favorites.empty_hint" => (
+            "Tap the heart on a spot to keep it here.",
+            "Toque no coração em uma vaga para mantê-la aqui.",
+        ),
+
+        // --- M3 contributions history (C5) ------------------------------
+        "contrib.title" => ("Your contributions", "Suas contribuições"),
+        "contrib.subtitle" => ("Everything you have added, verified or reviewed.", "Tudo que você adicionou, verificou ou avaliou."),
+        "contrib.empty" => ("No contributions yet", "Nenhuma contribuição ainda"),
+        "contrib.empty_hint" => (
+            "Add a spot, verify one, or write a review.",
+            "Adicione uma vaga, verifique uma ou escreva uma avaliação.",
+        ),
+        "contrib.kind.added" => ("Added", "Adicionou"),
+        "contrib.kind.edited" => ("Edited", "Editou"),
+        "contrib.kind.proposed" => ("Proposed", "Propôs"),
+        "contrib.kind.reviewed" => ("Reviewed", "Avaliou"),
+        "contrib.kind.verified" => ("Verified", "Verificou"),
+        "contrib.kind.favorited" => ("Favorited", "Favoritou"),
+        "contrib.kind.other" => ("Contributed", "Contribuiu"),
+        "contrib.state.active" => ("Active", "Ativa"),
+        "contrib.state.pending" => ("Pending", "Pendente"),
+        "contrib.state.history" => ("History", "História"),
+        "contrib.state.other" => ("—", "—"),
+
+        // --- Confidence (M3 §106) ---------------------------------------
+        "confidence.title" => ("Confidence", "Confiança"),
+        "confidence.reported" => ("Reported", "Reportado"),
+        "confidence.verified" => ("Verified", "Verificado"),
+        "confidence.recently_verified" => ("Recently verified", "Verificado há pouco"),
+        "confidence.stale" => ("Stale", "Desatualizado"),
+        "confidence.conflicting" => ("Conflicting", "Conflitante"),
+        "confidence.disputed" => (
+            "Some riders say this spot has changed. The map is not averaged — it shows both sides.",
+            "Alguns ciclistas dizem que esta vaga mudou. O mapa não faz média — mostra os dois lados.",
+        ),
+        "confidence.disputes" => ("disputes:", "disputas:"),
+        "confidence.parked_here_count" => ("Riders who parked here:", "Ciclistas que estacionaram aqui:"),
+
+        // --- Verification (M3 §39) ---------------------------------------
+        "verification.title" => ("Verify this spot", "Verificar esta vaga"),
+        "verification.anonymous" => ("Log in and verify your email to confirm this spot.", "Entre e verifique seu e-mail para confirmar esta vaga."),
+        "verification.saved" => ("Thanks — recorded.", "Obrigado — registrado."),
+        "verify.still_exists" => ("Still exists", "Ainda existe"),
+        "verify.no_longer_exists" => ("No longer exists", "Não existe mais"),
+        "verify.info_changed" => ("Information changed", "Informação mudou"),
+        "verify.parked_here" => ("I parked here", "Estacionei aqui"),
+        "parked.saved" => ("Noted. This helps others spot usage.", "Anotado. Isso ajuda a ver o uso."),
+
+        // --- P3 post-action notices --------------------------------------
+        "details.notice.proposed" => (
+            "Your change has been submitted and will be reviewed by a moderator before it appears.",
+            "Sua mudança foi enviada e será revisada por um moderador antes de aparecer.",
+        ),
+        "details.notice.edited" => ("Your changes were saved.", "Suas alterações foram salvas."),
+        "details.notice.reviewed" => ("Thanks — your review was saved.", "Obrigado — sua avaliação foi salva."),
+        "details.notice.added" => ("The parking spot was added.", "A vaga foi adicionada."),
+
+        // --- P3 recommended because (§105) -------------------------------
+        "details.recommend.title" => ("Recommended because", "Recomendado porque"),
+        "reason.distance" => ("Close to your destination", "Perto do seu destino"),
+        "reason.security" => ("Security attributes", "Itens de segurança"),
+        "reason.rating" => ("Rated by riders", "Avaliado por ciclistas"),
+        "reason.freshness" => ("Recently verified", "Verificado há pouco"),
+        "reason.verification" => ("Confirmed by riders", "Confirmado por ciclistas"),
+
+        // --- Contribution errors -----------------------------------------
+        "contribution.error.not_verified" => (
+            "Verify your email to contribute.",
+            "Verifique seu e-mail para contribuir.",
+        ),
+        "contribution.error.rate_limited" => ("Too many attempts. Try again later.", "Muitas tentativas. Tente novamente mais tarde."),
+        "contribution.error.version_conflict" => (
+            "Someone else recently changed this. We reloaded the latest values — try again.",
+            "Alguém alterou isto recentemente. Recarregamos os valores atuais — tente de novo.",
+        ),
+        "contribution.error.not_found" => ("That spot could not be found.", "Não foi possível encontrar essa vaga."),
+        "contribution.error.invalid" => ("Some fields are missing or invalid.", "Alguns campos estão vazios ou inválidos."),
+        "contribution.error.unauthorized" => ("You cannot perform this action.", "Você não pode fazer isso."),
+        "contribution.error.timezone" => ("Could not determine the timezone from that point.", "Não foi possível determinar o fuso a partir do ponto."),
+        "contribution.error.internal" => ("Something went wrong. Please try again.", "Algo deu errado. Tente novamente."),
+        "contribution.error.generic" => ("Something went wrong.", "Algo deu errado."),
+        "contribution.verify_to" => ("Verify your email to confirm this spot.", "Verifique seu e-mail para confirmar esta vaga."),
+
+        // --- time-ago labels ---------------------------------------------
+        "time.today" => ("today", "hoje"),
+        "time.yesterday" => ("yesterday", "ontem"),
+        "time.days_ago" => ("{n} days ago", "há {n} dias"),
+        "time.months_ago" => ("{n} months ago", "há {n} meses"),
+
+        // --- attribute codes (verification) ------------------------------
+        "attr.name" => ("Name", "Nome"),
+        "attr.address" => ("Address", "Endereço"),
+        "attr.type" => ("Type", "Tipo"),
+        "attr.cost" => ("Cost", "Custo"),
+        "attr.hours" => ("Hours", "Horário"),
+        "attr.security" => ("Security", "Segurança"),
+        "attr.location" => ("Location", "Localização"),
+        "attr.unknown" => ("Details", "Detalhes"),
+
         // Unknown key: a visible marker (all real keys are defined above, so
         // this only appears when a template references a typo'd key).
         _ => ("⟨i18n?⟩", "⟨i18n?⟩"),

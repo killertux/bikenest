@@ -292,6 +292,16 @@ pub enum ModerationState {
 }
 
 impl ModerationState {
+    pub fn as_code(self) -> &'static str {
+        match self {
+            ModerationState::Active => "ACTIVE",
+            ModerationState::PendingReview => "PENDING_REVIEW",
+            ModerationState::Flagged => "FLAGGED",
+            ModerationState::Invalid => "INVALID",
+            ModerationState::Removed => "REMOVED",
+        }
+    }
+
     pub fn from_code(code: &str) -> Result<Self, DomainError> {
         match code {
             "ACTIVE" => Ok(ModerationState::Active),
@@ -369,6 +379,8 @@ pub struct ParkingLocation {
     updated_at: DateTime<Utc>,
     last_meaningful_update_at: Option<DateTime<Utc>>,
     last_verified_at: Option<DateTime<Utc>>,
+    /// Optimistic-concurrency version (§100). Starts at 1; bumped on each applied edit.
+    version: i64,
 }
 
 impl ParkingLocation {
@@ -390,6 +402,7 @@ impl ParkingLocation {
         updated_at: DateTime<Utc>,
         last_meaningful_update_at: Option<DateTime<Utc>>,
         last_verified_at: Option<DateTime<Utc>>,
+        version: i64,
     ) -> Result<Self, DomainError> {
         let name = name.into().trim().to_string();
         if name.is_empty() {
@@ -416,6 +429,7 @@ impl ParkingLocation {
             updated_at,
             last_meaningful_update_at,
             last_verified_at,
+            version,
         })
     }
 
@@ -466,6 +480,9 @@ impl ParkingLocation {
     }
     pub fn last_verified_at(&self) -> Option<DateTime<Utc>> {
         self.last_verified_at
+    }
+    pub fn version(&self) -> i64 {
+        self.version
     }
 
     /// Count of security attributes explicitly confirmed present (§28: yes-state).

@@ -5,24 +5,27 @@
 
 use thiserror::Error;
 
+pub mod auth;
+pub mod community;
 pub mod freshness;
 pub mod hours;
 pub mod parking;
 
+pub use auth::{
+    AccountState, AuthenticationProvider, CsrfToken, Password, PasswordPolicy, ProviderIdentity,
+    Role, SessionId, User, VerificationToken,
+};
+pub use community::{
+    AttributeResult, ChangeKind, Confidence, ExistenceResult, ExistenceSignal, ProposalKind,
+    ProposalStatus, ReviewBody, RevisionSummary, StarRating, VerificationKind, confidence,
+    is_known_attribute_code,
+};
 pub use freshness::{categorize, FreshnessCategory, FreshnessThresholds, DEFAULT_THRESHOLDS};
 pub use hours::{OpeningHours, OpenStatus, TimeRange, hms};
 pub use parking::{
     is_known_security_code, Cost, CurrencyCode, GeoPoint, ModerationState, Money, ParkingLocation,
     ParkingType, PricingUnit, Rating, SecurityFeature, SecurityState, SECURITY_FEATURE_CODES,
 };
-
-/// A registered user of the application.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct User {
-    pub id: UserId,
-    pub email: UserEmail,
-    pub display_name: Option<String>,
-}
 
 /// Database identifier of a user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +43,12 @@ pub enum DomainError {
     InvalidEmail(String),
     #[error("{0}")]
     Invalid(String),
+    #[error("password does not meet the policy")]
+    WeakPassword,
+    #[error("unknown role code: {0}")]
+    InvalidRole(String),
+    #[error("unknown account state code: {0}")]
+    InvalidState(String),
 }
 
 impl UserEmail {
@@ -70,16 +79,6 @@ impl UserEmail {
 impl std::fmt::Display for UserEmail {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
-    }
-}
-
-impl User {
-    pub fn new(id: UserId, email: UserEmail, display_name: Option<String>) -> Self {
-        Self {
-            id,
-            email,
-            display_name,
-        }
     }
 }
 

@@ -358,6 +358,7 @@ fn location(hours: bikenest_domain::OpeningHours) -> ParkingLocation {
         chrono::Utc::now(),
         None,
         Some(chrono::Utc::now() - chrono::Duration::days(10)),
+        1,
     )
     .unwrap()
 }

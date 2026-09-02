@@ -257,6 +257,8 @@ pub struct ParkingBuilder {
     /// Tag stored in `seed_key` so committed fixture rows can be cleaned up
     /// by tag (`seed_key` column, Ledger #13).
     fixture_tag: Option<String>,
+    /// Optimistic-concurrency version (§100). Defaults to 1 for fresh inserts.
+    version: i64,
 }
 
 impl Default for ParkingBuilder {
@@ -278,6 +280,7 @@ impl Default for ParkingBuilder {
             verified_days_ago: Some(5),
             moderation_state: "ACTIVE",
             fixture_tag: None,
+            version: 1,
         }
     }
 }
@@ -383,6 +386,11 @@ impl ParkingBuilder {
         self
     }
 
+    pub fn with_version(mut self, version: i64) -> Self {
+        self.version = version;
+        self
+    }
+
     /// Inserts the location (and hours + security rows) in the test
     /// transaction; returns the domain aggregate.
     pub async fn create(
@@ -413,11 +421,11 @@ impl ParkingBuilder {
                  price_cents, price_currency, price_unit,
                  location, timezone, hours_unknown,
                  rating_avg, rating_count,
-                 created_at, updated_at, last_verified_at, moderation_state, seed_key)
+                 created_at, updated_at, last_verified_at, moderation_state, seed_key, version)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                     ST_SetSRID(ST_MakePoint($10, $9), 4326)::geography,
                     'America/Sao_Paulo', $11, $12, $13,
-                    now(), now(), $14, $15, $16)
+                    now(), now(), $14, $15, $16, $17)
             RETURNING id
             "#,
         )
@@ -437,6 +445,7 @@ impl ParkingBuilder {
         .bind(last_verified_at)
         .bind(self.moderation_state)
         .bind(self.fixture_tag.as_deref())
+        .bind(self.version)
         .fetch_one(&mut *conn)
         .await?;
         let id = row.0;
@@ -517,7 +526,32 @@ impl ParkingBuilder {
             chrono::Utc::now(),
             None,
             last_verified_at,
+            self.version,
         )
         .expect("builder values are valid"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fast test password hasher (M2)
+// ---------------------------------------------------------------------------
+
+use async_trait::async_trait;
+use bikenest_application::{AuthError, PasswordHasher};
+use bikenest_domain::Password;
+
+/// A non-cryptographic password hash for tests. Identical prefixes so `hash` is
+/// trivially verifiable, but it never runs argon2 — web/test suites stay fast.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TestPasswordHasher;
+
+#[async_trait]
+impl PasswordHasher for TestPasswordHasher {
+    async fn hash(&self, pw: &Password) -> Result<String, AuthError> {
+        Ok(format!("test:{}", pw.as_str()))
+    }
+
+    async fn verify(&self, pw: &Password, hash: &str) -> Result<bool, AuthError> {
+        Ok(hash == format!("test:{}", pw.as_str()))
     }
 }

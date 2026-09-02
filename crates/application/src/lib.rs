@@ -6,16 +6,38 @@
 use async_trait::async_trait;
 use bikenest_domain::DomainError;
 
+pub mod audit;
+pub mod auth;
+pub mod community;
+pub mod email;
 pub mod ports;
+pub mod rate_limit;
 pub mod search;
 pub mod storage;
+pub mod timezone;
 
+pub use audit::{AuditError, AuditEvent, AuditLog};
+pub use auth::{
+    AccountRepository, AuthError, AuthenticatedUser, AuthService, Clock, IdentityRecord,
+    LoginOutcome, NewAccount, OAuthProvider, PasswordHasher, ResolvedSession, Session, SessionStore,
+    TokenGenerator, TokenStore,
+};
+pub use email::{EmailError, EmailProvider, OutboundEmail};
 pub use ports::{
     CostFilter, Cursor, Filters, FreshnessConfig, GeoHit, GeocodeError, Geocoder,
     ParkingDetailsReader, ParkingPhotoReader, ParkingSearchReader, ParkingSummary, ReaderError,
     SearchInput, SearchPage, SearchRequest, Sort, StoredPhoto,
 };
+pub use community::{
+    AddParkingLocationOutcome, AttributeSummary, CommunityParkingDetails, ContributionDeps,
+    ContributionError, ContributionHistoryReader, ContributionItem, ContributionService,
+    DuplicateCandidate, FavoriteRepository, NewParkingLocation, NewProposal, NewVerification,
+    ParkingContributionRepository, ParkingEdit, Reason, Review, ReviewRepository,
+    VerificationRepository, recommendation_reasons,
+};
+pub use rate_limit::{RateLimitError, RateLimiter};
 pub use storage::{ObjectStorage, PutObject, StorageError};
+pub use timezone::{TimezoneError, TimezoneResolver};
 pub use search::{
     recommendation_score, DetailsError, GetParkingDetails, ParkingDetailsView, RecommendationConfig,
     SearchError, SearchParking, DEFAULT_RECOMMENDATION_CONFIG,

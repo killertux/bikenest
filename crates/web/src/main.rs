@@ -43,6 +43,26 @@ async fn main() {
                 }
             }
         }
+        // Ledger #10: idempotent, env-driven admin bootstrap (never HTTP).
+        Some("seed-admin") => {
+            db.migrate().await.unwrap_or_else(|err| {
+                eprintln!("migration error: {err}");
+                std::process::exit(1);
+            });
+            match bikenest_infrastructure::seed_admin(&db).await {
+                Ok(bikenest_infrastructure::auth::seed::SeedOutcome::Created) => {
+                    println!("admin account created (Ledger #10)");
+                }
+                Ok(bikenest_infrastructure::auth::seed::SeedOutcome::Updated) => {
+                    println!("admin account updated (Ledger #10)");
+                }
+                Err(err) => {
+                    eprintln!("seed-admin error: {err}");
+                    eprintln!("hint: set ADMIN_EMAIL and ADMIN_PASSWORD in .env and retry");
+                    std::process::exit(1);
+                }
+            }
+        }
         _ => serve(config, db).await,
     }
 }

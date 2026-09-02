@@ -42,7 +42,7 @@ Which `UI_DESIGN.md` pages first ship in each milestone. A page listed under a m
 | M1 | P1 (home), P2 (search), P3 (details), P7 (about) |
 | M2 | A1–A6 (register/login/verify/reset/OAuth), C1 (account overview), C2 (change password), C3 (change email), M5 (user management — role assignment) |
 | M3 | C4 (favorites), C5 (contribution history), D1 (add), D2 (edit/propose), D3 (review), D4 (verify) |
-| M4 | M2 (photo moderation queue); P3 gallery + D1/D3 photo-attach reach full form here |
+| M4 | M2 (photo moderation queue); P3 gallery + D1 photo-attach reach full form here (D3 *review*-photo attach is deferred to M5 — see `plans/m4-photos.md`) |
 | M5 | M1 (moderation dashboard), M3 (reports), M4 (proposals), M6 (audit log); M5 user management gains suspend/restore |
 | M6 | P4 (privacy), P5 (terms), P6 (cookies), C6 (privacy & data), C7 (export status) |
 | M7 | no new pages — hardening, i18n, SEO, security headers applied across all pages |
@@ -182,6 +182,8 @@ domain code list + i18n (migration `0004`); dataset relocated to **Curitiba**; `
   **`PENDING_REVIEW`**; enforce that only `APPROVED` photos are public (already filtered in the
   reader) and that the original is never publicly reachable.
 - Moderation queue page (M2 photo queue) + approve/reject actions; photo-upload rate limiting (§45).
+- **D3 review-photo attach (§38) is deferred to M5** (rides review moderation, which lands there);
+  M4 delivers the location-photo pipeline. See `plans/m4-photos.md` for the full plan and decisions.
 
 **Working app means:** upload a photo → it enters the moderator queue as `PENDING_REVIEW` and is NOT public → moderator approves → the processed derivative shows on the details page; rejection works; a test asserts EXIF metadata is gone and the original is not served.
 
@@ -288,14 +290,16 @@ Bookkeeping for anything temporary, mocked, or knowingly incomplete. **Each entr
 | 1 | Mock parking seed data (`seed-mock`) | mock data | M1 | M7 (gate behind dev flag) | Production must start empty (§116.1). Now 24 **Curitiba** locations + seeded photos. Keep as a dev-only command. |
 | 2 | `FakeGeocoder` | fake | M1 | M7 | Curitiba landmark table + deterministic fallback. Replace with real geocoding provider; keep a fake for tests. |
 | 3 | Mock map tile usage in dev | mock data | M1 | M7 | MapLibre demo tiles. Never point production at public OSM tiles (§83); choose a provider. |
-| 4 | `FakeEmailProvider` (capturing) | fake | M2 | M7 | Replace with SMTP/ESP; keep capture mode for tests. |
+| 4 | Email providers | fake | M2 | M7 | **Generic `EmailProvider` port (§84)**: `fake` (capture + outbox), `smtp` (lettre) and `resend` (API) impls selected via `EMAIL_PROVIDER`. Dev uses **smtp → Mailpit** (docker-compose, UI `:8025`); the `fake` remains for tests. |
 | 5 | `FakeOAuthProvider` (Google stub) | fake/stub | M2 | M7 | Replace with real Google OAuth client + credentials. |
-| 6 | In-memory `RateLimiter` | stub | **M2** (moved earlier from M3, §45) | M7 | Auth limits in M2, contribution limits in M3. Replace with shared/Redis-backed store if multi-instance. |
+| 6 | In-memory `RateLimiter` | stub | **M2** (moved earlier from M3, §45) | M7 | Auth limits in M2; contribution limits (parking/edit/proposal/review/verification/parked-here) in M3. Replace with shared/Redis-backed store if multi-instance. |
 | 7 | `LocalDiskStorage` (local-filesystem `ObjectStorage`) | dev impl | **M1** (moved earlier from M4) | M7 | Signed, expiring `/media` URLs (S3-presign parity). Replace with S3-compatible storage. |
 | 8 | Hardcoded recommendation weights | improve | M1 | M7 | Make configurable in application code (§34). |
-| 9 | Hardcoded freshness thresholds (review-side) | improve | M3 | M7 | Parking-side thresholds are already configurable via `FreshnessConfig` (M1); the review-side ones arrive M3 (§40). |
+| 9 | Hardcoded freshness thresholds (review-side) | improve | M3 | M7 | Parking-side thresholds already configurable via `FreshnessConfig` (M1); the review-side thresholds are now exercised by M3's confidence rule (`Verified`/`RecentlyVerified`/`Stale`). |
 | 10 | `seed-admin` command | improve | M2 | M7 | Ensure idempotent + secret-safe in production. |
 | 11 | Hardcoded user-facing strings | improve | M0 | M7 | **Largely resolved in M1**: catalog + `Accept-Language`/cookie resolution + toggle (§102). M7 = SEO `hreflang` + audit strings added by M2–M6. |
 | 13 | `seed_key` column on `parking_location`/`parking_photo` | mock data support | M1 | M7 (drop when seeder is dev-flag-gated) | Identifies mock rows for idempotent re-seeding and cleanup. |
 | 14 | `MEDIA_SIGNING_SECRET` dev default | improve/secret | M1 | M7 | Local `/media` URL signing uses a dev-insecure default; set a real secret in production. |
 | 15 | CSP ↔ inline Alpine/HTMX interaction | risk | M1 | M7 | Inline `x-data`/`@click` + `hx-boost` need `unsafe-eval`; a strict CSP requires Alpine's CSP build or nonces — decide in M7, don't deepen inline usage meanwhile (§64/§65). |
+| 16 | `OfflineTimezoneResolver` (bundled polygon data) | improve/dev | M3 | M7 | Real offline coordinate→IANA resolver replacing M1's static Curitiba mapping; re-evaluate against a provider reverse-timezone, keep as fallback. |
+| 17 | Confidence-state thresholds + conflict rule hardcoded in domain | improve | M3 | M7 | Make configurable like `FreshnessConfig`; document for tuning (§106). |

@@ -1,0 +1,26 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<div class="mx-auto max-w-shell px-4 py-10 lg:px-8">
+  <h1 class="font-display text-2xl font-bold tracking-tight">{{ tr.t("contrib.title") }}</h1>
+  <p class="mt-2 text-muted">{{ tr.t("contrib.subtitle") }}</p>
+
+  {% if items.is_empty() %}
+    <div class="mt-8 rounded-2xl border border-dashed border-border bg-surface px-6 py-12 text-center">
+      <p class="font-display text-base font-semibold">{{ tr.t("contrib.empty") }}</p>
+      <p class="mx-auto mt-1.5 max-w-sm text-sm text-muted">{{ tr.t("contrib.empty_hint") }}</p>
+    </div>
+  {% else %}
+    <ul class="mt-8 divide-y divide-border">
+      {% for i in items %}
+        <li class="flex items-start justify-between gap-4 py-3">
+          <div>
+            <p class="text-sm font-medium">{{ i.kind_label }} · {{ i.target }}</p>
+            <p class="mt-0.5 text-xs text-muted">{{ i.at_label }}</p>
+          </div>
+          <span class="inline-flex items-center rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-medium text-accent-strong">{{ i.state_label }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</div>
+{% endblock %}

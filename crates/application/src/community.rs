@@ -1,0 +1,881 @@
+//! Community contribution use cases (REQUIREMENTS §35–§42, §45, §100, §106).
+//!
+//! Ports + read models + [`ContributionService`]. Infrastructure implements the
+//! ports; the web layer calls the service for every contribution action. The
+//! verified-email gate (§16), rate limiting (§45), optimistic concurrency (§100)
+//! and the confidence rule (§106) all live here.
+
+use crate::audit::{AuditEvent, AuditLog};
+use crate::auth::Clock;
+use crate::ports::{FreshnessConfig, ParkingDetailsReader, ReaderError};
+use crate::rate_limit::{RateLimitError, RateLimiter};
+use crate::timezone::{TimezoneError, TimezoneResolver};
+use async_trait::async_trait;
+use bikenest_domain::{
+    AttributeResult, Confidence, Cost, ExistenceResult, ExistenceSignal, GeoPoint, OpeningHours,
+    ParkingLocation, ParkingType, ReviewBody, RevisionSummary, SecurityFeature, StarRating, UserId,
+};
+use chrono::{DateTime, Utc};
+use std::time::Duration;
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, thiserror::Error)]
+pub enum ContributionError {
+    /// The session principal has not verified their email (the §16 gate).
+    #[error("verify your email to contribute")]
+    NotVerified,
+    #[error("too many attempts, try again later")]
+    RateLimited,
+    /// Optimistic concurrency (§100): the expected `version` no longer matches.
+    #[error("someone else changed this recently; reload and try again")]
+    VersionConflict,
+    #[error("not found")]
+    NotFound,
+    #[error("invalid input: {0}")]
+    InvalidField(String),
+    #[error("you are not permitted to perform this action")]
+    Unauthorized,
+    #[error("timezone could not be resolved")]
+    Timezone,
+    /// Anything unexpected / storage-side. Never leaks details.
+    #[error("internal error")]
+    Internal,
+}
+
+impl From<RateLimitError> for ContributionError {
+    fn from(_: RateLimitError) -> Self {
+        ContributionError::RateLimited
+    }
+}
+
+impl From<crate::audit::AuditError> for ContributionError {
+    fn from(_: crate::audit::AuditError) -> Self {
+        ContributionError::Internal
+    }
+}
+
+impl From<bikenest_domain::DomainError> for ContributionError {
+    fn from(e: bikenest_domain::DomainError) -> Self {
+        ContributionError::InvalidField(e.to_string())
+    }
+}
+
+impl From<TimezoneError> for ContributionError {
+    fn from(_: TimezoneError) -> Self {
+        ContributionError::Timezone
+    }
+}
+
+impl From<ReaderError> for ContributionError {
+    fn from(_: ReaderError) -> Self {
+        ContributionError::Internal
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Read models
+// ---------------------------------------------------------------------------
+
+/// A new parking location, awaiting persistence. `timezone` is optional — the
+/// service auto-derives it from the pin when absent (override is allowed).
+#[derive(Debug, Clone)]
+pub struct NewParkingLocation {
+    pub name: String,
+    pub address: String,
+    pub description: Option<String>,
+    pub parking_type: ParkingType,
+    pub cost: Cost,
+    pub point: GeoPoint,
+    pub timezone: Option<chrono_tz::Tz>,
+    pub hours: OpeningHours,
+    pub security: Vec<SecurityFeature>,
+}
+
+/// A reversible (non-sensitive) edit to a location (§37).
+#[derive(Debug, Clone)]
+pub struct ParkingEdit {
+    pub name: String,
+    pub address: String,
+    pub description: Option<String>,
+    pub parking_type: ParkingType,
+    pub cost: Cost,
+    pub hours: OpeningHours,
+    pub security: Vec<SecurityFeature>,
+}
+
+/// A gated, sensitive change proposal (§37/§107). `proposed` is a JSONB payload
+/// shaped by `kind`: move_location → `{point, timezone, reason}`;
+/// change_existence → `{existence, reason}`.
+#[derive(Debug, Clone)]
+pub struct NewProposal {
+    pub location_id: i64,
+    pub proposer_id: UserId,
+    pub base_version: i64,
+    pub kind: bikenest_domain::ProposalKind,
+    pub proposed: serde_json::Value,
+}
+
+/// An advisory duplicate candidate (§36). Non-blocking; ranked by
+/// name-similarity + address overlap.
+#[derive(Debug, Clone)]
+pub struct DuplicateCandidate {
+    pub id: i64,
+    pub name: String,
+    pub address: String,
+    pub distance_m: f64,
+    pub similarity: f64,
+}
+
+/// A review as read from the store (only `ACTIVE` rows are ever returned).
+#[derive(Debug, Clone)]
+pub struct Review {
+    pub id: i64,
+    pub location_id: i64,
+    pub author: UserId,
+    pub rating: StarRating,
+    pub body: ReviewBody,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Per-attribute verification tallies (§39 / §106 — disputes shown, never averaged).
+#[derive(Debug, Clone)]
+pub struct AttributeSummary {
+    pub code: String,
+    pub correct: i64,
+    pub incorrect: i64,
+}
+
+/// A verification signal to record, typed so the service can validate + choose
+/// the rate-limit key and (for `still_exists`) trigger the freshness update.
+#[derive(Debug, Clone)]
+pub enum NewVerification {
+    Existence {
+        location_id: i64,
+        user_id: UserId,
+        result: ExistenceResult,
+    },
+    Attribute {
+        location_id: i64,
+        user_id: UserId,
+        code: String,
+        result: AttributeResult,
+    },
+    ParkedHere {
+        location_id: i64,
+        user_id: UserId,
+    },
+}
+
+impl NewVerification {
+    pub fn location_id(&self) -> i64 {
+        match self {
+            NewVerification::Existence { location_id, .. }
+            | NewVerification::Attribute { location_id, .. }
+            | NewVerification::ParkedHere { location_id, .. } => *location_id,
+        }
+    }
+    pub fn user_id(&self) -> UserId {
+        match self {
+            NewVerification::Existence { user_id, .. }
+            | NewVerification::Attribute { user_id, .. }
+            | NewVerification::ParkedHere { user_id, .. } => *user_id,
+        }
+    }
+    pub fn is_parked_here(&self) -> bool {
+        matches!(self, NewVerification::ParkedHere { .. })
+    }
+    /// Whether this positive existence confirmation should refresh freshness.
+    pub fn is_still_exists(&self) -> bool {
+        matches!(
+            self,
+            NewVerification::Existence {
+                result: ExistenceResult::StillExists,
+                ..
+            }
+        )
+    }
+}
+
+/// One row of the C5 contribution-history feed.
+#[derive(Debug, Clone)]
+pub struct ContributionItem {
+    /// "added" | "edited" | "proposed" | "reviewed" | "verified" | "favorited"
+    pub kind: String,
+    /// The affected location name (or id when a name is unavailable).
+    pub target: String,
+    /// A machine code for the current state: "active" | "pending" | "history"…
+    pub state: String,
+    pub at: DateTime<Utc>,
+}
+
+/// The extended P3 detail view (reviews, confidence, verification, favorite,
+/// recommendation explanation) produced by [`ContributionService::community_details`].
+#[derive(Debug, Clone)]
+pub struct CommunityParkingDetails {
+    pub location: ParkingLocation,
+    pub reviews: Vec<Review>,
+    pub confidence: Confidence,
+    pub disputed: bool,
+    pub attribute_summary: Vec<AttributeSummary>,
+    pub parked_here_count: i64,
+    pub is_favorited: bool,
+    pub own_review: Option<Review>,
+    pub own_verification: Option<ExistenceSignal>,
+    pub reasons: Vec<Reason>,
+}
+
+/// One reason in the "recommended because…" block (§105). Only positive
+/// factors are ever surfaced; missing data yields no claim.
+#[derive(Debug, Clone)]
+pub struct Reason {
+    /// "distance" | "security" | "rating" | "freshness" | "verification"
+    pub factor: &'static str,
+    /// i18n key resolved by the web layer.
+    pub label_key: &'static str,
+    /// Location-specific detail (e.g. "350 m", "4.5", "3 security features").
+    pub detail: String,
+}
+
+/// Outcome of [`ContributionService::add_parking_location`]: the new id plus
+/// the advisory duplicate warnings the handler surfaces.
+#[derive(Debug, Clone)]
+pub struct AddParkingLocationOutcome {
+    pub id: i64,
+    pub duplicates: Vec<DuplicateCandidate>,
+}
+
+// ---------------------------------------------------------------------------
+// Ports
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+pub trait ParkingContributionRepository: Send + Sync {
+    async fn get_for_edit(&self, id: i64) -> Result<Option<ParkingLocation>, ContributionError>;
+    /// Insert the location (+ security + revision v1) in one transaction.
+    async fn create(
+        &self,
+        new: &NewParkingLocation,
+        creator: UserId,
+        now: DateTime<Utc>,
+    ) -> Result<i64, ContributionError>;
+    /// Atomic optimistic apply: `UPDATE … WHERE id = $ AND version = $expected`
+    /// bumps `version` and writes the revision. 0 rows → `VersionConflict`.
+    async fn apply_edit(
+        &self,
+        id: i64,
+        expected_version: i64,
+        edit: &ParkingEdit,
+        editor: UserId,
+        now: DateTime<Utc>,
+    ) -> Result<i64, ContributionError>;
+    async fn create_proposal(&self, p: &NewProposal) -> Result<i64, ContributionError>;
+    async fn revision_history(&self, id: i64) -> Result<Vec<RevisionSummary>, ContributionError>;
+    async fn duplicate_candidates(
+        &self,
+        point: GeoPoint,
+        name: &str,
+    ) -> Result<Vec<DuplicateCandidate>, ContributionError>;
+}
+
+#[async_trait]
+pub trait ReviewRepository: Send + Sync {
+    /// Insert-or-update + append `review_revision` + recompute the location
+    /// rating aggregate, all in one transaction.
+    async fn upsert_review(
+        &self,
+        location_id: i64,
+        author: UserId,
+        rating: StarRating,
+        body: &ReviewBody,
+    ) -> Result<(), ContributionError>;
+    async fn find_own(
+        &self,
+        location_id: i64,
+        author: UserId,
+    ) -> Result<Option<Review>, ContributionError>;
+    /// Only `ACTIVE` reviews are public.
+    async fn list_active(&self, location_id: i64) -> Result<Vec<Review>, ContributionError>;
+}
+
+#[async_trait]
+pub trait VerificationRepository: Send + Sync {
+    /// `now` is supplied (from the service's `Clock`) so `expires_at` and the
+    /// freshness update use one deterministic timestamp.
+    async fn record(&self, signal: &NewVerification, now: DateTime<Utc>) -> Result<(), ContributionError>;
+    /// Latest existence verification per user (deduped), ordered by time.
+    async fn latest_existence_per_user(
+        &self,
+        location_id: i64,
+    ) -> Result<Vec<ExistenceSignal>, ContributionError>;
+    async fn attribute_summary(
+        &self,
+        location_id: i64,
+    ) -> Result<Vec<AttributeSummary>, ContributionError>;
+    async fn parked_here_count(&self, location_id: i64) -> Result<i64, ContributionError>;
+    async fn mark_verified_at(
+        &self,
+        location_id: i64,
+        at: DateTime<Utc>,
+    ) -> Result<(), ContributionError>;
+}
+
+#[async_trait]
+pub trait FavoriteRepository: Send + Sync {
+    /// Returns `true` when the location is now favorited.
+    async fn toggle(&self, user: UserId, location_id: i64) -> Result<bool, ContributionError>;
+    async fn is_favorited(&self, user: UserId, location_id: i64) -> Result<bool, ContributionError>;
+    /// Location ids (the web layer joins to cards).
+    async fn list(&self, user: UserId) -> Result<Vec<i64>, ContributionError>;
+}
+
+/// C5 read-model: aggregate all of a user's contributions into one feed.
+#[async_trait]
+pub trait ContributionHistoryReader: Send + Sync {
+    async fn history(&self, user: UserId) -> Result<Vec<ContributionItem>, ContributionError>;
+}
+
+// ---------------------------------------------------------------------------
+// Recommendation explanation (§105)
+// ---------------------------------------------------------------------------
+
+/// Build the "recommended because…" reasons for a single summary row. Shares the
+/// sub-score logic with [`recommendation_score`], so the explanation and the
+/// numeric sort never disagree. Only **positive** factors are surfaced;
+/// missing/neutral data → the factor is omitted (never a fabricated claim).
+#[allow(clippy::too_many_arguments)]
+pub fn recommendation_reasons(
+    item: &crate::ports::ParkingSummary,
+    radius_m: u32,
+    origin: Option<GeoPoint>,
+    now: DateTime<Utc>,
+    freshness: &FreshnessConfig,
+) -> Vec<Reason> {
+    let mut reasons = Vec::new();
+
+    // Distance — only surfaces when the request carries an origin (§105).
+    if origin.is_some() {
+        let d = (item.distance_m / radius_m as f64).clamp(0.0, 1.0);
+        let distance_score = 1.0 - d;
+        // "Positive" = closer than the radius boundary would suggest.
+        if distance_score >= 0.4 {
+            reasons.push(Reason {
+                factor: "distance",
+                label_key: "reason.distance",
+                detail: distance_label(item.distance_m),
+            });
+        }
+    }
+
+    let yes = item.security_yes.len() as f64;
+    if yes > 0.0 {
+        reasons.push(Reason {
+            factor: "security",
+            label_key: "reason.security",
+            detail: format!("{yes}"),
+        });
+    }
+
+    if let Some(avg) = item.rating.avg()
+        && avg >= 3.5
+    {
+        reasons.push(Reason {
+            factor: "rating",
+            label_key: "reason.rating",
+            detail: format!("{avg:.1}"),
+        });
+    }
+
+    let cat = bikenest_domain::categorize(
+        item.last_verified_at,
+        now,
+        &freshness.thresholds,
+    );
+    match cat {
+        bikenest_domain::FreshnessCategory::Fresh
+        | bikenest_domain::FreshnessCategory::RecentlyVerified => {
+            reasons.push(Reason {
+                factor: "freshness",
+                label_key: "reason.freshness",
+                detail: String::new(),
+            });
+        }
+        _ => {}
+    }
+
+    if item.last_verified_at.is_some() {
+        reasons.push(Reason {
+            factor: "verification",
+            label_key: "reason.verification",
+            detail: String::new(),
+        });
+    }
+
+    reasons
+}
+
+fn distance_label(m: f64) -> String {
+    if m < 1000.0 {
+        format!("{m:.0} m")
+    } else {
+        format!("{:.1} km", m / 1000.0)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rate-limit defaults (§45). Keys are `contribution:{kind}:user:{id}` and, for
+// parking-create, `:ip:{ip}`. Documented for M7 tuning (Ledger #6).
+// ---------------------------------------------------------------------------
+
+const PARKING_CREATE_USER_LIMIT: u32 = 5;
+const PARKING_CREATE_IP_LIMIT: u32 = 10;
+const EDIT_USER_LIMIT: u32 = 15;
+const PROPOSAL_USER_LIMIT: u32 = 5;
+const REVIEW_USER_LIMIT: u32 = 10;
+const VERIFICATION_USER_LIMIT: u32 = 30;
+const PARKED_HERE_USER_LIMIT: u32 = 20;
+
+const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+const HOUR: Duration = Duration::from_secs(60 * 60);
+
+// ---------------------------------------------------------------------------
+// ContributionService
+// ---------------------------------------------------------------------------
+
+/// Everything the contribution use cases depend on, bundled for construction.
+pub struct ContributionDeps {
+    pub tz: Box<dyn TimezoneResolver>,
+    pub details: Box<dyn ParkingDetailsReader>,
+    pub contributions: Box<dyn ParkingContributionRepository>,
+    pub reviews: Box<dyn ReviewRepository>,
+    pub verifications: Box<dyn VerificationRepository>,
+    pub favorites: Box<dyn FavoriteRepository>,
+    pub history: Box<dyn ContributionHistoryReader>,
+    pub rate_limiter: Box<dyn RateLimiter>,
+    pub audit: Box<dyn AuditLog>,
+    pub clock: Box<dyn Clock>,
+    pub freshness: FreshnessConfig,
+}
+
+pub struct ContributionService {
+    deps: ContributionDeps,
+}
+
+impl ContributionService {
+    pub fn new(deps: ContributionDeps) -> Self {
+        Self { deps }
+    }
+
+    fn now(&self) -> DateTime<Utc> {
+        self.deps.clock.now()
+    }
+
+    fn require_verified(&self, user: &crate::auth::AuthenticatedUser) -> Result<(), ContributionError> {
+        if user.is_verified {
+            Ok(())
+        } else {
+            Err(ContributionError::NotVerified)
+        }
+    }
+
+    async fn allowed(
+        &self,
+        key: &str,
+        limit: u32,
+        window: Duration,
+    ) -> Result<(), ContributionError> {
+        if self.deps.rate_limiter.check(key, limit, window).await? {
+            Ok(())
+        } else {
+            Err(ContributionError::RateLimited)
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Add / edit / propose (§35–§37)
+    // -----------------------------------------------------------------------
+
+    pub async fn add_parking_location(
+        &self,
+        user: &crate::auth::AuthenticatedUser,
+        ip: &str,
+        mut input: NewParkingLocation,
+    ) -> Result<AddParkingLocationOutcome, ContributionError> {
+        self.require_verified(user)?;
+        self.allowed(
+            &format!("contribution:parking-create:user:{}", user.id.0),
+            PARKING_CREATE_USER_LIMIT,
+            DAY,
+        )
+        .await?;
+        self.allowed(
+            &format!("contribution:parking-create:ip:{ip}"),
+            PARKING_CREATE_IP_LIMIT,
+            DAY,
+        )
+        .await?;
+
+        validate_name_address(&input.name, &input.address)?;
+        // Auto-derive the timezone when the form did not provide one (§29).
+        if input.timezone.is_none() {
+            input.timezone = Some(self.deps.tz.resolve(input.point).await?);
+        }
+
+        // Advisory duplicate detection (§36) — warnings, never a blocker.
+        let duplicates = self
+            .deps
+            .contributions
+            .duplicate_candidates(input.point, &input.name)
+            .await?;
+
+        let id = self
+            .deps
+            .contributions
+            .create(&input, user.id, self.now())
+            .await?;
+        self.audit(
+            Some(user.id),
+            "parking.created",
+            "parking_location",
+            id.to_string(),
+            serde_json::json!({ "name": input.name }),
+        )
+        .await?;
+
+        Ok(AddParkingLocationOutcome { id, duplicates })
+    }
+
+    /// Applies a reversible edit with optimistic concurrency (§100). The web
+    /// layer routes sensitive changes (move / removal) to [`Self::propose_location_change`]
+    /// separately, so the typed [`ParkingEdit`] cannot express them.
+    pub async fn apply_parking_edit(
+        &self,
+        user: &crate::auth::AuthenticatedUser,
+        id: i64,
+        expected_version: i64,
+        edit: &ParkingEdit,
+    ) -> Result<i64, ContributionError> {
+        self.require_verified(user)?;
+        self.allowed(
+            &format!("contribution:edit:user:{}", user.id.0),
+            EDIT_USER_LIMIT,
+            HOUR,
+        )
+        .await?;
+        validate_name_address(&edit.name, &edit.address)?;
+
+let new_version = self
+            .deps
+            .contributions
+            .apply_edit(id, expected_version, edit, user.id, self.now())
+            .await?;
+        self.audit(
+            Some(user.id),
+            "parking.edited",
+            "parking_location",
+            id.to_string(),
+            serde_json::json!({ "version": new_version }),
+        )
+        .await?;
+        Ok(new_version)
+    }
+
+    /// Creates a `PENDING` sensitive-change proposal. No live change (§37/§107).
+    pub async fn propose_location_change(
+        &self,
+        user: &crate::auth::AuthenticatedUser,
+        id: i64,
+        kind: bikenest_domain::ProposalKind,
+        proposed: serde_json::Value,
+    ) -> Result<i64, ContributionError> {
+        self.require_verified(user)?;
+        self.allowed(
+            &format!("contribution:proposal:user:{}", user.id.0),
+            PROPOSAL_USER_LIMIT,
+            HOUR,
+        )
+        .await?;
+
+        let current = self
+            .deps
+            .contributions
+            .get_for_edit(id)
+            .await?
+            .ok_or(ContributionError::NotFound)?;
+
+        let proposal = NewProposal {
+            location_id: id,
+            proposer_id: user.id,
+            base_version: current.version(),
+            kind,
+            proposed,
+        };
+        let proposal_id = self.deps.contributions.create_proposal(&proposal).await?;
+        self.audit(
+            Some(user.id),
+            "parking.proposal_created",
+            "parking_proposal",
+            proposal_id.to_string(),
+            serde_json::json!({ "kind": kind.as_code() }),
+        )
+        .await?;
+        Ok(proposal_id)
+    }
+
+    // -----------------------------------------------------------------------
+    // Reviews (§38)
+    // -----------------------------------------------------------------------
+
+    pub async fn upsert_review(
+        &self,
+        user: &crate::auth::AuthenticatedUser,
+        location_id: i64,
+        rating: StarRating,
+        body: &ReviewBody,
+    ) -> Result<(), ContributionError> {
+        self.require_verified(user)?;
+        self.allowed(
+            &format!("contribution:review:user:{}", user.id.0),
+            REVIEW_USER_LIMIT,
+            HOUR,
+        )
+        .await?;
+
+        let existed = self
+            .deps
+            .reviews
+            .find_own(location_id, user.id)
+            .await?
+            .is_some();
+        self.deps
+            .reviews
+            .upsert_review(location_id, user.id, rating, body)
+            .await?;
+        let action = if existed { "review.edited" } else { "review.created" };
+        self.audit(
+            Some(user.id),
+            action,
+            "review",
+            location_id.to_string(),
+            serde_json::json!({ "rating": rating.value() }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Verification (§39/§41)
+    // -----------------------------------------------------------------------
+
+    pub async fn record_verification(
+        &self,
+        user: &crate::auth::AuthenticatedUser,
+        signal: &NewVerification,
+    ) -> Result<(), ContributionError> {
+        self.require_verified(user)?;
+        let (key, limit) = if signal.is_parked_here() {
+            (
+                format!("contribution:parked-here:user:{}", user.id.0),
+                PARKED_HERE_USER_LIMIT,
+            )
+        } else {
+            (
+                format!("contribution:verification:user:{}", user.id.0),
+                VERIFICATION_USER_LIMIT,
+            )
+        };
+        self.allowed(&key, limit, HOUR).await?;
+
+        let is_still_exists = signal.is_still_exists();
+        let location_id = signal.location_id();
+        self.deps.verifications.record(signal, self.now()).await?;
+        // A positive existence confirmation is the freshness source (§106).
+        if is_still_exists {
+            self.deps
+                .verifications
+                .mark_verified_at(location_id, self.now())
+                .await?;
+        }
+        self.audit(
+            Some(user.id),
+            "verification.recorded",
+            "parking_location",
+            location_id.to_string(),
+            serde_json::json!({ "kind": signal_kind_code(signal) }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Favorites (§42) — authenticated (any logged-in), not necessarily verified.
+    // -----------------------------------------------------------------------
+
+    pub async fn toggle_favorite(
+        &self,
+        user: UserId,
+        location_id: i64,
+    ) -> Result<bool, ContributionError> {
+        self.deps.favorites.toggle(user, location_id).await
+    }
+
+    pub async fn list_favorites(&self, user: UserId) -> Result<Vec<i64>, ContributionError> {
+        self.deps.favorites.list(user).await
+    }
+
+    pub async fn contribution_history(
+        &self,
+        user: UserId,
+    ) -> Result<Vec<ContributionItem>, ContributionError> {
+        self.deps.history.history(user).await
+    }
+
+    // -----------------------------------------------------------------------
+    // Extended P3 details (§24 + reviews/confidence/favorite/explanation)
+    // -----------------------------------------------------------------------
+
+    /// Loads a location with its community view: reviews, confidence
+    /// (+ disuse disputes), verification panel, favorite state, own-review/own-
+    /// verification, and the "recommended because…" reasons (§105 — no origin on
+    /// the details page, so the distance factor is omitted).
+    pub async fn community_details(
+        &self,
+        id: i64,
+        viewer: Option<UserId>,
+    ) -> Result<Option<CommunityParkingDetails>, ContributionError> {
+        let Some(location) = self.deps.details.details(id).await? else {
+            return Ok(None);
+        };
+
+        let now = self.now();
+
+        let reviews = self.deps.reviews.list_active(id).await?;
+        let signals = self.deps.verifications.latest_existence_per_user(id).await?;
+        let confidence = bikenest_domain::confidence(&signals, now, &self.deps.freshness.thresholds);
+        let attribute_summary = self.deps.verifications.attribute_summary(id).await?;
+        let parked_here_count = self.deps.verifications.parked_here_count(id).await?;
+        let has_attribute_dispute = attribute_summary.iter().any(|a| a.incorrect > 0);
+        let has_info_changed = signals.iter().any(|s| s.result == ExistenceResult::InfoChanged);
+        let disputed = has_attribute_dispute || has_info_changed;
+
+        let own_review = match viewer {
+            Some(v) => self.deps.reviews.find_own(id, v).await?,
+            None => None,
+        };
+        let own_verification = viewer.and_then(|v| {
+            signals
+                .iter()
+                .find(|s| s.user == v)
+                .cloned()
+        });
+        let is_favorited = match viewer {
+            Some(v) => self.deps.favorites.is_favorited(v, id).await?,
+            None => false,
+        };
+
+        // Recommendation explanation from a summary with no origin (distance
+        // factor omitted). Page with origin rendering is C4/search territory.
+        let summary = summary_of(&location, &reviews);
+        let reasons = recommendation_reasons(
+            &summary,
+            crate::ports::DEFAULT_RADIUS_M,
+            None,
+            now,
+            &self.deps.freshness,
+        );
+
+        Ok(Some(CommunityParkingDetails {
+            location,
+            reviews,
+            confidence,
+            disputed,
+            attribute_summary,
+            parked_here_count,
+            is_favorited,
+            own_review,
+            own_verification,
+            reasons,
+        }))
+    }
+
+    async fn audit(
+        &self,
+        actor: Option<UserId>,
+        action: &str,
+        target_type: &str,
+        target_id: impl Into<String>,
+        metadata: serde_json::Value,
+    ) -> Result<(), ContributionError> {
+        self.deps
+            .audit
+            .record(AuditEvent::new(
+                actor,
+                action,
+                target_type,
+                target_id,
+                "success",
+                metadata,
+            ))
+            .await?;
+        Ok(())
+    }
+}
+
+fn validate_name_address(name: &str, address: &str) -> Result<(), ContributionError> {
+    if name.trim().is_empty() {
+        return Err(ContributionError::InvalidField("name is required".to_string()));
+    }
+    if address.trim().is_empty() {
+        return Err(ContributionError::InvalidField("address is required".to_string()));
+    }
+    Ok(())
+}
+
+fn signal_kind_code(signal: &NewVerification) -> &'static str {
+    match signal {
+        NewVerification::Existence { .. } => "existence",
+        NewVerification::Attribute { .. } => "attribute",
+        NewVerification::ParkedHere { .. } => "parked_here",
+    }
+}
+
+fn summary_of(
+    location: &ParkingLocation,
+    reviews: &[Review],
+) -> crate::ports::ParkingSummary {
+    let rating = bikenest_domain::Rating::new(
+        if reviews.is_empty() {
+            None
+        } else {
+            Some(
+                reviews.iter().map(|r| f64::from(r.rating.value())).sum::<f64>()
+                    / reviews.len() as f64,
+            )
+        },
+        reviews.len() as i64,
+    )
+    .unwrap_or_else(|_| bikenest_domain::Rating::new(None, 0).unwrap());
+    crate::ports::ParkingSummary {
+        id: location.id(),
+        name: location.name().to_string(),
+        address: location.address().to_string(),
+        parking_type: location.parking_type(),
+        cost: location.cost().clone(),
+        point: *location.point(),
+        distance_m: 0.0,
+        security_yes: location
+            .security()
+            .iter()
+            .filter(|f| f.state() == bikenest_domain::SecurityState::Yes)
+            .map(|f| f.code().to_string())
+            .collect(),
+        rating,
+        last_verified_at: location.last_verified_at(),
+        timezone: location.timezone(),
+        is_open_now: false,
+        photo_key: None,
+    }
+}

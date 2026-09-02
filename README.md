@@ -8,6 +8,8 @@ A community-maintained bicycle parking finder. See `REQUIREMENTS.md` (what/how),
 
 - [x] **M0** walking skeleton (health/readiness, migrations, real-Postgres test harness, Tailwind pipeline)
 - [x] **M1** core search & map (read-only): the full read-only product loop over mock data
+- [x] **M2** accounts & authentication: register → verify → log in/out; seeded admin; sessions + CSRF; roles
+- [x] **M3** community contributions: verified users add/edit/propose/review/verify/favorite; field-level history + optimistic concurrency; confidence (§106)
 
 ### M1 — core search & map (read-only)
 
@@ -18,6 +20,24 @@ A community-maintained bicycle parking finder. See `REQUIREMENTS.md` (what/how),
 - [x] `seed-mock` dev command: 24 deterministic **Curitiba** locations + photos (Ledger #1/#7)
 - [x] `FakeGeocoder` (Curitiba landmarks + deterministic fallback, Ledger #2); MapLibre demo tiles (Ledger #3)
 - [x] htmx 4 (+ `hx-boost`, `hx-alpine-compat`) / Alpine / MapLibre vendored locally (no CDN)
+
+### M2 — accounts & authentication
+
+- [x] Schema: `authentication_identities`, `sessions`, `email_verification_tokens`, `password_reset_tokens`, `user_roles`, `audit_events`; `users` carries the account lifecycle (`account_state`, `email_verified_at`, `suspended_at`)
+- [x] Domain: `AccountState`, `Role`, `AuthenticationProvider`, `Password`/`PasswordPolicy`, `SessionId`/`CsrfToken`/`VerificationToken` value objects
+- [x] Password hashing **argon2id** (OWASP params); server-side sessions (`HttpOnly`/`Secure`/`SameSite=Lax`, SHA-256 hashed at rest); **CSRF** synchronizer token
+- [x] Register → verify email (captured fake email) → log in/out; password reset; change password/email
+- [x] Google OAuth behind the `AuthenticationProvider` port (`FakeOAuthProvider`, **Ledger #5**)
+- [x] `seed-admin` command (**Ledger #10**) + audited `GrantRole`/`RevokeRole`; deny-by-default authorization (§19)
+- [x] **Rate limiting** on login/register/reset/resend (§45, **Ledger #6**); no-account-existence leak (§45)
+
+### M3 — community contributions
+
+- [x] Schema: `parking_location` gains `version` (optimistic concurrency) + `creator_id`; `parking_revision` (immutable field-level history, JSONB after-state snapshots); `parking_proposal` (PENDING sensitive changes); `review` + `review_revision` (five-star, one per user per location, history preserved); `verification` (existence/attribute/parked-here, `parked_here` expires); `favorite`
+- [x] Domain: `StarRating`/`ReviewBody`/`VerificationKind`/`ExistenceResult`/`AttributeResult`/`ProposalKind`/`ProposalStatus`/`ChangeKind`/`Confidence` + the pure confidence-resolution rule (§106)
+- [x] Application: `TimezoneResolver` port + `OfflineTimezoneResolver` (Ledger #16); contribution ports + `ContributionService` (verified gate, §45 rate limits, advisory duplicate detection, §100 version conflicts); `RecommendationExplanation` (§105, same sub-scores as the M1 scorer)
+- [x] Infrastructure: `SqlxParkingContributionRepository` (optimistic apply + revision), `SqlxReviewRepository` (recompute aggregate in-tx), `SqlxVerificationRepository` (`DISTINCT ON` latest-per-user), `SqlxFavoriteRepository`, `SqlxContributionHistoryReader`
+- [x] Web: D1 add, D2 edit + gated proposal, D3 review, D4 verify/parked-here, favorite toggle; C4 favorites, C5 contributions; `require_verified` gate; P3 gains reviews / confidence / favorite / verification panel / "recommended because…"; HTMX + i18n (en/pt-BR)
 
 ### Pulled forward from later milestones
 
@@ -31,7 +51,7 @@ A community-maintained bicycle parking finder. See `REQUIREMENTS.md` (what/how),
 - [x] Security-attribute labels are a hardcoded code list (`bikenest_domain::SECURITY_FEATURE_CODES`)
       + i18n labels, not a DB catalog table (so labels are localizable).
 
-- [x] 62 tests green: **domain 18, application 13, infrastructure 22, web 9**
+- [x] 140 tests green: **domain 40, application 32, infrastructure 40, web 28**
 
 ### Foundations (M0)
 
@@ -77,11 +97,23 @@ npm run build:css              # Tailwind 4.3 → web/static/css/app.css
 # The DB must be running before `cargo build` — SQLx compile-time query checking
 # reads DATABASE_URL from .env.
 cargo run -- seed-mock         # mock data (dev only)
+
+# Seed an admin user (Ledger #10): set ADMIN_EMAIL/ADMIN_PASSWORD in .env first.
+cargo run -- seed-admin
+
 cargo run                      # default command; serves on BIND_ADDR (:8080)
 
 curl localhost:8080/healthz    # → 200 ok
 curl localhost:8080/readyz     # → 200 {"status":"ready","database":"up"}
 ```
+
+**Email in dev.** The `EmailProvider` port is selected by `EMAIL_PROVIDER`
+(`fake | smtp | resend`; **Ledger #4**). Dev uses **smtp → Mailpit** (already in
+docker-compose): `docker compose up -d mailpit`, then open
+`http://localhost:8025` to view and audit every sent email. The `fake` provider
+instead writes captures to `<MEDIA_ROOT>/outbox/` and `tracing::info!`-logs them.
+`/auth/google` uses the `FakeOAuthProvider` stub (**Ledger #5**) — no Google
+credentials needed.
 
 ### Environment
 
@@ -91,6 +123,13 @@ curl localhost:8080/readyz     # → 200 {"status":"ready","database":"up"}
 - `BIND_ADDR` — HTTP bind address (default `0.0.0.0:8080`).
 - `MEDIA_ROOT` — object-storage directory (default `<repo>/media`, gitignored).
 - `MEDIA_SIGNING_SECRET` — signs the expiring `/media` GET URLs (set a real secret outside dev).
+- `BASE_URL` — builds emailed verification/reset links (default `http://localhost:8080`).
+- `EMAIL_PROVIDER` — `fake | smtp | resend` (default `fake`). Dev uses `smtp`.
+- `EMAIL_FROM` — envelope sender for every email.
+- `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_TLS` — SMTP backend (Mailpit: `localhost:1025`, no TLS/auth).
+- `RESEND_API_KEY` / `RESEND_FROM` — Resend API backend.
+- `ADMIN_EMAIL` / `ADMIN_PASSWORD` — `seed-admin` bootstrap (Ledger #10; password must be 8+ chars).
+- `FAKE_OAUTH_EMAIL` / `FAKE_OAUTH_SUB` — deterministic `FakeOAuthProvider` dev identity (Ledger #5).
 
 ### Reset local data
 

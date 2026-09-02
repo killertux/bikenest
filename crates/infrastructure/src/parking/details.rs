@@ -40,6 +40,7 @@ struct LocationRow {
     updated_at: chrono::DateTime<chrono::Utc>,
     last_meaningful_update_at: Option<chrono::DateTime<chrono::Utc>>,
     last_verified_at: Option<chrono::DateTime<chrono::Utc>>,
+    version: i64,
 }
 
 struct HoursRow {
@@ -64,7 +65,7 @@ impl ParkingDetailsReader for SqlxParkingDetailsReader {
                    price_currency, price_unit, COALESCE(lat, 0) AS lat, COALESCE(lon, 0) AS lon,
                    timezone, hours_unknown,
                    rating_avg::float8 AS rating_avg, rating_count, moderation_state,
-                   created_at, updated_at, last_meaningful_update_at, last_verified_at
+                   created_at, updated_at, last_meaningful_update_at, last_verified_at, version
             FROM parking_location
             WHERE id = $1
             "#,
@@ -181,6 +182,7 @@ fn to_domain(
         row.updated_at,
         row.last_meaningful_update_at,
         row.last_verified_at,
+        row.version,
     )
     .map_err(|e| ReaderError::Unexpected(e.to_string()))
 }

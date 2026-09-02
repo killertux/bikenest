@@ -35,6 +35,11 @@ services:
       # is the mounted /app/media; the signing secret is dev-only here.
       MEDIA_ROOT: /app/media
       MEDIA_SIGNING_SECRET: dev-compose-media-secret
+      # Email: the app uses SMTP in dev, delivering to Mailpit (see below).
+      EMAIL_PROVIDER: smtp
+      EMAIL_FROM: BikeNest <no-reply@bikenest.local>
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
     ports:
       - "8080:8080"
     volumes:
@@ -44,6 +49,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     # NOTE: literal block (|) with the `cargo watch` invocation on ONE physical
     # line. A folded (>) block keeps extra-indented lines as newlines, which in
     # sh would terminate `exec cargo watch` before its flags — cargo-watch would
@@ -81,6 +88,15 @@ services:
         npm run build:assets &&
         npm run watch:css
       "
+
+  # Mailpit (dev): SMTP sink + web UI so every sent email is viewable and
+  # auditable. The app (EMAIL_PROVIDER=smtp) delivers here via SMTP_HOST:mailpit.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: bikenest-mailpit
+    ports:
+      - "1025:1025"   # SMTP relay (what the app connects to)
+      - "8025:8025"   # web UI: http://localhost:8025
 
 volumes:
   bikenest-pgdata:

@@ -1,5 +1,6 @@
 //! BikeNest web crate: axum routing, handlers, Askama templates.
 
+pub mod auth;
 pub mod http;
 pub mod i18n;
 pub mod view;
@@ -8,10 +9,40 @@ use askama::Template;
 use bikenest_application::ParkingDetailsView;
 use i18n::Translator;
 
-/// Base layout data shared by all pages. `current` drives the active nav item.
+/// Base layout data shared by all pages. `current` drives the active nav item;
+/// `csrf` is the per-session synchronizer token (empty when anonymous) — rendered
+/// into the `<meta name="csrf">` tag the CSRF middleware / htmx reads.
 pub struct PageLayout {
     pub title: String,
     pub current: String,
+    pub csrf: String,
+}
+
+impl PageLayout {
+    /// A public page layout (no CSRF token).
+    pub fn new(title: String, current: &str) -> Self {
+        Self {
+            title,
+            current: current.to_string(),
+            csrf: String::new(),
+        }
+    }
+
+    /// A layout carrying the session's CSRF token (for authenticated forms).
+    pub fn with_csrf(title: String, current: &str, csrf: String) -> Self {
+        Self {
+            title,
+            current: current.to_string(),
+            csrf,
+        }
+    }
+
+    /// Set (or overwrite) the CSRF token on an existing layout (for pages whose
+    /// `current`/`title` are computed elsewhere, e.g. details).
+    pub fn csrf(mut self, csrf: String) -> Self {
+        self.csrf = csrf;
+        self
+    }
 }
 
 /// Error page (E1/E2), styled via Tailwind tokens.
@@ -114,6 +145,21 @@ pub struct DetailsPage {
     /// Approved location photos (presigned URLs), empty when none yet (P3
     /// gallery / M4 pipeline).
     pub gallery: Vec<PhotoVm>,
+    // --- M3 community additions ---
+    pub reviews: Vec<view::ReviewVm>,
+    pub confidence_code: &'static str,
+    pub confidence_label: String,
+    pub disputed: bool,
+    pub dispute_items: Vec<view::AttrDisputeVm>,
+    pub parked_here_count: i64,
+    pub is_favorited: bool,
+    pub can_contribute: bool,
+    pub is_authenticated: bool,
+    pub has_own_review: bool,
+    pub own_rating: u8,
+    pub reasons: Vec<view::ReasonVm>,
+    /// A one-time notice banner (post-action confirmation, e.g. "will be reviewed").
+    pub notice: Option<String>,
 }
 
 /// One gallery photo: a ready-to-render (presigned) URL + accessible text.
@@ -123,7 +169,7 @@ pub struct PhotoVm {
 }
 
 impl DetailsPage {
-    pub fn build(tr: Translator, v: ParkingDetailsView, gallery: Vec<PhotoVm>) -> Self {
+    pub fn build(tr: Translator, v: ParkingDetailsView, gallery: Vec<PhotoVm>, csrf: String) -> Self {
         use bikenest_domain::OpenStatus;
         let now = chrono::Utc::now();
         let loc = &v.location;
@@ -135,10 +181,8 @@ impl DetailsPage {
         };
         let open_label = view::open_label(tr, v.is_open_now);
         Self {
-            layout: PageLayout {
-                title: format!("{} — BikeNest", loc.name()),
-                current: String::new(),
-            },
+            layout: PageLayout::new(format!("{} — BikeNest", loc.name()), "")
+                .csrf(csrf),
             tr,
             id: loc.id(),
             name: loc.name().to_string(),
@@ -186,7 +230,63 @@ impl DetailsPage {
             lat,
             lon,
             gallery,
+            reviews: Vec::new(),
+            confidence_code: "reported",
+            confidence_label: view::confidence_label(tr, bikenest_domain::Confidence::Reported)
+                .to_string(),
+            disputed: false,
+            dispute_items: Vec::new(),
+            parked_here_count: 0,
+            is_favorited: false,
+            can_contribute: false,
+            is_authenticated: false,
+            has_own_review: false,
+            own_rating: 0,
+            reasons: Vec::new(),
+            notice: None,
         }
+    }
+
+    /// Build the P3 page with the M3 community view (reviews, confidence,
+    /// verification panel, favorite, recommendation explanation) overlaid on
+    /// the base detail view. `viewer_verified` / `viewer_authenticated` gate the
+    /// contributor actions; anonymous viewers get a public-only page.
+    pub fn build_community(
+        tr: Translator,
+        v: bikenest_application::ParkingDetailsView,
+        gallery: Vec<PhotoVm>,
+        csrf: String,
+        community: Option<bikenest_application::CommunityParkingDetails>,
+        viewer_verified: bool,
+        viewer_authenticated: bool,
+    ) -> Self {
+        let mut page = Self::build(tr, v, gallery, csrf);
+        let Some(c) = community else { return page };
+        page.reviews = c.reviews.iter().map(|r| view::review_vm(tr, r, false)).collect();
+        page.confidence_code = c.confidence.as_code();
+        page.confidence_label = view::confidence_label(tr, c.confidence).to_string();
+        page.disputed = c.disputed;
+        page.dispute_items = c
+            .attribute_summary
+            .iter()
+            .filter(|a| a.incorrect > 0)
+            .map(|a| view::attr_dispute_vm(tr, &a.code, a.incorrect))
+            .collect();
+        page.parked_here_count = c.parked_here_count;
+        page.is_favorited = c.is_favorited;
+        page.can_contribute = viewer_verified;
+        page.is_authenticated = viewer_authenticated;
+        page.has_own_review = c.own_review.is_some();
+        page.own_rating = c.own_review.map(|r| r.rating.value()).unwrap_or(0);
+        page.reasons = c.reasons.iter().map(|r| view::reason_vm(tr, r)).collect();
+        page
+    }
+
+    /// Set (or overwrite) the page-level notice banner (e.g. "your change will
+    /// be reviewed").
+    pub fn notice(mut self, notice: Option<String>) -> Self {
+        self.notice = notice;
+        self
     }
 }
 
@@ -204,6 +304,225 @@ pub struct AboutPage {
     pub tr: Translator,
 }
 
+// ---------------------------------------------------------------------------
+// Authentication & account pages (M2)
+// ---------------------------------------------------------------------------
+
+/// A1 — register.
+#[derive(Template)]
+#[template(path = "pages/register.html")]
+pub struct RegisterPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub email: String,
+    pub display_name: String,
+    pub error: Option<String>,
+}
+
+/// A2 — login.
+#[derive(Template)]
+#[template(path = "pages/login.html")]
+pub struct LoginPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub email: String,
+    pub notice: Option<String>,
+    pub error: Option<String>,
+}
+
+/// A3 — email verified (success or invalid/expired) + resend.
+#[derive(Template)]
+#[template(path = "pages/verify_email.html")]
+pub struct VerifyEmailPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+/// A4 — request a password reset.
+#[derive(Template)]
+#[template(path = "pages/password_reset.html")]
+pub struct PasswordResetPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub email: String,
+    pub notice: Option<String>,
+    pub error: Option<String>,
+}
+
+/// A5 — set a new password.
+#[derive(Template)]
+#[template(path = "pages/password_reset_new.html")]
+pub struct PasswordResetNewPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub token: String,
+    pub error: Option<String>,
+}
+
+/// C1 — account overview.
+#[derive(Template)]
+#[template(path = "pages/account.html")]
+pub struct AccountPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub email: String,
+    pub display_name: Option<String>,
+    pub is_verified: bool,
+    pub roles_label: String,
+    pub notice: Option<String>,
+}
+
+/// C2 — change password.
+#[derive(Template)]
+#[template(path = "pages/account_password.html")]
+pub struct AccountPasswordPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub error: Option<String>,
+    pub notice: Option<String>,
+}
+
+/// C3 — change email.
+#[derive(Template)]
+#[template(path = "pages/account_email.html")]
+pub struct AccountEmailPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub email: String,
+    pub error: Option<String>,
+    pub notice: Option<String>,
+}
+
+/// M5 — user management (role assignment).
+#[derive(Template)]
+#[template(path = "pages/admin_users.html")]
+pub struct AdminUsersPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub users: Vec<view::AdminUserVm>,
+    pub notice: Option<String>,
+    pub error: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// M3 community pages
+// ---------------------------------------------------------------------------
+
+/// D1 — add a parking location.
+#[derive(Template)]
+#[template(path = "pages/parking_new.html")]
+pub struct ParkingNewPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub name: String,
+    pub address: String,
+    pub description: String,
+    pub parking_type: String,
+    pub cost_kind: String,
+    pub price: String,
+    pub price_currency: String,
+    pub price_unit: String,
+    pub lat: String,
+    pub lon: String,
+    pub timezone: String,
+    pub open_24h: bool,
+    pub type_options: Vec<view::OptionVm>,
+    pub security_options: Vec<view::OptionVm>,
+    pub security: String,
+    pub error: Option<String>,
+    pub duplicates: Vec<view::DuplicateVm>,
+    /// Set when the add succeeded but similar listings exist (advisory).
+    pub added_id: Option<i64>,
+}
+
+/// D2 — edit a location (reversible fields).
+#[derive(Template)]
+#[template(path = "pages/parking_edit.html")]
+pub struct ParkingEditPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub id: i64,
+    pub version: i64,
+    pub name: String,
+    pub address: String,
+    pub description: String,
+    pub parking_type: String,
+    pub cost_kind: String,
+    pub price: String,
+    pub price_currency: String,
+    pub price_unit: String,
+    pub open_24h: bool,
+    pub type_options: Vec<view::OptionVm>,
+    pub security_options: Vec<view::OptionVm>,
+    pub security: String,
+    pub error: Option<String>,
+    pub notice: Option<String>,
+}
+
+/// D3 — write / edit a review.
+#[derive(Template)]
+#[template(path = "pages/review_form.html")]
+pub struct ReviewFormPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub id: i64,
+    pub rating: u8,
+    pub body: String,
+    pub error: Option<String>,
+}
+
+/// C4 — favorites list.
+#[derive(Template)]
+#[template(path = "pages/favorites.html")]
+pub struct FavoritesPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub items: Vec<view::CardVm>,
+    pub notice: Option<String>,
+}
+
+/// C5 — contribution history.
+#[derive(Template)]
+#[template(path = "pages/contributions.html")]
+pub struct ContributionsPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub items: Vec<view::ContributionVm>,
+}
+
+/// HTMX fragment: the favorite button state.
+#[derive(Template)]
+#[template(path = "partials/favorite_button.html")]
+pub struct FavoriteButtonVm {
+    pub tr: Translator,
+    pub id: i64,
+    pub is_favorited: bool,
+    pub csrf: String,
+}
+
+/// HTMX fragment: a short verification confirmation.
+#[derive(Template)]
+#[template(path = "partials/verification_result.html")]
+pub struct VerificationResultVm {
+    pub tr: Translator,
+    pub label: String,
+}
+
 pub fn app_router(db: bikenest_infrastructure::Db, probe_timeout: std::time::Duration) -> axum::Router {
     http::app_router(db, probe_timeout)
+}
+
+/// Test-oriented constructor: inject email/OAuth/password providers (tests pass
+/// a fast [`bikenest_test_support::TestPasswordHasher`] to keep argon2 out of
+/// the suite).
+pub fn app_router_with(
+    db: bikenest_infrastructure::Db,
+    probe_timeout: std::time::Duration,
+    email: Box<dyn bikenest_application::EmailProvider>,
+    oauth: bikenest_infrastructure::FakeOAuthProvider,
+    hasher: Box<dyn bikenest_application::PasswordHasher>,
+) -> axum::Router {
+    http::app_router_with(db, probe_timeout, email, oauth, hasher)
 }

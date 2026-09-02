@@ -1,25 +1,48 @@
 //! HTTP routing and handlers.
 
 use askama::Template;
+use axum::extract::Form;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Json, Response};
-use axum::routing::get;
-use axum::{Router, extract::Path, extract::Query, extract::State};
-use bikenest_application::{
-    CheckReadiness, GetParkingDetails, ObjectStorage, ParkingPhotoReader, Readiness, SearchInput,
-    SearchParking,
+use axum::routing::{get, post};
+use axum::{
+    Router,
+    extract::{Path, Query, State},
+    middleware,
 };
+use bikenest_application::{
+    AuthError, AuthService, CheckReadiness, ContributionDeps, ContributionError, ContributionService,
+    EmailProvider, GetParkingDetails, NewParkingLocation, NewVerification, ObjectStorage,
+    ParkingEdit, ParkingPhotoReader, PasswordHasher, Readiness, SearchInput, SearchParking,
+    TokenGenerator,
+};
+use bikenest_domain::{
+    Cost, CurrencyCode, GeoPoint, Money, OpeningHours, ParkingLocation, ParkingType, PricingUnit,
+    ReviewBody, SecurityFeature, SecurityState, StarRating, TimeRange, is_known_attribute_code,
+    is_known_security_code,
+};
+use bikenest_domain::{ExistenceResult, ProposalKind, Role, UserEmail, UserId};
 use bikenest_infrastructure::probe::SqlxDatabaseProbe;
 use bikenest_infrastructure::{
-    Db, FakeGeocoder, LocalDiskStorage, SqlxParkingDetailsReader, SqlxParkingPhotoReader,
-    SqlxParkingSearchReader,
+    Argon2PasswordHasher, Db, FakeGeocoder, FakeOAuthProvider, InMemoryRateLimiter,
+    LocalDiskStorage, OfflineTimezoneResolver, RealTokenGenerator, SqlxAccountRepository,
+    SqlxAuditLog, SqlxContributionHistoryReader, SqlxFavoriteRepository,
+    SqlxParkingContributionRepository, SqlxParkingDetailsReader, SqlxParkingPhotoReader,
+    SqlxParkingSearchReader, SqlxReviewRepository, SqlxSessionStore, SqlxTokenStore,
+    SqlxVerificationRepository, SystemClock,
 };
 use serde_json::json;
 use std::sync::Arc;
 
+use crate::auth::{anon_csrf_token, Auth, clear_session_cookie, set_anon_csrf_cookie, set_session_cookie};
 use crate::i18n::{Locale, Translator};
 use crate::view::{self, CardVm, ResultsData};
-use crate::{DetailsPage, ErrorPage, HomePage, PageLayout, PhotoVm, SearchPageVm, AboutPage, SearchResultsVm};
+use crate::{
+    AboutPage, AccountEmailPage, AccountPage, AccountPasswordPage, AdminUsersPage,
+    ContributionsPage, DetailsPage, ErrorPage, FavoritesPage, HomePage, LoginPage, PageLayout,
+    ParkingEditPage, ParkingNewPage, PasswordResetNewPage, PasswordResetPage, PhotoVm,
+    RegisterPage, ReviewFormPage, SearchPageVm, SearchResultsVm, VerifyEmailPage,
+};
 
 /// Shared application state wired at startup.
 #[derive(Clone)]
@@ -29,10 +52,32 @@ pub struct AppState {
     pub details: Arc<GetParkingDetails>,
     pub photos: Arc<dyn ParkingPhotoReader>,
     pub storage: Arc<dyn ObjectStorage>,
+    pub auth: Arc<AuthService>,
+    pub contributions: Arc<ContributionService>,
 }
 
-/// Builds the full application router with a real database handle.
+/// Builds the full application router with a real database handle and the
+/// email provider selected by `EMAIL_PROVIDER` (default dev = SMTP → Mailpit).
 pub fn app_router(db: Db, probe_timeout: std::time::Duration) -> Router {
+    app_router_with(
+        db,
+        probe_timeout,
+        bikenest_infrastructure::email_from_env(),
+        FakeOAuthProvider::from_env(),
+        Box::new(Argon2PasswordHasher),
+    )
+}
+
+/// Builds the router with injectable email/OAuth/password providers (tests pass
+/// fakes — e.g. a fast [`TestPasswordHasher`] — to keep the suite fast). See
+/// plans/m2-accounts-auth.md §7 for the wiring.
+pub fn app_router_with(
+    db: Db,
+    probe_timeout: std::time::Duration,
+    email: Box<dyn EmailProvider>,
+    oauth: FakeOAuthProvider,
+    hasher: Box<dyn PasswordHasher>,
+) -> Router {
     let probe = SqlxDatabaseProbe::new(db.clone(), probe_timeout);
     let search_uc = SearchParking::new(
         Box::new(FakeGeocoder),                                   // Ledger #2
@@ -44,12 +89,40 @@ pub fn app_router(db: Db, probe_timeout: std::time::Duration) -> Router {
         Box::new(SqlxParkingDetailsReader::new(db.clone())),
         Default::default(),
     );
+    let auth_service = AuthService::new(
+        Box::new(SqlxAccountRepository::new(db.clone())),
+        Box::new(SqlxSessionStore::new(db.clone())),
+        Box::new(SqlxTokenStore::new(db.clone())),
+        hasher,                                     // password hasher (Argon2 in prod, fast fake in tests)
+        Box::new(RealTokenGenerator),
+        Box::new(SystemClock),
+        email,                                       // EmailProvider (Ledger #4)
+        Box::new(oauth),                             // Ledger #5
+        Box::new(InMemoryRateLimiter::new()),        // Ledger #6
+        Box::new(SqlxAuditLog::new(db.clone())),
+        base_url_from_env(),
+    );
+    let contribution_service = ContributionService::new(ContributionDeps {
+        tz: Box::new(OfflineTimezoneResolver::new()), // Ledger #16
+        details: Box::new(SqlxParkingDetailsReader::new(db.clone())),
+        contributions: Box::new(SqlxParkingContributionRepository::new(db.clone())),
+        reviews: Box::new(SqlxReviewRepository::new(db.clone())),
+        verifications: Box::new(SqlxVerificationRepository::new(db.clone())),
+        favorites: Box::new(SqlxFavoriteRepository::new(db.clone())),
+        history: Box::new(SqlxContributionHistoryReader::new(db.clone())),
+        rate_limiter: Box::new(InMemoryRateLimiter::new()), // Ledger #6
+        audit: Box::new(SqlxAuditLog::new(db.clone())),
+        clock: Box::new(SystemClock),
+        freshness: Default::default(),
+    });
     let state = AppState {
         readiness: Arc::new(CheckReadiness::new(probe)),
         search: Arc::new(search_uc),
         details: Arc::new(details),
         photos: Arc::new(SqlxParkingPhotoReader::new(db.clone())),
         storage: Arc::new(LocalDiskStorage::from_env()), // Ledger #7
+        auth: Arc::new(auth_service),
+        contributions: Arc::new(contribution_service),
     };
     Router::new()
         .route("/", get(home))
@@ -60,6 +133,32 @@ pub fn app_router(db: Db, probe_timeout: std::time::Duration) -> Router {
         .route("/media/{*key}", get(media))
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        // --- Accounts & authentication (M2) ---
+        .route("/register", get(register_page).post(register_post))
+        .route("/login", get(login_page).post(login_post))
+        .route("/logout", post(logout))
+        .route("/verify-email", get(verify_email))
+        .route("/verify-email/resend", post(verify_resend))
+        .route("/password-reset", get(password_reset_page).post(password_reset_post))
+        .route("/password-reset/new", get(password_reset_new).post(password_reset_new_post))
+        .route("/auth/google", get(auth_google))
+        .route("/auth/google/fake-consent", get(auth_google_fake_consent))
+        .route("/auth/google/callback", get(auth_google_callback))
+        .route("/account", get(account))
+        .route("/account/password", get(account_password).post(account_password_post))
+        .route("/account/email", get(account_email).post(account_email_post))
+        // --- M3 community contributions ---
+        .route("/parking/new", get(parking_new_page).post(parking_new_post))
+        .route("/parking/{id}/edit", get(parking_edit_page).post(parking_edit_post))
+        .route("/parking/{id}/proposal", post(parking_proposal_post))
+        .route("/parking/{id}/review", get(review_page).post(review_post))
+        .route("/parking/{id}/verify", post(parking_verify_post))
+        .route("/parking/{id}/parked-here", post(parking_parked_here_post))
+        .route("/parking/{id}/favorite", post(parking_favorite_post))
+        .route("/account/favorites", get(account_favorites))
+        .route("/account/contributions", get(account_contributions))
+        .route("/admin/users", get(admin_users))
+        .route("/admin/users/{id}/role", post(admin_role_post))
         .nest_service(
             "/static",
             tower_http::services::ServeDir::new(concat!(
@@ -68,7 +167,12 @@ pub fn app_router(db: Db, probe_timeout: std::time::Duration) -> Router {
             )),
         )
         .fallback(not_found)
+        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::auth_middleware))
         .with_state(state)
+}
+
+fn base_url_from_env() -> String {
+    std::env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
 }
 
 async fn healthz() -> &'static str {
@@ -96,7 +200,7 @@ async fn readyz(State(state): State<AppState>) -> Response {
 // ---------------------------------------------------------------------------
 
 /// P1 — home / landing.
-async fn home(State(state): State<AppState>, locale: Locale) -> Response {
+async fn home(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
     let tr = Translator::new(locale);
     // A few example locations near the featured landmark, when data exists
     // (UI_DESIGN P1: optional section). Failure → render without them.
@@ -132,10 +236,7 @@ async fn home(State(state): State<AppState>, locale: Locale) -> Response {
         .unwrap_or_default();
 
     let page = HomePage {
-        layout: PageLayout {
-            title: tr.t("home.title").to_string(),
-            current: "home".to_string(),
-        },
+        layout: PageLayout::new(tr.t("home.title").to_string(), "home").csrf(auth.csrf_value()),
         tr,
         featured,
     };
@@ -237,6 +338,7 @@ async fn search(
     State(state): State<AppState>,
     locale: Locale,
     headers: HeaderMap,
+    auth: Auth,
     params: Query<SearchParams>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -276,10 +378,7 @@ async fn search(
         render(vm, StatusCode::OK)
     } else {
         let vm = SearchPageVm {
-            layout: PageLayout {
-                title: tr.t("search.title").to_string(),
-                current: "search".to_string(),
-            },
+            layout: PageLayout::new(tr.t("search.title").to_string(), "search").csrf(auth.csrf_value()),
             tr,
             results,
             form: params.0.clone(),
@@ -290,11 +389,41 @@ async fn search(
     }
 }
 
+/// Post-action confirmation flags on the details page (`?proposed=1`, `?edited=1`, …).
+#[derive(Debug, Default, serde::Deserialize)]
+struct DetailsNotice {
+    #[serde(default)]
+    added: Option<String>,
+    #[serde(default)]
+    edited: Option<String>,
+    #[serde(default)]
+    proposed: Option<String>,
+    #[serde(default)]
+    reviewed: Option<String>,
+}
+
+/// One notice for the details page banner, newest/strongest action first.
+fn details_notice(tr: Translator, q: &DetailsNotice) -> Option<String> {
+    if q.proposed.is_some() {
+        Some(tr.t("details.notice.proposed").to_string())
+    } else if q.edited.is_some() {
+        Some(tr.t("details.notice.edited").to_string())
+    } else if q.reviewed.is_some() {
+        Some(tr.t("details.notice.reviewed").to_string())
+    } else if q.added.is_some() {
+        Some(tr.t("details.notice.added").to_string())
+    } else {
+        None
+    }
+}
+
 /// P3 — parking details.
 async fn parking_details(
     State(state): State<AppState>,
     locale: Locale,
+    auth: Auth,
     Path(id): Path<i64>,
+    Query(q): Query<DetailsNotice>,
 ) -> Response {
     let tr = Translator::new(locale);
     match state.details.execute(id).await {
@@ -316,7 +445,28 @@ async fn parking_details(
                 }
                 Err(_) => Vec::new(),
             };
-            let page = DetailsPage::build(tr, view, gallery);
+            let viewer = auth.user.as_ref().map(|u| u.id);
+            // Community overlay (reviews, confidence, favorite, verification).
+            // A read failure degrades to the base detail page, never a 500.
+            let community = state
+                .contributions
+                .community_details(id, viewer)
+                .await
+                .ok()
+                .flatten();
+            let verified = auth.user.as_ref().map(|u| u.is_verified).unwrap_or(false);
+            // Post-action confirmation (e.g. "this change will be reviewed").
+            let notice = details_notice(tr, &q);
+            let page = DetailsPage::build_community(
+                tr,
+                view,
+                gallery,
+                auth.csrf_value(),
+                community,
+                verified,
+                auth.authenticated(),
+            )
+            .notice(notice);
             render(page, StatusCode::OK)
         }
         Ok(None) => not_found_page(tr),
@@ -357,13 +507,10 @@ async fn media(
 }
 
 /// P7 — about / how it works.
-async fn about(locale: Locale) -> Response {
+async fn about(locale: Locale, auth: Auth) -> Response {
     let tr = Translator::new(locale);
     let page = AboutPage {
-        layout: PageLayout {
-            title: tr.t("about.title").to_string(),
-            current: "about".to_string(),
-        },
+        layout: PageLayout::new(tr.t("about.title").to_string(), "about").csrf(auth.csrf_value()),
         tr,
     };
     render(page, StatusCode::OK)
@@ -415,6 +562,668 @@ async fn set_lang(
         .into_response()
 }
 
+// ---------------------------------------------------------------------------
+// Accounts & authentication handlers (M2)
+// ---------------------------------------------------------------------------
+
+fn client_ip(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| headers.get("x-real-ip").and_then(|v| v.to_str().ok()).map(str::to_string))
+        .unwrap_or_else(|| "local".to_string())
+}
+
+fn redirect_with_cookie(path: &str, cookie: &str) -> Response {
+    ([(header::SET_COOKIE, cookie)], axum::response::Redirect::to(path)).into_response()
+}
+
+fn random_state_hex() -> String {
+    let bytes = RealTokenGenerator.generate();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn auth_error_message(tr: Translator, err: &AuthError) -> String {
+    match err {
+        AuthError::WeakPassword => tr.t("auth.error.weak_password").to_string(),
+        AuthError::InvalidEmail => tr.t("auth.error.invalid_email").to_string(),
+        AuthError::RateLimited => tr.t("auth.error.rate_limited").to_string(),
+        AuthError::TokenExpired | AuthError::TokenUsed | AuthError::TokenInvalid => {
+            tr.t("auth.error.invalid_token").to_string()
+        }
+        AuthError::RefuseAdminSelfRevoke => tr.t("auth.error.last_admin").to_string(),
+        _ => tr.t("auth.error.generic").to_string(),
+    }
+}
+
+fn format_roles(tr: Translator, mut roles: Vec<Role>) -> String {
+    roles.sort();
+    roles.dedup();
+    roles.iter().map(|r| view::role_label(tr, *r)).collect::<Vec<_>>().join(", ")
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct RegisterForm {
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
+    display_name: String,
+    #[serde(default)]
+    password: String,
+}
+
+async fn register_page(locale: Locale, auth: Auth) -> Response {
+    if auth.authenticated() {
+        return axum::response::Redirect::to("/account").into_response();
+    }
+    let tr = Translator::new(locale);
+    let token = anon_csrf_token();
+    render_anon(
+        RegisterPage {
+            layout: PageLayout::new(tr.t("auth.register_title").to_string(), "auth").csrf(token.clone()),
+            tr,
+            email: String::new(),
+            display_name: String::new(),
+            error: None,
+        },
+        &token,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn register_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    headers: HeaderMap,
+    auth: Auth,
+    Form(form): Form<RegisterForm>,
+) -> Response {
+    if auth.authenticated() {
+        return axum::response::Redirect::to("/account").into_response();
+    }
+    let tr = Translator::new(locale);
+    let ip = client_ip(&headers);
+    let display_name = if form.display_name.trim().is_empty() { None } else { Some(form.display_name.trim()) };
+    match state
+        .auth
+        .register(&ip, &form.email, display_name, &form.password)
+        .await
+    {
+        Ok(()) => axum::response::Redirect::to("/login?registered=1").into_response(),
+        Err(err) => {
+            // Re-render with a fresh double-submit CSRF token so the next POST validates.
+            let token = anon_csrf_token();
+            render_anon(
+                RegisterPage {
+                    layout: PageLayout::new(tr.t("auth.register_title").to_string(), "auth").csrf(token.clone()),
+                    tr,
+                    email: form.email,
+                    display_name: form.display_name,
+                    error: Some(auth_error_message(tr, &err)),
+                },
+                &token,
+            )
+        }
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct LoginNotices {
+    #[serde(default)]
+    registered: Option<String>,
+    #[serde(default)]
+    verified: Option<String>,
+    #[serde(default)]
+    reset: Option<String>,
+    #[serde(default)]
+    resend: Option<String>,
+    #[serde(default)]
+    oauth: Option<String>,
+}
+
+/// Build the notice shown on the login page from a query-string flag.
+fn login_notice(tr: Translator, q: &LoginNotices) -> Option<String> {
+    if q.registered.is_some() {
+        Some(tr.t("auth.registered").to_string())
+    } else if q.verified.is_some() {
+        Some(tr.t("auth.verified").to_string())
+    } else if q.reset.is_some() {
+        Some(tr.t("auth.reset_sent").to_string())
+    } else if q.resend.is_some() {
+        Some(tr.t("auth.resend_sent").to_string())
+    } else if q.oauth.is_some() {
+        Some(tr.t("auth.oauth_failed").to_string())
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct LoginForm {
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
+    password: String,
+}
+
+async fn login_page(locale: Locale, auth: Auth, Query(q): Query<LoginNotices>) -> Response {
+    if auth.authenticated() {
+        return axum::response::Redirect::to("/account").into_response();
+    }
+    let tr = Translator::new(locale);
+    let token = anon_csrf_token();
+    render_anon(
+        LoginPage {
+            layout: PageLayout::new(tr.t("auth.login_title").to_string(), "auth").csrf(token.clone()),
+            tr,
+            email: String::new(),
+            notice: login_notice(tr, &q),
+            error: None,
+        },
+        &token,
+    )
+}
+
+async fn login_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    headers: HeaderMap,
+    auth: Auth,
+    Form(form): Form<LoginForm>,
+) -> Response {
+    if auth.authenticated() {
+        return axum::response::Redirect::to("/account").into_response();
+    }
+    let tr = Translator::new(locale);
+    let ip = client_ip(&headers);
+    match state.auth.login(&ip, &form.email, &form.password).await {
+        Ok(outcome) => redirect_with_cookie("/account", &set_session_cookie(&outcome.session)),
+        // One generic message for bad credentials AND suspended/deleted (§45).
+        // The submitted email is NOT echoed back, so the failure response is
+        // byte-identical whether or not the account exists — and it still
+        // carries a fresh double-submit CSRF token for the next attempt.
+        Err(_) => {
+            let token = anon_csrf_token();
+            render_anon(
+                LoginPage {
+                    layout: PageLayout::new(tr.t("auth.login_title").to_string(), "auth").csrf(token.clone()),
+                    tr,
+                    email: String::new(),
+                    notice: None,
+                    error: Some(tr.t("auth.error.invalid_credentials").to_string()),
+                },
+                &token,
+            )
+        }
+    }
+}
+
+async fn logout(State(state): State<AppState>, auth: Auth) -> Response {
+    if let Some(session) = &auth.session {
+        let _ = state.auth.logout(session).await;
+    }
+    ([(header::SET_COOKIE, clear_session_cookie())], axum::response::Redirect::to("/")).into_response()
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct VerifyParams {
+    #[serde(default)]
+    token: Option<String>,
+}
+
+async fn verify_email(
+    State(state): State<AppState>,
+    locale: Locale,
+    Query(q): Query<VerifyParams>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let Some(token) = q.token.filter(|t| !t.is_empty()) else {
+        let t = anon_csrf_token();
+        return render_anon(
+            VerifyEmailPage {
+                layout: PageLayout::new(tr.t("auth.verify_title").to_string(), "auth").csrf(t.clone()),
+                tr,
+                success: false,
+                error: Some(tr.t("auth.error.invalid_token").to_string()),
+            },
+            &t,
+        );
+    };
+    match state.auth.verify_email(&token).await {
+        Ok(()) => axum::response::Redirect::to("/login?verified=1").into_response(),
+        Err(err) => {
+            let t = anon_csrf_token();
+            render_anon(
+                VerifyEmailPage {
+                    layout: PageLayout::new(tr.t("auth.verify_title").to_string(), "auth").csrf(t.clone()),
+                    tr,
+                    success: false,
+                    error: Some(auth_error_message(tr, &err)),
+                },
+                &t,
+            )
+        }
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ResendForm {
+    #[serde(default)]
+    email: String,
+}
+
+async fn verify_resend(
+    State(state): State<AppState>,
+    locale: Locale,
+    headers: HeaderMap,
+    Form(form): Form<ResendForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let ip = client_ip(&headers);
+    let Ok(email) = UserEmail::parse(&form.email) else {
+        return axum::response::Redirect::to("/login?resend=1").into_response();
+    };
+    match state.auth.resend_verification(&ip, &email).await {
+        Ok(()) => axum::response::Redirect::to("/login?resend=1").into_response(),
+        Err(err) => {
+            let t = anon_csrf_token();
+            render_anon(
+                LoginPage {
+                    layout: PageLayout::new(tr.t("auth.login_title").to_string(), "auth").csrf(t.clone()),
+                    tr,
+                    email: String::new(),
+                    notice: None,
+                    error: Some(auth_error_message(tr, &err)),
+                },
+                &t,
+            )
+        }
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ResetRequestForm {
+    #[serde(default)]
+    email: String,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ResetSent {
+    #[serde(default)]
+    sent: Option<String>,
+}
+
+async fn password_reset_page(locale: Locale, Query(q): Query<ResetSent>) -> Response {
+    let tr = Translator::new(locale);
+    let notice = if q.sent.is_some() { Some(tr.t("auth.reset_sent").to_string()) } else { None };
+    let token = anon_csrf_token();
+    render_anon(
+        PasswordResetPage {
+            layout: PageLayout::new(tr.t("auth.reset_title").to_string(), "auth").csrf(token.clone()),
+            tr,
+            email: String::new(),
+            notice,
+            error: None,
+        },
+        &token,
+    )
+}
+
+async fn password_reset_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    headers: HeaderMap,
+    Form(form): Form<ResetRequestForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let ip = client_ip(&headers);
+    let Ok(email) = UserEmail::parse(&form.email) else {
+        return axum::response::Redirect::to("/password-reset?sent=1").into_response();
+    };
+    match state.auth.request_password_reset(&ip, &email).await {
+        Ok(()) => axum::response::Redirect::to("/password-reset?sent=1").into_response(),
+        Err(err) => {
+            let t = anon_csrf_token();
+            render_anon(
+                PasswordResetPage {
+                    layout: PageLayout::new(tr.t("auth.reset_title").to_string(), "auth").csrf(t.clone()),
+                    tr,
+                    email: form.email,
+                    notice: None,
+                    error: Some(auth_error_message(tr, &err)),
+                },
+                &t,
+            )
+        }
+    }
+}
+
+async fn password_reset_new(locale: Locale, Query(q): Query<VerifyParams>) -> Response {
+    let tr = Translator::new(locale);
+    let token = q.token.unwrap_or_default();
+    let t = anon_csrf_token();
+    render_anon(
+        PasswordResetNewPage {
+            layout: PageLayout::new(tr.t("auth.reset_new_title").to_string(), "auth").csrf(t.clone()),
+            tr,
+            token,
+            error: None,
+        },
+        &t,
+    )
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ResetNewForm {
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    password: String,
+}
+
+async fn password_reset_new_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    Form(form): Form<ResetNewForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    match state.auth.reset_password(&form.token, &form.password).await {
+        Ok(()) => axum::response::Redirect::to("/login?reset=1").into_response(),
+        Err(err) => {
+            let t = anon_csrf_token();
+            render_anon(
+                PasswordResetNewPage {
+                    layout: PageLayout::new(tr.t("auth.reset_new_title").to_string(), "auth").csrf(t.clone()),
+                    tr,
+                    token: form.token,
+                    error: Some(auth_error_message(tr, &err)),
+                },
+                &t,
+            )
+        }
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ConsentParams {
+    #[serde(default)]
+    state: String,
+}
+
+async fn auth_google(State(state): State<AppState>) -> Response {
+    let state_val = random_state_hex();
+    let url = state.auth.oauth_authorize_url(&state_val);
+    axum::response::Redirect::to(&url).into_response()
+}
+
+/// The fake provider's "consent" page (Ledger #5): auto-issues a code that
+/// redirects to the real callback route.
+async fn auth_google_fake_consent(Query(q): Query<ConsentParams>) -> Response {
+    axum::response::Redirect::to(&format!(
+        "/auth/google/callback?code=fake-oauth-code&state={}",
+        q.state
+    ))
+    .into_response()
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct CallbackParams {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    state: String,
+}
+
+async fn auth_google_callback(State(state): State<AppState>, Query(q): Query<CallbackParams>) -> Response {
+    if q.state.is_empty() {
+        return axum::response::Redirect::to("/login?oauth=error").into_response();
+    }
+    match state.auth.oauth_callback(&q.code).await {
+        Ok(outcome) => redirect_with_cookie("/account", &set_session_cookie(&outcome.session)),
+        Err(_) => axum::response::Redirect::to("/login?oauth=error").into_response(),
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct AccountNotices {
+    #[serde(default)]
+    pw_changed: Option<String>,
+    #[serde(default)]
+    email_pending: Option<String>,
+}
+
+async fn account(locale: Locale, auth: Auth, Query(q): Query<AccountNotices>) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let notice = if q.pw_changed.is_some() {
+        Some(tr.t("account.pw_changed").to_string())
+    } else if q.email_pending.is_some() {
+        Some(tr.t("account.email_pending").to_string())
+    } else {
+        None
+    };
+    render(
+        AccountPage {
+            layout: PageLayout::with_csrf(tr.t("account.title").to_string(), "account", auth.csrf_value()),
+            tr,
+            email: user.email.to_string(),
+            display_name: user.display_name.clone(),
+            is_verified: user.is_verified,
+            roles_label: format_roles(tr, user.roles.clone()),
+            notice,
+        },
+        StatusCode::OK,
+    )
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ChangePasswordForm {
+    #[serde(default)]
+    current_password: String,
+    #[serde(default)]
+    new_password: String,
+}
+
+async fn account_password(locale: Locale, auth: Auth) -> Response {
+    let tr = Translator::new(locale);
+    if let Err(resp) = auth.require_user() {
+        return resp;
+    }
+    render(
+        AccountPasswordPage {
+            layout: PageLayout::with_csrf(tr.t("account.pw_title").to_string(), "account", auth.csrf_value()),
+            tr,
+            error: None,
+            notice: None,
+        },
+        StatusCode::OK,
+    )
+}
+
+async fn account_password_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Form(form): Form<ChangePasswordForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let session = auth.session.as_ref();
+    let session = match session {
+        Some(s) => s,
+        None => return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+    };
+    match state
+        .auth
+        .change_password(user.id, &form.current_password, &form.new_password, session)
+        .await
+    {
+        Ok(()) => axum::response::Redirect::to("/account?pw_changed=1").into_response(),
+        Err(err) => render(
+            AccountPasswordPage {
+                layout: PageLayout::with_csrf(tr.t("account.pw_title").to_string(), "account", auth.csrf_value()),
+                tr,
+                error: Some(auth_error_message(tr, &err)),
+                notice: None,
+            },
+            StatusCode::OK,
+        ),
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ChangeEmailForm {
+    #[serde(default)]
+    current_password: String,
+    #[serde(default)]
+    new_email: String,
+}
+
+async fn account_email(locale: Locale, auth: Auth) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    render(
+        AccountEmailPage {
+            layout: PageLayout::with_csrf(tr.t("account.email_title").to_string(), "account", auth.csrf_value()),
+            tr,
+            email: user.email.to_string(),
+            error: None,
+            notice: None,
+        },
+        StatusCode::OK,
+    )
+}
+
+async fn account_email_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Form(form): Form<ChangeEmailForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let Ok(new_email) = UserEmail::parse(&form.new_email) else {
+        return render(
+            AccountEmailPage {
+                layout: PageLayout::with_csrf(tr.t("account.email_title").to_string(), "account", auth.csrf_value()),
+                tr,
+                email: user.email.to_string(),
+                error: Some(tr.t("auth.error.invalid_email").to_string()),
+                notice: None,
+            },
+            StatusCode::OK,
+        );
+    };
+    match state.auth.change_email(user.id, &form.current_password, &new_email).await {
+        Ok(()) => axum::response::Redirect::to("/account?email_pending=1").into_response(),
+        Err(err) => render(
+            AccountEmailPage {
+                layout: PageLayout::with_csrf(tr.t("account.email_title").to_string(), "account", auth.csrf_value()),
+                tr,
+                email: user.email.to_string(),
+                error: Some(auth_error_message(tr, &err)),
+                notice: None,
+            },
+            StatusCode::OK,
+        ),
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct AdminNotices {
+    #[serde(default)]
+    granted: Option<String>,
+    #[serde(default)]
+    revoked: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+async fn admin_users(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Query(q): Query<AdminNotices>,
+) -> Response {
+    let tr = Translator::new(locale);
+    match auth.require_role(Role::Admin) {
+        Ok(_) => {}
+        Err(resp) => return resp,
+    }
+    let users = match state.auth.list_users().await {
+        Ok(users) => view::admin_users(tr, &users),
+        Err(_) => Vec::new(),
+    };
+    render(
+        AdminUsersPage {
+            layout: PageLayout::with_csrf(tr.t("admin.users_title").to_string(), "admin", auth.csrf_value()),
+            tr,
+            users,
+            notice: if q.granted.is_some() {
+                Some(tr.t("admin.granted").to_string())
+            } else if q.revoked.is_some() {
+                Some(tr.t("admin.revoked").to_string())
+            } else {
+                None
+            },
+            error: q.error.as_ref().map(|_| tr.t("admin.role_error").to_string()),
+        },
+        StatusCode::OK,
+    )
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct RoleForm {
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    role: String,
+}
+
+async fn admin_role_post(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(id): Path<i64>,
+    Form(form): Form<RoleForm>,
+) -> Response {
+    let actor = match auth.require_role(Role::Admin) {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+    let target = UserId(id);
+    let Some(role) = Role::from_code(&form.role) else {
+        return axum::response::Redirect::to("/admin/users?error=1").into_response();
+    };
+    let result = match form.action.as_str() {
+        "grant" => state.auth.grant_role(actor, target, role).await,
+        "revoke" => state.auth.revoke_role(actor, target, role).await,
+        _ => return axum::response::Redirect::to("/admin/users?error=1").into_response(),
+    };
+    match result {
+        Ok(()) => {
+            let path = if form.action == "grant" { "/admin/users?granted=1" } else { "/admin/users?revoked=1" };
+            axum::response::Redirect::to(path).into_response()
+        }
+        Err(_) => axum::response::Redirect::to("/admin/users?error=1").into_response(),
+    }
+}
+
 fn render<T: Template>(template: T, status: StatusCode) -> Response {
     match template.render() {
         Ok(html) => (status, Html(html)).into_response(),
@@ -423,12 +1232,20 @@ fn render<T: Template>(template: T, status: StatusCode) -> Response {
     }
 }
 
+/// Render an anonymous form page that carries a double-submit CSRF token: the
+/// token goes into the layout (hidden `csrf` field / `<meta name="csrf">`) and
+/// the matching `csrf` cookie is set on the response (see web/auth.rs §108).
+fn render_anon<T: Template>(page: T, token: &str) -> Response {
+    let mut resp = render(page, StatusCode::OK);
+    if let Ok(value) = set_anon_csrf_cookie(token).parse() {
+        resp.headers_mut().insert(header::SET_COOKIE, value);
+    }
+    resp
+}
+
 fn error_page(tr: Translator, status: StatusCode, title_key: &str, body_key: &str) -> Response {
     let page = ErrorPage {
-        layout: PageLayout {
-            title: format!("{} — BikeNest", tr.t(title_key)),
-            current: String::new(),
-        },
+        layout: PageLayout::new(format!("{} — BikeNest", tr.t(title_key)), ""),
         tr,
         status: status.as_u16(),
         message: tr.t(body_key).to_string(),
@@ -450,4 +1267,896 @@ fn not_found_page(tr: Translator) -> Response {
 /// Router fallback (E1). Resolves locale from the request for a translated 404.
 async fn not_found(locale: Locale) -> Response {
     not_found_page(Translator::new(locale))
+}
+
+// ---------------------------------------------------------------------------
+// M3 community handlers
+// ---------------------------------------------------------------------------
+
+fn parse_bool(s: &str) -> bool {
+    s == "true" || s == "1" || s == "on"
+}
+
+fn security_from_form(s: &str) -> Vec<SecurityFeature> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .filter(|c| is_known_security_code(c))
+        .map(|c| SecurityFeature::new(c, SecurityState::Yes))
+        .collect()
+}
+
+/// Parse a price in major units ("5", "5.50", "5,50") into cents.
+fn parse_price_major_to_cents(raw: &str) -> Option<i64> {
+    let s = raw.trim().replace(',', ".");
+    if s.is_empty() {
+        return None;
+    }
+    let major: f64 = s.parse().ok()?;
+    if major < 0.0 {
+        return None;
+    }
+    Some((major * 100.0).round() as i64)
+}
+
+/// Render a cent amount as a major-units string for the price input (no floats).
+fn cents_to_major_string(cents: i64) -> String {
+    let major = cents / 100;
+    let frac = (cents % 100).abs();
+    if frac == 0 {
+        major.to_string()
+    } else {
+        format!("{major}.{frac:02}")
+    }
+}
+
+fn cost_from_form(form: &NewParkingForm) -> Result<Cost, ContributionError> {
+    match form.cost_kind.as_str() {
+        "free" => Ok(Cost::Free),
+        "paid" => {
+            let price = match (
+                parse_price_major_to_cents(&form.price),
+                &form.price_currency,
+                &form.price_unit,
+            ) {
+                (Some(cents), cur, unit) if !cur.is_empty() && !unit.is_empty() => {
+                    let currency =
+                        CurrencyCode::parse(cur).map_err(|e| ContributionError::InvalidField(e.to_string()))?;
+                    let unit = PricingUnit::from_code(unit)
+                        .map_err(|e| ContributionError::InvalidField(e.to_string()))?;
+                    Some(Money::new(cents, currency, unit))
+                }
+                _ => None,
+            };
+            Ok(Cost::Paid { price })
+        }
+        _ => Ok(Cost::Unknown),
+    }
+}
+
+fn new_location_from_form(form: &NewParkingForm) -> Result<NewParkingLocation, ContributionError> {
+    let parking_type =
+        ParkingType::from_code(&form.parking_type).map_err(|e| ContributionError::InvalidField(e.to_string()))?;
+    let cost = cost_from_form(form)?;
+    let lat = form
+        .lat
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| ContributionError::InvalidField("latitude is required".to_string()))?;
+    let lon = form
+        .lon
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| ContributionError::InvalidField("longitude is required".to_string()))?;
+    let point = GeoPoint::new(lat, lon).map_err(|e| ContributionError::InvalidField(e.to_string()))?;
+    let timezone = if form.timezone.trim().is_empty() {
+        None
+    } else {
+        Some(form.timezone.trim().parse().map_err(|_| {
+            ContributionError::InvalidField("invalid timezone".to_string())
+        })?)
+    };
+    let hours = if parse_bool(&form.open_24h) {
+        OpeningHours::weekly((1..=7).map(|d| (d, TimeRange::all_day())).collect())
+    } else {
+        OpeningHours::Unknown
+    };
+    let description = if form.description.trim().is_empty() {
+        None
+    } else {
+        Some(form.description.trim().to_string())
+    };
+    Ok(NewParkingLocation {
+        name: form.name.clone(),
+        address: form.address.clone(),
+        description,
+        parking_type,
+        cost,
+        point,
+        timezone,
+        hours,
+        security: security_from_form(&form.security),
+    })
+}
+
+fn edit_from_form(form: &EditParkingForm, current_hours: &OpeningHours) -> Result<ParkingEdit, ContributionError> {
+    let parking_type =
+        ParkingType::from_code(&form.parking_type).map_err(|e| ContributionError::InvalidField(e.to_string()))?;
+    let cost = cost_from_form(&NewParkingForm {
+        cost_kind: form.cost_kind.clone(),
+        price: form.price.clone(),
+        price_currency: form.price_currency.clone(),
+        price_unit: form.price_unit.clone(),
+        ..Default::default()
+    })?;
+    // Preserve the original hours unless the user explicitly toggled the 24h
+    // switch — otherwise submitting an unrelated field would wipe real hours.
+    let current_24h = hours_open_24h(current_hours);
+    let submitted_24h = parse_bool(&form.open_24h);
+    let hours = if submitted_24h == current_24h {
+        current_hours.clone()
+    } else if submitted_24h {
+        OpeningHours::weekly((1..=7).map(|d| (d, TimeRange::all_day())).collect())
+    } else {
+        OpeningHours::Unknown
+    };
+    let description = if form.description.trim().is_empty() {
+        None
+    } else {
+        Some(form.description.trim().to_string())
+    };
+    Ok(ParkingEdit {
+        name: form.name.clone(),
+        address: form.address.clone(),
+        description,
+        parking_type,
+        cost,
+        hours,
+        security: security_from_form(&form.security),
+    })
+}
+
+/// The form's `cost_kind` value for a location (used to pre-fill the edit form).
+fn cost_kind_string(cost: &Cost) -> String {
+    match cost {
+        Cost::Free => "free",
+        Cost::Paid { .. } => "paid",
+        Cost::Unknown => "unknown",
+    }
+    .to_string()
+}
+
+/// `(major-price, currency, unit)` as form strings, for pre-filling a paid
+/// price. The user types a human-readable amount ("R$ 5"); the backend stores
+/// cents — so we pre-fill in major units, not cents.
+fn cost_price_strings(cost: &Cost) -> (String, String, String) {
+    match cost {
+        Cost::Paid { price: Some(p) } => (
+            cents_to_major_string(p.cents()),
+            p.currency().as_str().to_string(),
+            p.unit().as_code().to_string(),
+        ),
+        _ => (String::new(), String::new(), String::new()),
+    }
+}
+
+/// True when the location is open 24h every day (the only "hours" state the
+/// add/edit form can express besides unknown).
+fn hours_open_24h(hours: &OpeningHours) -> bool {
+    matches!(hours, OpeningHours::Weekly(rows) if !rows.is_empty() && rows.iter().all(|(_, r)| r.all_day))
+}
+
+/// Comma-separated codes of the security attributes confirmed `yes` (to
+/// pre-fill the add/edit checkboxes).
+fn security_yes_codes_string(loc: &ParkingLocation) -> String {
+    loc.security()
+        .iter()
+        .filter(|f| f.state() == SecurityState::Yes)
+        .map(|f| f.code())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Build a `ParkingEditPage` with all reversible fields pre-filled from `loc`.
+fn parking_edit_page_vm(
+    tr: Translator,
+    auth: Auth,
+    id: i64,
+    version: i64,
+    loc: &ParkingLocation,
+    notice: Option<String>,
+    error: Option<String>,
+) -> ParkingEditPage {
+    let (price, price_currency, price_unit) = cost_price_strings(loc.cost());
+    ParkingEditPage {
+        layout: PageLayout::with_csrf(tr.t("edit.title").to_string(), "edit", auth.csrf_value()),
+        tr,
+        id,
+        version,
+        name: loc.name().to_string(),
+        address: loc.address().to_string(),
+        description: loc.description().unwrap_or("").to_string(),
+        parking_type: loc.parking_type().as_code().to_string(),
+        cost_kind: cost_kind_string(loc.cost()),
+        price,
+        price_currency,
+        price_unit,
+        open_24h: hours_open_24h(loc.hours()),
+        type_options: view::type_options(tr, Some(loc.parking_type().as_code())),
+        security_options: view::security_options(tr, Some(&security_yes_codes_string(loc))),
+        security: security_yes_codes_string(loc),
+        error,
+        notice,
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct NewParkingForm {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    address: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    parking_type: String,
+    #[serde(default)]
+    cost_kind: String,
+    /// Price in major units (e.g. "5"/"5.50"), NOT cents — cents is a backend
+    /// detail. The user types a human-readable amount (see the form UX).
+    #[serde(default)]
+    price: String,
+    #[serde(default)]
+    price_currency: String,
+    #[serde(default)]
+    price_unit: String,
+    #[serde(default)]
+    lat: String,
+    #[serde(default)]
+    lon: String,
+    #[serde(default)]
+    timezone: String,
+    #[serde(default)]
+    open_24h: String,
+    /// Comma-separated security attribute codes, produced by the checkboxes via
+    /// a single hidden field (serde_urlencoded rejects repeated keys).
+    #[serde(default)]
+    security: String,
+}
+
+async fn parking_new_page(locale: Locale, auth: Auth) -> Response {
+    let tr = Translator::new(locale);
+    if let Err(resp) = auth.require_verified() {
+        return resp;
+    }
+    render(
+        ParkingNewPage {
+            layout: PageLayout::with_csrf(tr.t("new.title").to_string(), "new", auth.csrf_value()),
+            tr,
+            name: String::new(),
+            address: String::new(),
+            description: String::new(),
+            parking_type: "rack".to_string(),
+            cost_kind: "unknown".to_string(),
+            price: String::new(),
+            price_currency: String::new(),
+            price_unit: String::new(),
+            lat: String::new(),
+            lon: String::new(),
+            timezone: String::new(),
+            open_24h: false,
+            type_options: view::type_options(tr, None),
+            security_options: view::security_options(tr, None),
+            security: String::new(),
+            error: None,
+            duplicates: Vec::new(),
+            added_id: None,
+        },
+        StatusCode::OK,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn parking_new_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    headers: HeaderMap,
+    auth: Auth,
+    Form(form): Form<NewParkingForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_verified() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let ip = client_ip(&headers);
+
+    let new = match new_location_from_form(&form) {
+        Ok(n) => n,
+        Err(e) => {
+            return render_form_error(tr, auth, &form, &e);
+        }
+    };
+
+    match state.contributions.add_parking_location(user, &ip, new).await {
+        Ok(outcome) => {
+            let duplicates: Vec<view::DuplicateVm> =
+                outcome.duplicates.iter().map(|d| view::duplicate_vm(tr, d)).collect();
+            if duplicates.is_empty() {
+                axum::response::Redirect::to(&format!("/parking/{}", outcome.id)).into_response()
+            } else {
+                // Advisory (§36): the location was added, but similar listings
+                // exist. Re-render the form with the warnings + a success note.
+                render_new_form(tr, auth, &form, None, duplicates, Some(outcome.id), StatusCode::OK)
+            }
+        }
+        Err(ContributionError::NotVerified) => {
+            axum::response::Redirect::to("/account?verify=1").into_response()
+        }
+        Err(ContributionError::RateLimited) => {
+            render_new_form(tr, auth, &form, Some(tr.t("contribution.error.rate_limited").to_string()), Vec::new(), None, StatusCode::TOO_MANY_REQUESTS)
+        }
+        Err(e) => render_form_error(tr, auth, &form, &e),
+    }
+}
+
+fn render_new_form(
+    tr: Translator,
+    auth: Auth,
+    form: &NewParkingForm,
+    error: Option<String>,
+    duplicates: Vec<view::DuplicateVm>,
+    added_id: Option<i64>,
+    status: StatusCode,
+) -> Response {
+    render(
+        ParkingNewPage {
+            layout: PageLayout::with_csrf(tr.t("new.title").to_string(), "new", auth.csrf_value()),
+            tr,
+            name: form.name.clone(),
+            address: form.address.clone(),
+            description: form.description.clone(),
+            parking_type: form.parking_type.clone(),
+            cost_kind: form.cost_kind.clone(),
+            price: form.price.clone(),
+            price_currency: form.price_currency.clone(),
+            price_unit: form.price_unit.clone(),
+            lat: form.lat.clone(),
+            lon: form.lon.clone(),
+            timezone: form.timezone.clone(),
+            open_24h: parse_bool(&form.open_24h),
+            type_options: view::type_options(tr, Some(&form.parking_type)),
+            security_options: view::security_options(tr, Some(&form.security)),
+            security: form.security.clone(),
+            error,
+            duplicates,
+            added_id,
+        },
+        status,
+    )
+}
+
+fn render_form_error(tr: Translator, auth: Auth, form: &NewParkingForm, e: &ContributionError) -> Response {
+    render_new_form(
+        tr,
+        auth,
+        form,
+        Some(contribution_error_message(tr, e)),
+        Vec::new(),
+        None,
+        StatusCode::BAD_REQUEST,
+    )
+}
+
+fn contribution_error_message(tr: Translator, e: &ContributionError) -> String {
+    match e {
+        ContributionError::NotVerified => tr.t("contribution.error.not_verified").to_string(),
+        ContributionError::RateLimited => tr.t("contribution.error.rate_limited").to_string(),
+        ContributionError::VersionConflict => tr.t("contribution.error.version_conflict").to_string(),
+        ContributionError::NotFound => tr.t("contribution.error.not_found").to_string(),
+        ContributionError::InvalidField(_) => tr.t("contribution.error.invalid").to_string(),
+        ContributionError::Unauthorized => tr.t("contribution.error.unauthorized").to_string(),
+        ContributionError::Timezone => tr.t("contribution.error.timezone").to_string(),
+        ContributionError::Internal => tr.t("contribution.error.internal").to_string(),
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct EditParkingForm {
+    #[serde(default)]
+    version: i64,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    address: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    parking_type: String,
+    #[serde(default)]
+    cost_kind: String,
+    /// Price in major units (e.g. "5"/"5.50"), NOT cents.
+    #[serde(default)]
+    price: String,
+    #[serde(default)]
+    price_currency: String,
+    #[serde(default)]
+    price_unit: String,
+    #[serde(default)]
+    open_24h: String,
+    #[serde(default)]
+    security: String,
+}
+
+async fn parking_edit_page(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let tr = Translator::new(locale);
+    if let Err(resp) = auth.require_verified() {
+        return resp;
+    }
+    let Some(view) = state.details.execute(id).await.ok().flatten() else {
+        return not_found_page(tr);
+    };
+    let loc = &view.location;
+    // Pre-fill every reversible field so editing one doesn't silently reset
+    // cost/security/hours (§7 "editable fields pre-filled").
+    render(
+        parking_edit_page_vm(tr, auth, id, loc.version(), loc, None, None),
+        StatusCode::OK,
+    )
+}
+
+async fn parking_edit_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+    Form(form): Form<EditParkingForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    if let Err(resp) = auth.require_verified() {
+        return resp;
+    }
+    let user = match auth.require_verified() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    // Load the current location so an untouched field is preserved (and so we
+    // can detect a version conflict against the latest values).
+    let current = match state.details.execute(id).await {
+        Ok(Some(v)) => v.location,
+        _ => return not_found_page(tr),
+    };
+    let current_hours = current.hours().clone();
+    let edit = match edit_from_form(&form, &current_hours) {
+        Ok(e) => e,
+        Err(e) => return contribution_edit_error(tr, auth, id, &form, &e),
+    };
+    match state
+        .contributions
+        .apply_parking_edit(user, id, form.version, &edit)
+        .await
+    {
+        Ok(_) => axum::response::Redirect::to(&format!("/parking/{id}?edited=1")).into_response(),
+        Err(ContributionError::VersionConflict) => {
+            // §100: reload the latest values and tell the user.
+            let Some(view) = state.details.execute(id).await.ok().flatten() else {
+                return not_found_page(tr);
+            };
+            let loc = view.location;
+            render(
+                parking_edit_page_vm(
+                    tr,
+                    auth,
+                    id,
+                    loc.version(),
+                    &loc,
+                    Some(tr.t("contribution.error.version_conflict").to_string()),
+                    None,
+                ),
+                StatusCode::OK,
+            )
+        }
+        Err(ContributionError::RateLimited) => contribution_edit_notice(tr, auth, id, &form, tr.t("contribution.error.rate_limited").to_string()),
+        Err(e) => contribution_edit_error(tr, auth, id, &form, &e),
+    }
+}
+
+fn contribution_edit_error(tr: Translator, auth: Auth, id: i64, form: &EditParkingForm, e: &ContributionError) -> Response {
+    contribution_edit_notice(tr, auth, id, form, contribution_error_message(tr, e))
+}
+
+fn contribution_edit_notice(tr: Translator, auth: Auth, id: i64, form: &EditParkingForm, notice: String) -> Response {
+    render(
+        ParkingEditPage {
+            layout: PageLayout::with_csrf(tr.t("edit.title").to_string(), "edit", auth.csrf_value()),
+            tr,
+            id,
+            version: form.version,
+            name: form.name.clone(),
+            address: form.address.clone(),
+            description: form.description.clone(),
+            parking_type: form.parking_type.clone(),
+            cost_kind: form.cost_kind.clone(),
+            price: form.price.clone(),
+            price_currency: form.price_currency.clone(),
+            price_unit: form.price_unit.clone(),
+            open_24h: parse_bool(&form.open_24h),
+            type_options: view::type_options(tr, Some(&form.parking_type)),
+            security_options: view::security_options(tr, Some(&form.security)),
+            security: form.security.clone(),
+            error: None,
+            notice: Some(notice),
+        },
+        StatusCode::OK,
+    )
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ProposalForm {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    lat: String,
+    #[serde(default)]
+    lon: String,
+    #[serde(default)]
+    timezone: String,
+    #[serde(default)]
+    existence: String,
+    #[serde(default)]
+    reason: String,
+}
+
+async fn parking_proposal_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+    Form(form): Form<ProposalForm>,
+) -> Response {
+    let _tr = Translator::new(locale);
+    let user = match auth.require_verified() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let kind = match ProposalKind::from_code(&form.kind) {
+        Ok(k) => k,
+        Err(_) => return axum::response::Redirect::to(&format!("/parking/{id}")).into_response(),
+    };
+    let proposed = match kind {
+        ProposalKind::MoveLocation => {
+            let lat = form.lat.trim().parse::<f64>().unwrap_or(0.0);
+            let lon = form.lon.trim().parse::<f64>().unwrap_or(0.0);
+            let tz = if form.timezone.trim().is_empty() { "America/Sao_Paulo" } else { form.timezone.as_str() };
+            serde_json::json!({ "lat": lat, "lon": lon, "timezone": tz, "reason": form.reason })
+        }
+        ProposalKind::ChangeExistence => {
+            serde_json::json!({ "existence": form.existence, "reason": form.reason })
+        }
+    };
+    match state.contributions.propose_location_change(user, id, kind, proposed).await {
+        Ok(_) => axum::response::Redirect::to(&format!("/parking/{id}?proposed=1")).into_response(),
+        Err(_) => axum::response::Redirect::to(&format!("/parking/{id}?proposal_error=1")).into_response(),
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ReviewForm {
+    #[serde(default)]
+    rating: u8,
+    #[serde(default)]
+    body: String,
+}
+
+async fn review_page(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let tr = Translator::new(locale);
+    if let Err(resp) = auth.require_verified() {
+        return resp;
+    }
+    let own = state
+        .contributions
+        .community_details(id, auth.user.as_ref().map(|u| u.id))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|c| c.own_review);
+    render(
+        ReviewFormPage {
+            layout: PageLayout::with_csrf(tr.t("review.title").to_string(), "review", auth.csrf_value()),
+            tr,
+            id,
+            rating: own.as_ref().map(|r| r.rating.value()).unwrap_or(0),
+            body: own.map(|r| r.body.as_str().to_string()).unwrap_or_default(),
+            error: None,
+        },
+        StatusCode::OK,
+    )
+}
+
+async fn review_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+    Form(form): Form<ReviewForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_verified() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let rating = match StarRating::new(form.rating) {
+        Ok(r) => r,
+        Err(_) => {
+            return render_review_error(tr, auth, id, form, tr.t("review.error.invalid").to_string());
+        }
+    };
+    let body = match ReviewBody::new(&form.body) {
+        Ok(b) => b,
+        Err(_) => {
+            return render_review_error(tr, auth, id, form, tr.t("review.error.length").to_string());
+        }
+    };
+    match state.contributions.upsert_review(user, id, rating, &body).await {
+        Ok(()) => axum::response::Redirect::to(&format!("/parking/{id}?reviewed=1")).into_response(),
+        Err(ContributionError::RateLimited) => render_review_error(tr, auth, id, form, tr.t("contribution.error.rate_limited").to_string()),
+        Err(_) => render_review_error(tr, auth, id, form, tr.t("review.error.generic").to_string()),
+    }
+}
+
+fn render_review_error(tr: Translator, auth: Auth, id: i64, form: ReviewForm, message: String) -> Response {
+    render(
+        ReviewFormPage {
+            layout: PageLayout::with_csrf(tr.t("review.title").to_string(), "review", auth.csrf_value()),
+            tr,
+            id,
+            rating: form.rating,
+            body: form.body,
+            error: Some(message),
+        },
+        StatusCode::OK,
+    )
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct VerifyForm {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    result: String,
+    #[serde(default)]
+    attribute_code: String,
+}
+
+async fn parking_verify_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+    Form(form): Form<VerifyForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_verified() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    // Validate the submitted kind/result/attribute (§39) rather than silently
+    // coercing unknown inputs into StillExists/Correct.
+    let signal = match form.kind.as_str() {
+        "attribute" => {
+            let result = match form.result.as_str() {
+                "correct" => bikenest_domain::AttributeResult::Correct,
+                "incorrect" => bikenest_domain::AttributeResult::Incorrect,
+                _ => {
+                    return verify_bad_request(tr);
+                }
+            };
+            if !is_known_attribute_code(&form.attribute_code) {
+                return verify_bad_request(tr);
+            }
+            NewVerification::Attribute {
+                location_id: id,
+                user_id: user.id,
+                code: form.attribute_code.clone(),
+                result,
+            }
+        }
+        "parked_here" => NewVerification::ParkedHere {
+            location_id: id,
+            user_id: user.id,
+        },
+        "existence" => {
+            let result = match form.result.as_str() {
+                "still_exists" => ExistenceResult::StillExists,
+                "no_longer_exists" => ExistenceResult::NoLongerExists,
+                "info_changed" => ExistenceResult::InfoChanged,
+                _ => return verify_bad_request(tr),
+            };
+            NewVerification::Existence {
+                location_id: id,
+                user_id: user.id,
+                result,
+            }
+        }
+        _ => return verify_bad_request(tr),
+    };
+    match state.contributions.record_verification(user, &signal).await {
+        Ok(()) => render(
+            crate::VerificationResultVm {
+                tr,
+                label: tr.t("verification.saved").to_string(),
+            },
+            StatusCode::OK,
+        ),
+        Err(_) => render(
+            crate::VerificationResultVm {
+                tr,
+                label: tr.t("contribution.error.generic").to_string(),
+            },
+            StatusCode::BAD_REQUEST,
+        ),
+    }
+}
+
+fn verify_bad_request(tr: Translator) -> Response {
+    render(
+        crate::VerificationResultVm {
+            tr,
+            label: tr.t("contribution.error.invalid").to_string(),
+        },
+        StatusCode::BAD_REQUEST,
+    )
+}
+
+async fn parking_parked_here_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_verified() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let signal = NewVerification::ParkedHere {
+        location_id: id,
+        user_id: user.id,
+    };
+    match state.contributions.record_verification(user, &signal).await {
+        Ok(()) => render(
+            crate::VerificationResultVm {
+                tr,
+                label: tr.t("parked.saved").to_string(),
+            },
+            StatusCode::OK,
+        ),
+        Err(_) => render(
+            crate::VerificationResultVm {
+                tr,
+                label: tr.t("contribution.error.generic").to_string(),
+            },
+            StatusCode::BAD_REQUEST,
+        ),
+    }
+}
+
+async fn parking_favorite_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    match state.contributions.toggle_favorite(user.id, id).await {
+        Ok(is_favorited) => render(
+            crate::FavoriteButtonVm {
+                tr,
+                id,
+                is_favorited,
+                csrf: auth.csrf_value(),
+            },
+            StatusCode::OK,
+        ),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal").into_response(),
+    }
+}
+
+async fn account_favorites(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let ids = state.contributions.list_favorites(user.id).await.unwrap_or_default();
+    let now = chrono::Utc::now();
+    let mut items = Vec::new();
+    for tid in ids {
+        // Read each favorite as a summary card (best-effort; skip missing).
+        if let Some(view) = state.details.execute(tid).await.ok().flatten() {
+            let loc = &view.location;
+            let summary = bikenest_application::ParkingSummary {
+                id: loc.id(),
+                name: loc.name().to_string(),
+                address: loc.address().to_string(),
+                parking_type: loc.parking_type(),
+                cost: loc.cost().clone(),
+                point: *loc.point(),
+                distance_m: 0.0,
+                security_yes: loc
+                    .security()
+                    .iter()
+                    .filter(|f| f.state() == SecurityState::Yes)
+                    .map(|f| f.code().to_string())
+                    .collect(),
+                rating: *loc.rating(),
+                last_verified_at: loc.last_verified_at(),
+                timezone: loc.timezone(),
+                is_open_now: loc.hours().status_at(now, loc.timezone()) == bikenest_domain::OpenStatus::Open,
+                photo_key: None,
+            };
+            let freshness = bikenest_domain::categorize(
+                loc.last_verified_at(),
+                now,
+                &bikenest_domain::DEFAULT_THRESHOLDS,
+            );
+            let photo_url = view::resolve_photo(&*state.storage, None);
+            items.push(CardVm::from_summary(tr, &summary, freshness, photo_url));
+        }
+    }
+    render(
+        FavoritesPage {
+            layout: PageLayout::with_csrf(tr.t("favorites.title").to_string(), "account", auth.csrf_value()),
+            tr,
+            items,
+            notice: None,
+        },
+        StatusCode::OK,
+    )
+}
+
+async fn account_contributions(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let items = state
+        .contributions
+        .contribution_history(user.id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|i| view::contribution_vm(tr, &i))
+        .collect();
+    render(
+        ContributionsPage {
+            layout: PageLayout::with_csrf(tr.t("contrib.title").to_string(), "account", auth.csrf_value()),
+            tr,
+            items,
+        },
+        StatusCode::OK,
+    )
 }

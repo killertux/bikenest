@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+async-trait = "0.1"
+bikenest-application = { version = "0.1.0", path = "../application" }
 bikenest-domain = { version = "0.1.0", path = "../domain" }
 bikenest-infrastructure = { version = "0.1.0", path = "../infrastructure" }
 bikenest-test-macros = { version = "0.1.0", path = "../test-macros" }

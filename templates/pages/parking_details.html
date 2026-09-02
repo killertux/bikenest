@@ -11,6 +11,12 @@
     <span class="text-fg">{{ name }}</span>
   </nav>
 
+  {% if let Some(notice) = notice %}
+    <div class="mb-6 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3 text-sm font-medium text-accent-strong" role="status">
+      {{ notice }}
+    </div>
+  {% endif %}
+
   <div class="grid gap-8 lg:grid-cols-[1fr_340px]">
     <div>
       <!-- Title block + badge cluster + action bar -->
@@ -121,10 +127,47 @@
         </ul>
       </section>
 
-      <!-- Reviews (arrive with community accounts — M3) -->
+      <!-- Community signals: recommended because (P3 §105) -->
+      {% if !reasons.is_empty() %}
+        <section class="mt-8">
+          <h2 class="font-display text-lg font-semibold">{{ tr.t("details.recommend.title") }}</h2>
+          <ul class="mt-3 grid gap-2 sm:grid-cols-2 text-sm">
+            {% for r in reasons %}
+              <li class="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2">
+                <span class="grid h-5 w-5 place-items-center rounded-full bg-fresh/10 text-fresh">✓</span>
+                <span>
+                  {{ r.label }}
+                  {% if !r.detail.is_empty() %}<span class="text-muted">· {{ r.detail }}</span>{% endif %}
+                </span>
+              </li>
+            {% endfor %}
+          </ul>
+        </section>
+      {% endif %}
+
+      <!-- Reviews (M3) -->
       <section class="mt-8">
         <h2 class="font-display text-lg font-semibold">{{ tr.t("details.reviews.title") }}</h2>
-        <p class="mt-2 rounded-2xl border border-dashed border-border bg-surface px-5 py-6 text-sm text-muted">{{ tr.t("details.reviews.empty") }}</p>
+        {% if can_contribute %}
+          <a href="/parking/{{ id }}/review" class="mt-2 inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:border-accent">
+            {% if has_own_review %}{{ tr.t("review.edit") }}{% else %}{{ tr.t("review.write") }}{% endif %}
+          </a>
+        {% endif %}
+        {% if reviews.is_empty() %}
+          <p class="mt-2 rounded-2xl border border-dashed border-border bg-surface px-5 py-6 text-sm text-muted">{{ tr.t("details.reviews.empty") }}</p>
+        {% else %}
+          <ul class="mt-3 space-y-3">
+            {% for r in reviews %}
+              <li class="rounded-2xl border border-border bg-surface p-4">
+                <div class="flex items-center justify-between gap-4">
+                  <span class="text-accent">{{ r.stars }}</span>
+                  <span class="text-xs text-muted">{{ r.created_label }}</span>
+                </div>
+                <p class="mt-2 text-sm text-fg">{{ r.body }}</p>
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
       </section>
     </div>
 
@@ -143,10 +186,94 @@
         </div>
       </div>
 
+      <!-- Confidence (M3 §106) -->
+      <div class="rounded-2xl border border-border bg-surface p-4 text-sm">
+        <div class="flex items-center justify-between gap-2">
+          <h2 class="font-display text-sm font-semibold">{{ tr.t("confidence.title") }}</h2>
+          <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if confidence_code == "recently_verified" || confidence_code == "verified" %}bg-fresh/10 text-fresh{% else if confidence_code == "conflicting" %}bg-error/10 text-error{% else if confidence_code == "stale" %}bg-stale/10 text-stale{% else %}bg-bg text-muted{% endif %}">{{ confidence_label }}</span>
+        </div>
+        {% if disputed %}
+          <div class="mt-2 rounded-lg border border-error/30 bg-error/10 px-3 py-2 text-xs text-error">
+            {{ tr.t("confidence.disputed") }}
+          </div>
+          {% if !dispute_items.is_empty() %}
+            <ul class="mt-2 space-y-1 text-xs text-muted">
+              {% for d in dispute_items %}
+                <li>{{ d.label }} · {{ tr.t("confidence.disputes") }} {{ d.incorrect }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        {% endif %}
+        <p class="mt-2 text-xs text-muted">{{ tr.t("confidence.parked_here_count") }} <span class="font-medium text-fg">{{ parked_here_count }}</span></p>
+      </div>
+
+      <!-- Verification panel (M3 §39) -->
+      <div class="rounded-2xl border border-border bg-surface p-4 text-sm">
+        <h2 class="font-display text-sm font-semibold">{{ tr.t("verification.title") }}</h2>
+        <div id="verification-panel" class="mt-2">
+          {% if can_contribute %}
+            <div class="grid gap-2">
+              <form action="/parking/{{ id }}/verify" method="post" hx-post="/parking/{{ id }}/verify" hx-target="#verification-panel" hx-swap="innerHTML" class="contents">
+                <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+                <input type="hidden" name="kind" value="existence" />
+                <input type="hidden" name="result" value="still_exists" />
+                <button type="submit" class="rounded-lg border border-border px-3 py-2 text-sm hover:border-accent">{{ tr.t("verify.still_exists") }}</button>
+              </form>
+              <form action="/parking/{{ id }}/verify" method="post" hx-post="/parking/{{ id }}/verify" hx-target="#verification-panel" hx-swap="innerHTML" class="contents">
+                <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+                <input type="hidden" name="kind" value="existence" />
+                <input type="hidden" name="result" value="no_longer_exists" />
+                <button type="submit" class="rounded-lg border border-error/30 px-3 py-2 text-sm text-error hover:border-error">{{ tr.t("verify.no_longer_exists") }}</button>
+              </form>
+              <form action="/parking/{{ id }}/verify" method="post" hx-post="/parking/{{ id }}/verify" hx-target="#verification-panel" hx-swap="innerHTML" class="contents">
+                <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+                <input type="hidden" name="kind" value="existence" />
+                <input type="hidden" name="result" value="info_changed" />
+                <button type="submit" class="rounded-lg border border-aging/30 px-3 py-2 text-sm hover:border-aging">{{ tr.t("verify.info_changed") }}</button>
+              </form>
+              <form action="/parking/{{ id }}/parked-here" method="post" hx-post="/parking/{{ id }}/parked-here" hx-target="#verification-panel" hx-swap="innerHTML" class="contents">
+                <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+                <button type="submit" class="rounded-lg bg-accent-soft px-3 py-2 text-sm text-accent-strong">{{ tr.t("verify.parked_here") }}</button>
+              </form>
+            </div>
+          {% else %}
+            {% if is_authenticated %}
+              <p class="mt-2 text-xs text-muted">{{ tr.t("contribution.verify_to") }}</p>
+            {% else %}
+              <p class="mt-2 text-xs text-muted">{{ tr.t("verification.anonymous") }}</p>
+            {% endif %}
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Contribute (link to add / edit) -->
       <div class="rounded-2xl border border-border bg-surface p-4 text-sm">
         <h2 class="font-display text-sm font-semibold">{{ tr.t("details.contribute.title") }}</h2>
-        <p class="mt-2 text-muted">{{ tr.t("details.contribute.body") }}</p>
+        {% if can_contribute %}
+          <div class="mt-2 grid gap-2">
+            <a href="/parking/{{ id }}/edit" class="rounded-lg border border-border px-3 py-2 text-center hover:border-accent">{{ tr.t("edit.link") }}</a>
+          </div>
+        {% else %}
+          <p class="mt-2 text-muted">{{ tr.t("details.contribute.body") }}</p>
+        {% endif %}
       </div>
+
+      <!-- Favorite (M3 §42) -->
+      {% if is_authenticated %}
+        <div id="favorite-button">
+          <form action="/parking/{{ id }}/favorite" method="post">
+            <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+            <button type="submit"
+              hx-post="/parking/{{ id }}/favorite"
+              hx-target="#favorite-button"
+              hx-swap="outerHTML"
+              class="w-full inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition-colors {% if is_favorited %}border-accent bg-accent-soft text-accent-strong{% else %}border-border text-muted hover:text-fg{% endif %}">
+              <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5" /></svg>
+              {% if is_favorited %}{{ tr.t("favorites.saved") }}{% else %}{{ tr.t("favorites.save") }}{% endif %}
+            </button>
+          </form>
+        </div>
+      {% endif %}
     </aside>
   </div>
 </div>
