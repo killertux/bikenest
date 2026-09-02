@@ -55,7 +55,9 @@
             {% for photo in gallery %}
               <button
                 type="button"
-                @click="open = true; src = '{{ photo.url }}'; alt = '{{ photo.alt }}'"
+                @click="open = true; src = $el.dataset.src; alt = $el.dataset.alt"
+                data-src="{{ photo.url }}"
+                data-alt="{{ photo.alt }}"
                 class="{% if loop.first %}sm:col-span-4 aspect-[16/9]{% else %}aspect-square{% endif %} overflow-hidden rounded-2xl border border-border"
               >
                 <img src="{{ photo.thumb_url }}" alt="{{ photo.alt }}" loading="lazy" class="h-full w-full object-cover transition-transform hover:scale-[1.02]" />

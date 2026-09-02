@@ -1357,3 +1357,50 @@ async fn photo_upload_is_rate_limited(tx: &mut bikenest_test_support::TestTx) {
         .execute(&pool().await).await.unwrap();
     cleanup_user_contributions("photo-rl-up@example.com").await;
 }
+
+async fn admin_cookie(
+    app: &axum::Router,
+    email: &bikenest_infrastructure::FakeEmailProvider,
+    addr: &str,
+) -> String {
+    cleanup_user_contributions(addr).await;
+    post_form(app, "/register", &[("email", addr), ("password", "password123")], None).await;
+    let token = email.token_for("/verify-email").expect("admin verification email");
+    get_c(app, &format!("/verify-email?token={token}"), None).await;
+    let (uid,): (i64,) = sqlx::query_as("SELECT id FROM users WHERE email = $1")
+        .bind(addr).fetch_one(&pool().await).await.unwrap();
+    sqlx::query(
+        "INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, 'ADMIN', NULL) ON CONFLICT DO NOTHING",
+    )
+    .bind(uid).execute(&pool().await).await.unwrap();
+    let (_, _, cookie) = post_form(app, "/login", &[("email", addr), ("password", "password123")], None).await;
+    cookie.unwrap().split(';').next().unwrap().to_string()
+}
+
+#[db_test]
+async fn admin_can_access_moderation_queue(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    let admin = admin_cookie(&app, &email, "photo-admin@example.com").await;
+    let (s, body) = get_c(&app, "/moderation/photos", Some(&admin)).await;
+    assert_eq!(s, StatusCode::OK, "admin (without Moderator role) can open the queue");
+    assert!(body.contains("Photo moderation"), "queue page renders");
+    let _ = tx;
+    cleanup_user_contributions("photo-admin@example.com").await;
+}
+
+#[db_test]
+async fn photo_upload_alt_too_long_is_bad_request(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    let loc = fixture_location(tx, "photo-alt-long", "Photo Alt Long").await;
+    let cookie = verified_cookie(&app, &email, "photo-alt-long-up@example.com").await;
+    let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&cookie)).await;
+    let csrf = extract_csrf(&page);
+    let long_alt = "a".repeat(501);
+    let (_, body) = multipart_upload(&tiny_jpeg(), Some(&long_alt), "----bikenestphoto");
+    let (s, _) = post_multipart(&app, &format!("/parking/{loc}/photo"), body, &cookie, Some(&csrf)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "over-long caption rejected as 400");
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'photo-alt-long'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions("photo-alt-long-up@example.com").await;
+}

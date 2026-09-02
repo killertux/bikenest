@@ -763,6 +763,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "photo.error.too_large" => ("Photo is too large (max 10 MiB).", "A foto é muito grande (máx. 10 MiB)."),
         "photo.error.unsupported" => ("Unsupported format. Use JPEG, PNG or WebP.", "Formato não suportado. Use JPEG, PNG ou WebP."),
         "photo.error.undecodable" => ("That file isn't a readable image.", "Esse arquivo não é uma imagem legível."),
+        "photo.error.invalid" => ("Invalid photo input.", "Dados de foto inválidos."),
         "photo.error.too_many_pixels" => ("Image resolution is too high (max 20 MP).", "A resolução é muito alta (máx. 20 MP)."),
         "photo.error.not_verified" => ("Verify your email to add photos.", "Verifique seu e-mail para adicionar fotos."),
         "photo.error.not_found" => ("Location not found.", "Local não encontrado."),

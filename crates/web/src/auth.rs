@@ -53,6 +53,19 @@ impl Auth {
         }
     }
 
+    /// Returns the authenticated principal iff they are a moderator **or** an
+    /// admin (the M4 moderation queue grants both — plan §7).
+    pub fn require_moderator(&self) -> Result<&AuthenticatedUser, Response> {
+        let user = self.require_user()?;
+        if user.has_role(bikenest_domain::Role::Moderator)
+            || user.has_role(bikenest_domain::Role::Admin)
+        {
+            Ok(user)
+        } else {
+            Err((StatusCode::FORBIDDEN, "Forbidden").into_response())
+        }
+    }
+
     /// Returns the authenticated principal iff their email is verified (the
     /// §16 contribution gate), else 403 with the verification notice. Applies
     /// to add/edit/proposal/review/verify; favorites use [`Self::require_user`].

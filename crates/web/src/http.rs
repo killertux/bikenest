@@ -620,7 +620,7 @@ async fn moderation_photos(
     auth: Auth,
 ) -> Response {
     let tr = Translator::new(locale);
-    let user = match auth.require_role(Role::Moderator) {
+    let user = match auth.require_moderator() {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -654,7 +654,7 @@ async fn moderation_photo_approve(
     Path(id): Path<i64>,
 ) -> Response {
     let tr = Translator::new(locale);
-    let user = match auth.require_role(Role::Moderator) {
+    let user = match auth.require_moderator() {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -676,7 +676,7 @@ async fn moderation_photo_reject(
     Form(form): Form<RejectReasonForm>,
 ) -> Response {
     let tr = Translator::new(locale);
-    let user = match auth.require_role(Role::Moderator) {
+    let user = match auth.require_moderator() {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -719,9 +719,9 @@ fn photo_error(tr: Translator, e: &PhotoError) -> (StatusCode, String) {
         TooManyPixels => (StatusCode::BAD_REQUEST, "photo.error.too_many_pixels"),
         NotFound => (StatusCode::NOT_FOUND, "photo.error.not_found"),
         NotPending => (StatusCode::CONFLICT, "moderation.not_pending"),
-        Unauthorized | InvalidField(_) | Storage(_) => {
-            (StatusCode::FORBIDDEN, "moderation.unauthorized")
-        }
+        Unauthorized => (StatusCode::FORBIDDEN, "moderation.unauthorized"),
+        InvalidField(_) => (StatusCode::BAD_REQUEST, "photo.error.invalid"),
+        Storage(_) => (StatusCode::INTERNAL_SERVER_ERROR, "photo.error.internal"),
         Internal => (StatusCode::INTERNAL_SERVER_ERROR, "photo.error.internal"),
     };
     (status, tr.t(key).to_string())

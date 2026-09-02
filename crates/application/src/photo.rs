@@ -231,8 +231,9 @@ impl PhotoService {
         }
     }
 
+    /// Moderators and admins may moderate (§44).
     fn require_moderator(&self, user: &crate::auth::AuthenticatedUser) -> Result<(), PhotoError> {
-        if user.has_role(Role::Moderator) {
+        if user.has_role(Role::Moderator) || user.has_role(Role::Admin) {
             Ok(())
         } else {
             Err(PhotoError::Unauthorized)
