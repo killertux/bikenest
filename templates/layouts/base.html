@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ layout.title }}</title>
   <link rel="stylesheet" href="/static/css/app.css">
+  <!-- MapLibre base styles (map clipping, canvas layout, control/attribution
+       positioning). Must load before map.css so the page's map overrides win. -->
+  <link rel="stylesheet" href="/static/vendor/maplibre-gl.css">
   <link rel="stylesheet" href="/static/css/map.css">
   {% block head %}{% endblock %}
 </head>
