@@ -334,9 +334,12 @@ pub trait ParkingDetailsReader: Send + Sync {
 
 /// A stored photo reference: an opaque object-storage key plus its content type
 /// and accessible description. The web layer turns the key into a presigned URL.
+/// When a processed thumbnail exists (M4 uploads), [`Self::thumbnail_key`] is
+/// present and the gallery prefers it; seeded M1 photos fall back to [`Self::key`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredPhoto {
     pub key: String,
+    pub thumbnail_key: Option<String>,
     pub content_type: String,
     pub alt: Option<String>,
 }

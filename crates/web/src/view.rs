@@ -6,7 +6,7 @@
 //! request's [`Translator`] (§12).
 
 use crate::i18n::Translator;
-use bikenest_application::{AuthenticatedUser, GeoHit, ObjectStorage, ParkingSummary};
+use bikenest_application::{AuthenticatedUser, GeoHit, ObjectStorage, ParkingSummary, PendingPhoto};
 use bikenest_domain::{AccountState, Cost, FreshnessCategory, OpenStatus, OpeningHours, ParkingType, PricingUnit, Role};
 use chrono::{Datelike, Timelike};
 use std::time::Duration;
@@ -536,6 +536,57 @@ pub fn duplicate_vm(_t: Translator, d: &bikenest_application::DuplicateCandidate
         name: d.name.clone(),
         distance_label: distance_label(d.distance_m),
         similarity_label: format!("{:.0}%", d.similarity * 100.0),
+    }
+}
+
+/// One photo in the moderator queue (M2 screen). Includes the presigned URL of
+/// the *processed derivative* (exactly what would publish), a small preview and
+/// an anonymized "Contributor #id" label — never an email/OAuth subject (§80).
+#[derive(Debug, Clone)]
+pub struct ModerationPhotoVm {
+    pub id: i64,
+    pub location_id: i64,
+    pub location_name: String,
+    pub full_url: String,
+    pub thumb_url: Option<String>,
+    pub alt: String,
+    pub dimensions: Option<String>,
+    pub contributor_label: String,
+    pub uploaded_label: String,
+}
+
+pub fn moderation_photo_vm(
+    t: Translator,
+    storage: &dyn ObjectStorage,
+    p: &PendingPhoto,
+) -> ModerationPhotoVm {
+    let full_url = resolve_photo(storage, Some(&p.storage_key)).unwrap_or_default();
+    let thumb_url = p
+        .thumbnail_key
+        .as_deref()
+        .and_then(|k| resolve_photo(storage, Some(k)));
+    let alt = p
+        .alt
+        .clone()
+        .unwrap_or_else(|| format!("Photo of {}", p.location_name));
+    let dimensions = match (p.width, p.height) {
+        (Some(w), Some(h)) => Some(format!("{w} × {h}")),
+        _ => None,
+    };
+    let contributor_label = p
+        .uploader_id
+        .map(|uid| format!("{} #{}", t.t("moderation.contributor"), uid.0))
+        .unwrap_or_default();
+    ModerationPhotoVm {
+        id: p.id,
+        location_id: p.location_id,
+        location_name: p.location_name.clone(),
+        full_url,
+        thumb_url,
+        alt,
+        dimensions,
+        contributor_label,
+        uploaded_label: time_ago_label(t, p.created_at),
     }
 }
 

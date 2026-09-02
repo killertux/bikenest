@@ -10,6 +10,7 @@ pub mod audit;
 pub mod auth;
 pub mod community;
 pub mod email;
+pub mod photo;
 pub mod ports;
 pub mod rate_limit;
 pub mod search;
@@ -34,6 +35,10 @@ pub use community::{
     DuplicateCandidate, FavoriteRepository, NewParkingLocation, NewProposal, NewVerification,
     ParkingContributionRepository, ParkingEdit, Reason, Review, ReviewRepository,
     VerificationRepository, recommendation_reasons,
+};
+pub use photo::{
+    ImageProcessor, NewPendingPhoto, PendingPhoto, PhotoDeps, PhotoError, PhotoForModeration,
+    PhotoRepository, PhotoService, ProcessedImage, RejectedPhoto, UploadedPhoto,
 };
 pub use rate_limit::{RateLimitError, RateLimiter};
 pub use storage::{ObjectStorage, PutObject, StorageError};

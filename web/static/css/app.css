@@ -2255,6 +2255,14 @@
     .hover\:bg-danger-soft:hover {
       background-color: var(--color-danger-soft);
     }
+    .hover\:bg-fresh\/20:hover {
+      background-color: color-mix(in srgb, oklch(58% 0.13 155) 20%, transparent);
+    }
+    @supports (color: color-mix(in lab, red, red)) {
+      .hover\:bg-fresh\/20:hover {
+        background-color: color-mix(in oklab, var(--color-fresh) 20%, transparent);
+      }
+    }
     .hover\:bg-white\/20:hover {
       background-color: color-mix(in srgb, #fff 20%, transparent);
     }
@@ -2265,6 +2273,9 @@
     }
     .hover\:text-accent-dark:hover {
       color: var(--color-accent-dark);
+    }
+    .hover\:text-accent-strong:hover {
+      color: var(--color-accent-strong);
     }
     .hover\:text-danger:hover {
       color: var(--color-danger);
@@ -2482,6 +2493,9 @@
     }
     .md\:grid-cols-3 {
       grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .md\:grid-cols-\[minmax\(0\,280px\)_1fr\] {
+      grid-template-columns: minmax(0,280px) 1fr;
     }
     .md\:flex-row {
       flex-direction: row;

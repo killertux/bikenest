@@ -745,6 +745,53 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "attr.location" => ("Location", "Localização"),
         "attr.unknown" => ("Details", "Detalhes"),
 
+        // --- photos (M4, §30/§80) -----------------------------------------
+        "photo.upload.title" => ("Add a photo", "Adicionar foto"),
+        "photo.upload.hint" => (
+            "A photo helps riders recognize a spot. It is reviewed before it appears.",
+            "Uma foto ajuda a reconhecer a vaga. Ela é revisada antes de aparecer.",
+        ),
+        "photo.upload.submit" => ("Upload photo", "Enviar foto"),
+        "photo.upload.pending_notice" => (
+            "Photo submitted — it appears once a moderator approves it.",
+            "Foto enviada — ela aparece assim que um moderador a aprovar.",
+        ),
+        "photo.upload.success" => (
+            "Photo uploaded. It will appear once approved.",
+            "Foto enviada. Ela aparecerá quando for aprovada.",
+        ),
+        "photo.error.too_large" => ("Photo is too large (max 10 MiB).", "A foto é muito grande (máx. 10 MiB)."),
+        "photo.error.unsupported" => ("Unsupported format. Use JPEG, PNG or WebP.", "Formato não suportado. Use JPEG, PNG ou WebP."),
+        "photo.error.undecodable" => ("That file isn't a readable image.", "Esse arquivo não é uma imagem legível."),
+        "photo.error.too_many_pixels" => ("Image resolution is too high (max 20 MP).", "A resolução é muito alta (máx. 20 MP)."),
+        "photo.error.not_verified" => ("Verify your email to add photos.", "Verifique seu e-mail para adicionar fotos."),
+        "photo.error.not_found" => ("Location not found.", "Local não encontrado."),
+        "photo.error.rate_limited" => ("Too many uploads, try again later.", "Muitos envios, tente novamente mais tarde."),
+        "photo.error.internal" => ("Upload failed. Try a different photo.", "Falha no envio. Tente outra foto."),
+
+        // --- photo moderation queue (M2 screen, §44) ----------------------
+        "moderation.title" => ("Photo moderation", "Moderação de fotos"),
+        "moderation.empty" => ("No photos awaiting review.", "Nenhuma foto aguardando revisão."),
+        "moderation.pending" => ("Pending", "Pendente"),
+        "moderation.approve" => ("Approve", "Aprovar"),
+        "moderation.reject" => ("Reject", "Rejeitar"),
+        "moderation.reason_label" => ("Rejection reason", "Motivo da rejeição"),
+        "moderation.reason_placeholder" => ("e.g. unclear image, incorrect location", "ex.: imagem ilegível, local incorreto"),
+        "moderation.approved" => ("Photo approved.", "Foto aprovada."),
+        "moderation.err.approve" => ("Approve failed.", "Falha ao aprovar."),
+        "moderation.err.reject" => ("Reject failed.", "Falha ao rejeitar."),
+        "moderation.error.internal" => ("Moderation action failed.", "Ação de moderação falhou."),
+        "moderation.not_found" => ("Photo not found.", "Foto não encontrada."),
+        "moderation.not_pending" => ("This photo isn't awaiting review.", "Esta foto não está aguardando revisão."),
+        "moderation.unauthorized" => ("You don't have permission to moderate.", "Você não tem permissão para moderar."),
+        "moderation.contributor" => ("Contributor", "Contribuidor"),
+        "moderation.exif_note" => ("EXIF stripped · processed derivative", "EXIF removido · derivado processado"),
+        "moderation.locations" => ("Location", "Local"),
+        "moderation.dimensions" => ("Dimensions", "Dimensões"),
+        "moderation.view" => ("Full size", "Tamanho completo"),
+        "moderation.refresh" => ("Refresh queue", "Atualizar fila"),
+        "moderation.uploaded" => ("Uploaded", "Enviado"),
+
         // Unknown key: a visible marker (all real keys are defined above, so
         // this only appears when a template references a typo'd key).
         _ => ("⟨i18n?⟩", "⟨i18n?⟩"),

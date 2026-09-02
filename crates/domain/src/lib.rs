@@ -10,6 +10,7 @@ pub mod community;
 pub mod freshness;
 pub mod hours;
 pub mod parking;
+pub mod photo;
 
 pub use auth::{
     AccountState, AuthenticationProvider, CsrfToken, Password, PasswordPolicy, ProviderIdentity,
@@ -25,6 +26,10 @@ pub use hours::{OpeningHours, OpenStatus, TimeRange, hms};
 pub use parking::{
     is_known_security_code, Cost, CurrencyCode, GeoPoint, ModerationState, Money, ParkingLocation,
     ParkingType, PricingUnit, Rating, SecurityFeature, SecurityState, SECURITY_FEATURE_CODES,
+};
+pub use photo::{
+    ALLOWED_INPUT_FORMATS, DERIVATIVE_QUALITY, MAX_PHOTO_BYTES, MAX_PHOTO_MEGAPIXELS,
+    PhotoDimensions, PhotoModerationState, THUMBNAIL_MAX_SIDE, bytes_within_limit, format_allowed,
 };
 
 /// Database identifier of a user.

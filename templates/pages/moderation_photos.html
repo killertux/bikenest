@@ -1,0 +1,84 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<section class="mx-auto max-w-shell px-4 py-12 lg:px-8">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <h1 class="font-display text-2xl font-bold tracking-tight">{{ tr.t("moderation.title") }}</h1>
+    <span class="rounded-full bg-accent-soft px-3 py-1 text-xs font-medium text-accent-strong">{{ items.len() }} {{ tr.t("moderation.pending") }}</span>
+  </div>
+  <p class="mt-2 text-sm text-muted">{{ tr.t("moderation.exif_note") }}</p>
+
+  <div id="moderation-feedback" class="mt-4" aria-live="polite"></div>
+
+  {% if items.is_empty() %}
+    <div class="mt-6 rounded-2xl border border-dashed border-border bg-surface px-6 py-12 text-center">
+      <p class="font-display text-base font-semibold">{{ tr.t("moderation.empty") }}</p>
+    </div>
+  {% else %}
+    <div class="mt-6 grid gap-6">
+      {% for p in items %}
+      <article class="overflow-hidden rounded-2xl border border-border bg-surface">
+        <div class="grid gap-4 p-4 md:grid-cols-[minmax(0,280px)_1fr]">
+          <div class="overflow-hidden rounded-xl bg-bg">
+            {% if let Some(thumb) = p.thumb_url %}
+              <img src="{{ thumb }}" alt="{{ p.alt }}" loading="lazy" class="aspect-[4/3] h-full w-full object-cover" />
+            {% else %}
+              <img src="{{ p.full_url }}" alt="{{ p.alt }}" loading="lazy" class="aspect-[4/3] h-full w-full object-cover" />
+            {% endif %}
+          </div>
+          <div class="min-w-0">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <a href="/parking/{{ p.location_id }}" class="font-display text-lg font-semibold hover:text-accent-strong">{{ p.location_name }}</a>
+                <p class="mt-0.5 text-sm text-muted">{{ tr.t("moderation.locations") }} <span class="text-fg">#{{ p.location_id }}</span></p>
+              </div>
+              <span class="shrink-0 text-xs text-muted">{{ tr.t("moderation.uploaded") }} {{ p.uploaded_label }}</span>
+            </div>
+
+            <dl class="mt-3 grid grid-cols-2 gap-2 text-sm">
+              <div class="rounded-lg bg-bg px-3 py-2">
+                <dt class="text-xs text-muted">#</dt>
+                <dd class="font-mono">{{ p.id }}</dd>
+              </div>
+              <div class="rounded-lg bg-bg px-3 py-2">
+                <dt class="text-xs text-muted">{{ tr.t("moderation.contributor") }}</dt>
+                <dd class="font-medium">{{ p.contributor_label }}</dd>
+              </div>
+              {% if let Some(dim) = p.dimensions %}
+              <div class="rounded-lg bg-bg px-3 py-2">
+                <dt class="text-xs text-muted">{{ tr.t("moderation.dimensions") }}</dt>
+                <dd class="font-mono">{{ dim }}</dd>
+              </div>
+              {% endif %}
+            </dl>
+            <p class="mt-3 text-sm text-muted">{{ p.alt }}</p>
+
+            <div class="mt-4 flex flex-wrap items-center gap-3">
+              <form action="/moderation/photos/{{ p.id }}/approve" method="post"
+                    hx-post="/moderation/photos/{{ p.id }}/approve"
+                    hx-target="#moderation-feedback" hx-swap="innerHTML" class="contents">
+                <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+                <button type="submit" class="rounded-lg bg-fresh/10 px-4 py-2 text-sm font-medium text-fresh hover:bg-fresh/20">{{ tr.t("moderation.approve") }}</button>
+              </form>
+              <form action="/moderation/photos/{{ p.id }}/reject" method="post"
+                    hx-post="/moderation/photos/{{ p.id }}/reject"
+                    hx-target="#moderation-feedback" hx-swap="innerHTML"
+                    class="flex flex-wrap items-center gap-2">
+                <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+                <input type="text" name="reason" required placeholder="{{ tr.t("moderation.reason_placeholder") }}"
+                       class="rounded-lg border border-border bg-bg px-3 py-2 text-sm" />
+                <button type="submit" class="rounded-lg border border-error/30 px-4 py-2 text-sm font-medium text-error hover:border-error">{{ tr.t("moderation.reject") }}</button>
+              </form>
+              <a href="{{ p.full_url }}" target="_blank" rel="noopener" class="rounded-lg border border-border px-3 py-2 text-sm text-muted hover:text-fg">{{ tr.t("moderation.view") }}</a>
+            </div>
+          </div>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <div class="mt-8 flex items-center gap-3">
+    <a href="/moderation/photos" class="rounded-lg border border-border px-4 py-2 text-sm text-muted hover:text-fg">{{ tr.t("moderation.refresh") }}</a>
+  </div>
+</section>
+{% endblock %}

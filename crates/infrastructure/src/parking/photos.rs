@@ -17,6 +17,7 @@ impl SqlxParkingPhotoReader {
 
 struct PhotoRow {
     storage_key: String,
+    thumbnail_key: Option<String>,
     content_type: String,
     alt: Option<String>,
 }
@@ -27,7 +28,7 @@ impl ParkingPhotoReader for SqlxParkingPhotoReader {
         let rows = sqlx::query_as!(
             PhotoRow,
             r#"
-            SELECT storage_key, content_type, alt
+            SELECT storage_key, thumbnail_key, content_type, alt
             FROM parking_photo
             WHERE location_id = $1 AND moderation_state = 'APPROVED'
             ORDER BY position, id
@@ -42,6 +43,7 @@ impl ParkingPhotoReader for SqlxParkingPhotoReader {
             .into_iter()
             .map(|r| StoredPhoto {
                 key: r.storage_key,
+                thumbnail_key: r.thumbnail_key,
                 content_type: r.content_type,
                 alt: r.alt,
             })

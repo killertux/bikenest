@@ -1,6 +1,6 @@
 # M4 — Photos — implementation plan
 
-> **Status: planned.** Derived from `PLAN.md` (M4) and `REQUIREMENTS.md`
+> **Status: implemented (M4, alongside M2/M3).** Derived from `PLAN.md` (M4) and `REQUIREMENTS.md`
 > (§30, §38, §44–§45, §80, §84, §116.2/§116.9). Parent plan: `PLAN.md`.
 
 Companion to `REQUIREMENTS.md` (§30 drives this milestone), `PLAN.md` (M4 overview) and
@@ -26,6 +26,14 @@ fresh-clone onboarding from README still works.
 ---
 
 ## 1. Scope
+
+### Implementation notes
+
+- **D1 photo-attach is deferred** (§10 task 5). The P3 add-photo endpoint
+  (`POST /parking/{id}/photo`) is the primary path; a location is created first
+  and its photo attached via P3 using the same `PhotoService::upload` pipeline.
+  Converting `parking_new_post` to `multipart` is additive and can land as a
+  follow-up; the risk it posed to the existing create form is avoided.
 
 ### In scope
 

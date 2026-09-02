@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 askama = "0.14"
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 bikenest-application = { version = "0.1.0", path = "../application" }
 bikenest-domain = { version = "0.1.0", path = "../domain" }
 bikenest-infrastructure = { version = "0.1.0", path = "../infrastructure" }
@@ -23,4 +23,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [dev-dependencies]
 bikenest-test-support = { path = "../test-support" }
 http-body-util = "0.1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"] }

@@ -39,6 +39,26 @@ A community-maintained bicycle parking finder. See `REQUIREMENTS.md` (what/how),
 - [x] Infrastructure: `SqlxParkingContributionRepository` (optimistic apply + revision), `SqlxReviewRepository` (recompute aggregate in-tx), `SqlxVerificationRepository` (`DISTINCT ON` latest-per-user), `SqlxFavoriteRepository`, `SqlxContributionHistoryReader`
 - [x] Web: D1 add, D2 edit + gated proposal, D3 review, D4 verify/parked-here, favorite toggle; C4 favorites, C5 contributions; `require_verified` gate; P3 gains reviews / confidence / favorite / verification panel / "recommended because…"; HTMX + i18n (en/pt-BR)
 
+### M4 — photos (upload → validate → process → moderate → publish)
+
+- [x] Schema (`0009_photos.sql`): `parking_photo` gains `uploader_id`, `thumbnail_key`, `width`,
+      `height`, `processed_at`, `rejection_reason`, `reviewed_by`, `reviewed_at`; `moderation_state`
+      default flips `APPROVED → PENDING_REVIEW`; pending-queue + uploader indexes
+- [x] Domain: `PhotoModerationState` (`PENDING_REVIEW`/`APPROVED`/`REJECTED`), `PhotoDimensions`,
+      upload constants (10 MiB, 20 MP, JPEG q85, 400 px thumb, jpeg/png/webp allowlist)
+- [x] Application: `ImageProcessor` + `PhotoRepository` ports, `PhotoService` (`upload_photo`,
+      `approve_photo`, `reject_photo`, `list_pending_photos`); verified gate + photo-upload rate
+      limits (10/day/user, 20/day/IP); uploads are held `PENDING_REVIEW`; the original is discarded
+      after processing (§80 — only processed derivatives are stored)
+- [x] Infrastructure: `image`-crate `LocalImageProcessor` (decode → apply EXIF orientation →
+      re-encode JPEG → thumbnail, stripping all metadata); `SqlxPhotoRepository` (insert pending /
+      approve with position / reject records reason + returns keys / queue oldest-first); the P3
+      gallery reader returns `thumbnail_key`
+- [x] Web: `POST /parking/{id}/photo` (multipart, verified, CSRF via header); `/moderation/photos`
+      queue + approve/reject (HTMX, MODERATOR); P3 gallery thumbnails + lightbox + "Add photo"
+      control; moderation i18n (en/pt-BR). **D1 photo-attach deferred** — the P3 path is primary;
+      a location can be created first and its photo attached via P3 (same pipeline).
+
 ### Pulled forward from later milestones
 
 - [x] **Object storage** (from M4): `ObjectStorage` port + `LocalDiskStorage` issuing HMAC-signed,
@@ -51,7 +71,8 @@ A community-maintained bicycle parking finder. See `REQUIREMENTS.md` (what/how),
 - [x] Security-attribute labels are a hardcoded code list (`bikenest_domain::SECURITY_FEATURE_CODES`)
       + i18n labels, not a DB catalog table (so labels are localizable).
 
-- [x] 140 tests green: **domain 40, application 32, infrastructure 40, web 28**
+- [x] The full suite is green across **domain / application / infrastructure / web** (M4 adds the
+      photo process + repo tests and the upload/moderation HTTP coverage).
 
 ### Foundations (M0)
 

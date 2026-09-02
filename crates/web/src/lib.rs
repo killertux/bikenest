@@ -162,9 +162,11 @@ pub struct DetailsPage {
     pub notice: Option<String>,
 }
 
-/// One gallery photo: a ready-to-render (presigned) URL + accessible text.
+/// One gallery photo: presigned URLs + accessible text. Grid tiles render the
+/// (smaller) thumbnail; the lightbox renders the full derivative.
 pub struct PhotoVm {
     pub url: String,
+    pub thumb_url: String,
     pub alt: String,
 }
 
@@ -508,6 +510,26 @@ pub struct FavoriteButtonVm {
 pub struct VerificationResultVm {
     pub tr: Translator,
     pub label: String,
+}
+
+/// M2 photo moderation queue page (PLAN M4).
+#[derive(Template)]
+#[template(path = "pages/moderation_photos.html")]
+pub struct ModerationPhotosPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub items: Vec<view::ModerationPhotoVm>,
+    pub notice: Option<String>,
+}
+
+/// HTMX fragment: the P3 photo upload result (success or error).
+#[derive(Template)]
+#[template(path = "partials/photo_upload_result.html")]
+pub struct PhotoUploadResultVm {
+    pub tr: Translator,
+    /// "success" | "error".
+    pub state: &'static str,
+    pub message: String,
 }
 
 pub fn app_router(db: bikenest_infrastructure::Db, probe_timeout: std::time::Duration) -> axum::Router {

@@ -1,20 +1,20 @@
 //! HTTP routing and handlers.
 
 use askama::Template;
-use axum::extract::Form;
+use axum::extract::{Form, Multipart};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::{
     Router,
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     middleware,
 };
 use bikenest_application::{
     AuthError, AuthService, CheckReadiness, ContributionDeps, ContributionError, ContributionService,
     EmailProvider, GetParkingDetails, NewParkingLocation, NewVerification, ObjectStorage,
-    ParkingEdit, ParkingPhotoReader, PasswordHasher, Readiness, SearchInput, SearchParking,
-    TokenGenerator,
+    ParkingEdit, ParkingPhotoReader, PasswordHasher, PhotoDeps, PhotoError, PhotoService,
+    Readiness, SearchInput, SearchParking, TokenGenerator,
 };
 use bikenest_domain::{
     Cost, CurrencyCode, GeoPoint, Money, OpeningHours, ParkingLocation, ParkingType, PricingUnit,
@@ -25,11 +25,11 @@ use bikenest_domain::{ExistenceResult, ProposalKind, Role, UserEmail, UserId};
 use bikenest_infrastructure::probe::SqlxDatabaseProbe;
 use bikenest_infrastructure::{
     Argon2PasswordHasher, Db, FakeGeocoder, FakeOAuthProvider, InMemoryRateLimiter,
-    LocalDiskStorage, OfflineTimezoneResolver, RealTokenGenerator, SqlxAccountRepository,
-    SqlxAuditLog, SqlxContributionHistoryReader, SqlxFavoriteRepository,
+    LocalDiskStorage, LocalImageProcessor, OfflineTimezoneResolver, RealTokenGenerator,
+    SqlxAccountRepository, SqlxAuditLog, SqlxContributionHistoryReader, SqlxFavoriteRepository,
     SqlxParkingContributionRepository, SqlxParkingDetailsReader, SqlxParkingPhotoReader,
-    SqlxParkingSearchReader, SqlxReviewRepository, SqlxSessionStore, SqlxTokenStore,
-    SqlxVerificationRepository, SystemClock,
+    SqlxParkingSearchReader, SqlxPhotoRepository, SqlxReviewRepository, SqlxSessionStore,
+    SqlxTokenStore, SqlxVerificationRepository, SystemClock,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -39,9 +39,10 @@ use crate::i18n::{Locale, Translator};
 use crate::view::{self, CardVm, ResultsData};
 use crate::{
     AboutPage, AccountEmailPage, AccountPage, AccountPasswordPage, AdminUsersPage,
-    ContributionsPage, DetailsPage, ErrorPage, FavoritesPage, HomePage, LoginPage, PageLayout,
-    ParkingEditPage, ParkingNewPage, PasswordResetNewPage, PasswordResetPage, PhotoVm,
-    RegisterPage, ReviewFormPage, SearchPageVm, SearchResultsVm, VerifyEmailPage,
+    ContributionsPage, DetailsPage, ErrorPage, FavoritesPage, HomePage, LoginPage,
+    ModerationPhotosPage, PageLayout, ParkingEditPage, ParkingNewPage, PasswordResetNewPage,
+    PasswordResetPage, PhotoVm, RegisterPage, ReviewFormPage, SearchPageVm, SearchResultsVm,
+    VerifyEmailPage,
 };
 
 /// Shared application state wired at startup.
@@ -54,6 +55,7 @@ pub struct AppState {
     pub storage: Arc<dyn ObjectStorage>,
     pub auth: Arc<AuthService>,
     pub contributions: Arc<ContributionService>,
+    pub photo: Arc<PhotoService>,
 }
 
 /// Builds the full application router with a real database handle and the
@@ -115,14 +117,24 @@ pub fn app_router_with(
         clock: Box::new(SystemClock),
         freshness: Default::default(),
     });
+    let storage = LocalDiskStorage::from_env(); // Ledger #7
+    let photo_service = PhotoService::new(PhotoDeps {
+        processor: Box::new(LocalImageProcessor::new()),
+        repository: Box::new(SqlxPhotoRepository::new(db.clone())),
+        storage: Box::new(storage.clone()),
+        rate_limiter: Box::new(InMemoryRateLimiter::new()), // Ledger #6
+        audit: Box::new(SqlxAuditLog::new(db.clone())),
+        clock: Box::new(SystemClock),
+    });
     let state = AppState {
         readiness: Arc::new(CheckReadiness::new(probe)),
         search: Arc::new(search_uc),
         details: Arc::new(details),
         photos: Arc::new(SqlxParkingPhotoReader::new(db.clone())),
-        storage: Arc::new(LocalDiskStorage::from_env()), // Ledger #7
+        storage: Arc::new(storage),
         auth: Arc::new(auth_service),
         contributions: Arc::new(contribution_service),
+        photo: Arc::new(photo_service),
     };
     Router::new()
         .route("/", get(home))
@@ -159,6 +171,15 @@ pub fn app_router_with(
         .route("/account/contributions", get(account_contributions))
         .route("/admin/users", get(admin_users))
         .route("/admin/users/{id}/role", post(admin_role_post))
+        // --- M4 photos (upload → moderate → publish) ---
+        .route(
+            "/parking/{id}/photo",
+            post(upload_photo)
+                .layer(DefaultBodyLimit::max(bikenest_domain::MAX_PHOTO_BYTES + 64 * 1024)),
+        )
+        .route("/moderation/photos", get(moderation_photos))
+        .route("/moderation/photos/{id}/approve", post(moderation_photo_approve))
+        .route("/moderation/photos/{id}/reject", post(moderation_photo_reject))
         .nest_service(
             "/static",
             tower_http::services::ServeDir::new(concat!(
@@ -436,8 +457,15 @@ async fn parking_details(
                     photos
                         .into_iter()
                         .filter_map(|p| {
-                            view::resolve_photo(&*state.storage, Some(&p.key)).map(|url| PhotoVm {
+                            let url = view::resolve_photo(&*state.storage, Some(&p.key))?;
+                            let thumb_url = p
+                                .thumbnail_key
+                                .as_deref()
+                                .and_then(|k| view::resolve_photo(&*state.storage, Some(k)))
+                                .unwrap_or_else(|| url.clone());
+                            Some(PhotoVm {
                                 url,
+                                thumb_url,
                                 alt: p.alt.unwrap_or_else(|| format!("Photo of {name}")),
                             })
                         })
@@ -504,6 +532,199 @@ async fn media(
             .into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "Not found").into_response(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// M4 photos (upload → validate → process → moderate → publish)
+// ---------------------------------------------------------------------------
+
+/// POST /parking/{id}/photo — a verified user uploads one photo (multipart:
+/// `photo` file + optional `alt`). Runs the same pipeline as the D1 attach and
+/// holds the upload in `PENDING_REVIEW` (§30/§80). Returns a swap-safe fragment.
+async fn upload_photo(
+    State(state): State<AppState>,
+    locale: Locale,
+    headers: HeaderMap,
+    auth: Auth,
+    Path(id): Path<i64>,
+    mut multipart: Multipart,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_verified() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let ip = client_ip(&headers);
+
+    let mut photo_bytes: Option<Vec<u8>> = None;
+    let mut alt: Option<String> = None;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(_) => {
+                return photo_upload_result(
+                    tr,
+                    "error",
+                    tr.t("photo.error.internal"),
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        };
+        match field.name().unwrap_or("") {
+            "photo" => match field.bytes().await {
+                Ok(b) => photo_bytes = Some(b.to_vec()),
+                Err(_) => {
+                    return photo_upload_result(
+                        tr,
+                        "error",
+                        tr.t("photo.error.internal"),
+                        StatusCode::BAD_REQUEST,
+                    );
+                }
+            },
+            "alt" => {
+                if let Ok(text) = field.text().await {
+                    alt = Some(text);
+                }
+            }
+            _ => {
+                // Drain/ignore unknown fields so the connection stays clean.
+                let _ = field.bytes().await;
+            }
+        }
+    }
+
+    let Some(bytes) = photo_bytes else {
+        return photo_upload_result(
+            tr,
+            "error",
+            tr.t("photo.error.internal"),
+            StatusCode::BAD_REQUEST,
+        );
+    };
+
+    match state.photo.upload_photo(user, &ip, id, &bytes, alt.as_deref()).await {
+        Ok(_) => photo_upload_result(tr, "success", tr.t("photo.upload.success"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = photo_error(tr, &e);
+            photo_upload_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// GET /moderation/photos — the M2 photo moderation queue (MODERATOR/ADMIN).
+async fn moderation_photos(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_role(Role::Moderator) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let items = match state.photo.list_pending_photos(user).await {
+        Ok(photos) => photos
+            .iter()
+            .map(|p| view::moderation_photo_vm(tr, &*state.storage, p))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    render(
+        ModerationPhotosPage {
+            layout: PageLayout::with_csrf(
+                tr.t("moderation.title").to_string(),
+                "moderation",
+                auth.csrf_value(),
+            ),
+            tr,
+            items,
+            notice: None,
+        },
+        StatusCode::OK,
+    )
+}
+
+/// POST /moderation/photos/{id}/approve (HTMX).
+async fn moderation_photo_approve(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_role(Role::Moderator) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    match state.photo.approve_photo(user, id).await {
+        Ok(()) => photo_upload_result(tr, "success", tr.t("moderation.approved"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = photo_error(tr, &e);
+            photo_upload_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// POST /moderation/photos/{id}/reject (HTMX).
+async fn moderation_photo_reject(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+    Form(form): Form<RejectReasonForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_role(Role::Moderator) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    match state.photo.reject_photo(user, id, &form.reason).await {
+        Ok(()) => photo_upload_result(tr, "success", tr.t("moderation.rejected"), StatusCode::OK),
+        Err(e) => {
+            let (status, message) = photo_error(tr, &e);
+            photo_upload_result(tr, "error", &message, status)
+        }
+    }
+}
+
+/// A tiny rejected-photo form: the moderator's reason.
+#[derive(Debug, serde::Deserialize)]
+struct RejectReasonForm {
+    #[serde(default)]
+    reason: String,
+}
+
+fn photo_upload_result(tr: Translator, state: &'static str, message: &str, status: StatusCode) -> Response {
+    render(
+        crate::PhotoUploadResultVm {
+            tr,
+            state,
+            message: message.to_string(),
+        },
+        status,
+    )
+}
+
+/// Map a [`PhotoError`] to a non-leaking status + friendly message.
+fn photo_error(tr: Translator, e: &PhotoError) -> (StatusCode, String) {
+    use PhotoError::*;
+    let (status, key) = match e {
+        NotVerified => (StatusCode::FORBIDDEN, "photo.error.not_verified"),
+        RateLimited => (StatusCode::TOO_MANY_REQUESTS, "photo.error.rate_limited"),
+        TooLarge => (StatusCode::BAD_REQUEST, "photo.error.too_large"),
+        UnsupportedFormat => (StatusCode::BAD_REQUEST, "photo.error.unsupported"),
+        Undecodable => (StatusCode::BAD_REQUEST, "photo.error.undecodable"),
+        TooManyPixels => (StatusCode::BAD_REQUEST, "photo.error.too_many_pixels"),
+        NotFound => (StatusCode::NOT_FOUND, "photo.error.not_found"),
+        NotPending => (StatusCode::CONFLICT, "moderation.not_pending"),
+        Unauthorized | InvalidField(_) | Storage(_) => {
+            (StatusCode::FORBIDDEN, "moderation.unauthorized")
+        }
+        Internal => (StatusCode::INTERNAL_SERVER_ERROR, "photo.error.internal"),
+    };
+    (status, tr.t(key).to_string())
 }
 
 /// P7 — about / how it works.

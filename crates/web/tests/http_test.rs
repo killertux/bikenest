@@ -977,3 +977,383 @@ async fn multiple_security_values_and_major_unit_price(tx: &mut bikenest_test_su
         .execute(&pool().await).await.unwrap();
     cleanup_user_contributions(EMAIL).await;
 }
+
+// ---------------------------------------------------------------------------
+// M4 photos — upload → queue → moderate → publish (§30/§44/§80)
+// ---------------------------------------------------------------------------
+
+fn tiny_jpeg() -> Vec<u8> {
+    let img = image::RgbImage::from_pixel(32, 32, image::Rgb([20, 40, 60]));
+    let mut b = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut b).encode_image(&img).unwrap();
+    b
+}
+
+/// Build a multipart body with a `photo` file field and optional `alt` text.
+fn multipart_upload(jpeg: &[u8], alt: Option<&str>, boundary: &str) -> (String, Vec<u8>) {
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"photo\"; filename=\"photo.jpg\"\r\n",
+    );
+    body.extend_from_slice(b"Content-Type: image/jpeg\r\n\r\n");
+    body.extend_from_slice(jpeg);
+    body.extend_from_slice(b"\r\n");
+    if let Some(alt) = alt {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(b"Content-Disposition: form-data; name=\"alt\"\r\n\r\n");
+        body.extend_from_slice(alt.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+async fn post_multipart(
+    app: &axum::Router,
+    uri: &str,
+    body: Vec<u8>,
+    cookie: &str,
+    csrf: Option<&str>,
+) -> (StatusCode, String) {
+    let mut b = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("accept", "text/html")
+        .header("Accept-Language", "en")
+        .header("content-type", "multipart/form-data; boundary=----bikenestphoto")
+        .header("cookie", cookie);
+    if let Some(c) = csrf {
+        b = b.header("X-CSRF-Token", c);
+    }
+    let res = app.clone().oneshot(b.body(Body::from(body)).unwrap()).await.unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&body).to_string())
+}
+
+async fn get_raw(app: &axum::Router, uri: &str) -> (StatusCode, Vec<u8>) {
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("Accept-Language", "en")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, body.to_vec())
+}
+
+fn has_exif_marker(bytes: &[u8]) -> bool {
+    if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+        return false;
+    }
+    let mut i = 2;
+    while i + 1 < bytes.len() {
+        if bytes[i] != 0xFF {
+            i += 1;
+            continue;
+        }
+        let marker = bytes[i + 1];
+        if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            i += 2;
+            continue;
+        }
+        if marker == 0xDA {
+            break;
+        }
+        if i + 3 >= bytes.len() {
+            break;
+        }
+        let len = (u16::from(bytes[i + 2]) << 8) | u16::from(bytes[i + 3]);
+        if marker == 0xE1 {
+            return true;
+        }
+        i += 2 + len as usize;
+    }
+    false
+}
+
+/// The media root used by `LocalDiskStorage::from_env` in tests.
+fn media_root() -> &'static str {
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../media")
+}
+
+/// A committed fixture location (no photos) for photo tests.
+async fn fixture_location(tx: &mut bikenest_test_support::TestTx, mark: &str, name: &str) -> i64 {
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(mark)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let loc = ParkingBuilder::new().with_name(name).with_fixture_tag(mark)
+        .create(tx.executor()).await.unwrap();
+    tx.commit_fixture().await;
+    loc.id()
+}
+
+async fn moderator_cookie(
+    app: &axum::Router,
+    email: &bikenest_infrastructure::FakeEmailProvider,
+    addr: &str,
+) -> String {
+    cleanup_user_contributions(addr).await;
+    post_form(app, "/register", &[("email", addr), ("password", "password123")], None).await;
+    let token = email.token_for("/verify-email").expect("moderator verification email");
+    get_c(app, &format!("/verify-email?token={token}"), None).await;
+    let (uid,): (i64,) = sqlx::query_as("SELECT id FROM users WHERE email = $1")
+        .bind(addr).fetch_one(&pool().await).await.unwrap();
+    sqlx::query(
+        "INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, 'MODERATOR', NULL) ON CONFLICT DO NOTHING",
+    )
+    .bind(uid).execute(&pool().await).await.unwrap();
+    let (_, _, cookie) = post_form(app, "/login", &[("email", addr), ("password", "password123")], None).await;
+    cookie.unwrap().split(';').next().unwrap().to_string()
+}
+
+#[db_test]
+async fn photo_upload_requires_verified(tx: &mut bikenest_test_support::TestTx) {
+    let (app, _) = auth_app().await;
+    let loc = fixture_location(tx, "photo-verify-gate", "Photo Verify Gate").await;
+    let cookie = unverified_cookie(&app, "photo-unverified@example.com").await;
+    let (s, page) = get_c(&app, &format!("/parking/{loc}"), Some(&cookie)).await;
+    assert_eq!(s, StatusCode::OK);
+    let csrf = extract_csrf(&page);
+
+    let (ctype, body) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
+    let _ = ctype;
+    let (s, _) = post_multipart(&app, &format!("/parking/{loc}/photo"), body, &cookie, Some(&csrf)).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "unverified upload blocked");
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'photo-verify-gate'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions("photo-unverified@example.com").await;
+}
+
+#[db_test]
+async fn photo_upload_missing_csrf_header_is_forbidden(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    let loc = fixture_location(tx, "photo-csrf-gate", "Photo Csrf Gate").await;
+    let cookie = verified_cookie(&app, &email, "photo-csrf@example.com").await;
+    // No X-CSRF-Token header on a multipart POST → the middleware cannot read a
+    // body csrf field and rejects with 403.
+    let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
+    let (s, _) = post_multipart(&app, &format!("/parking/{loc}/photo"), body, &cookie, None).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "multipart without CSRF header denied");
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'photo-csrf-gate'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions("photo-csrf@example.com").await;
+}
+
+#[db_test]
+async fn verified_upload_enters_queue_not_gallery(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    let loc = fixture_location(tx, "photo-queue-gate", "Photo Queue Gate").await;
+    let cookie = verified_cookie(&app, &email, "photo-uploader@example.com").await;
+    let (s, page) = get_c(&app, &format!("/parking/{loc}"), Some(&cookie)).await;
+    assert_eq!(s, StatusCode::OK);
+    let csrf = extract_csrf(&page);
+
+    let (_, body) = multipart_upload(&tiny_jpeg(), Some("A first photo"), "----bikenestphoto");
+    let (s, _) = post_multipart(&app, &format!("/parking/{loc}/photo"), body, &cookie, Some(&csrf)).await;
+    assert_eq!(s, StatusCode::OK, "verified upload succeeds: {s}");
+
+    // Row is PENDING_REVIEW with a thumbnail; not yet visible publicly.
+    let (state, thumb): (String, Option<String>) = sqlx::query_as(
+        "SELECT moderation_state, thumbnail_key FROM parking_photo WHERE location_id = $1",
+    ).bind(loc).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(state, "PENDING_REVIEW");
+    assert!(thumb.is_some(), "thumbnail derivative recorded");
+
+    // The gallery (public) does not show a pending photo.
+    let (s, gallery) = get_c(&app, &format!("/parking/{loc}"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(!gallery.contains("/media/uploads/"), "pending photo not in gallery");
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'photo-queue-gate'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions("photo-uploader@example.com").await;
+}
+
+#[db_test]
+async fn moderation_routes_require_moderator_role(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    // Anonymous is redirected to login (require_role → require_user → redirect).
+    let (s, _) = get_c(&app, "/moderation/photos", None).await;
+    assert!(matches!(s, StatusCode::SEE_OTHER | StatusCode::FOUND), "anonymous redirected to login: {s}");
+
+    // A verified non-moderator is blocked from the queue and from approving.
+    let cookie = verified_cookie(&app, &email, "photo-nonmod@example.com").await;
+    let (s, _) = get_c(&app, "/moderation/photos", Some(&cookie)).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "non-moderator cannot open queue");
+    let (s, _, _) = post_form(&app, "/moderation/photos/1/approve",
+        &[("csrf", "bogus")], Some(&cookie)).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "non-moderator cannot approve");
+    let _ = tx;
+    cleanup_user_contributions("photo-nonmod@example.com").await;
+}
+
+#[db_test]
+async fn moderator_approve_publishes_to_gallery(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    let loc = fixture_location(tx, "photo-approve", "Photo Approve").await;
+    let uploader = verified_cookie(&app, &email, "photo-approve-up@example.com").await;
+    let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
+    let csrf = extract_csrf(&page);
+    let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
+    post_multipart(&app, &format!("/parking/{loc}/photo"), body, &uploader, Some(&csrf)).await;
+    let (id,): (i64,) = sqlx::query_as("SELECT id FROM parking_photo WHERE location_id = $1")
+        .bind(loc).fetch_one(&pool().await).await.unwrap();
+
+    // The moderator opens the queue, grabs CSRF, and approves.
+    let mod_cookie = moderator_cookie(&app, &email, "photo-moderator@example.com").await;
+    let (s, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK);
+    let mcs = extract_csrf(&queue);
+    let (s, _, _) = post_form(&app, &format!("/moderation/photos/{id}/approve"),
+        &[("csrf", &mcs)], Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK, "moderator approves: {s}");
+
+    let (state,): (String,) = sqlx::query_as("SELECT moderation_state FROM parking_photo WHERE id = $1")
+        .bind(id).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(state, "APPROVED");
+
+    // Now the gallery serves the derivative.
+    let (_, gallery) = get_c(&app, &format!("/parking/{loc}"), None).await;
+    assert!(gallery.contains("/media/uploads/"), "approved photo appears in gallery");
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'photo-approve'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions("photo-approve-up@example.com").await;
+    cleanup_user_contributions("photo-moderator@example.com").await;
+}
+
+#[db_test]
+async fn moderator_reject_deletes_object_and_hides(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    let loc = fixture_location(tx, "photo-reject", "Photo Reject").await;
+    let uploader = verified_cookie(&app, &email, "photo-reject-up@example.com").await;
+    let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
+    let csrf = extract_csrf(&page);
+    let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
+    post_multipart(&app, &format!("/parking/{loc}/photo"), body, &uploader, Some(&csrf)).await;
+    let (id,): (i64,) = sqlx::query_as("SELECT id FROM parking_photo WHERE location_id = $1")
+        .bind(loc).fetch_one(&pool().await).await.unwrap();
+
+    let mod_cookie = moderator_cookie(&app, &email, "photo-reject-mod@example.com").await;
+    let (_, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
+    let mcs = extract_csrf(&queue);
+    let (s, _, _) = post_form(&app, &format!("/moderation/photos/{id}/reject"),
+        &[("csrf", &mcs), ("reason", "unclear image")], Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK, "moderator rejects: {s}");
+
+    let (state, reason): (String, Option<String>) = sqlx::query_as(
+        "SELECT moderation_state, rejection_reason FROM parking_photo WHERE id = $1")
+        .bind(id).fetch_one(&pool().await).await.unwrap();
+    assert_eq!(state, "REJECTED");
+    assert_eq!(reason.as_deref(), Some("unclear image"));
+
+    // The stored derivatives were deleted from the object store.
+    let full = format!("{}/uploads/{id}/full.jpg", media_root());
+    let thumb = format!("{}/uploads/{id}/thumb.jpg", media_root());
+    assert!(!std::path::Path::new(&full).exists(), "full derivative deleted");
+    assert!(!std::path::Path::new(&thumb).exists(), "thumbnail deleted");
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'photo-reject'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions("photo-reject-up@example.com").await;
+    cleanup_user_contributions("photo-reject-mod@example.com").await;
+}
+
+#[db_test]
+async fn moderation_queue_hides_uploader_identity(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    let loc = fixture_location(tx, "photo-ident", "Photo Identity").await;
+    const EMAIL: &str = "photo-ident-up@example.com";
+    let uploader = verified_cookie(&app, &email, EMAIL).await;
+    let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
+    let csrf = extract_csrf(&page);
+    let (_, body) = multipart_upload(&tiny_jpeg(), Some("ident photo"), "----bikenestphoto");
+    post_multipart(&app, &format!("/parking/{loc}/photo"), body, &uploader, Some(&csrf)).await;
+
+    let mod_cookie = moderator_cookie(&app, &email, "photo-ident-mod@example.com").await;
+    let (s, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK);
+    // "Contributor #id" is shown; the uploader's email / OAuth subject is not (§80).
+    assert!(queue.contains("Contributor"), "queue anonymizes the uploader");
+    assert!(!queue.contains(EMAIL), "uploader email never rendered");
+    assert!(!queue.contains("sub-oauth"), "OAuth subject never rendered");
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'photo-ident'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions(EMAIL).await;
+    cleanup_user_contributions("photo-ident-mod@example.com").await;
+}
+
+#[db_test]
+async fn served_derivative_has_no_exif(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    let loc = fixture_location(tx, "photo-exif", "Photo Exif").await;
+    let uploader = verified_cookie(&app, &email, "photo-exif-up@example.com").await;
+    let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
+    let csrf = extract_csrf(&page);
+    let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
+    post_multipart(&app, &format!("/parking/{loc}/photo"), body, &uploader, Some(&csrf)).await;
+    let (id,): (i64,) = sqlx::query_as("SELECT id FROM parking_photo WHERE location_id = $1")
+        .bind(loc).fetch_one(&pool().await).await.unwrap();
+
+    // Approve so it is served.
+    let mod_cookie = moderator_cookie(&app, &email, "photo-exif-mod@example.com").await;
+    let (_, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
+    let mcs = extract_csrf(&queue);
+    post_form(&app, &format!("/moderation/photos/{id}/approve"),
+        &[("csrf", &mcs)], Some(&mod_cookie)).await;
+
+    // Fetch the presigned derivative (from the gallery <img src>) and confirm it
+    // carries no EXIF/APP1.
+    let (_, gallery) = get_c(&app, &format!("/parking/{loc}"), None).await;
+    let anchor = r#"src="/media/uploads/"#;
+    let start = gallery.find(anchor).expect("media thumb URL present");
+    let after = &gallery[start + anchor.len()..];
+    // Askama escapes `&` to `&amp;` in the src attribute; restore it so the
+    // query params reach the media route intact.
+    let url = format!("/media/uploads/{}", &after[..after.find('"').expect("closing quote")])
+        .replace("&#38;", "&")
+        .replace("&amp;", "&");
+    let (status, bytes) = get_raw(&app, &url).await;
+    assert_eq!(status, StatusCode::OK, "presigned derivative served");
+    assert!(!has_exif_marker(&bytes), "served derivative has no EXIF/APP1");
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'photo-exif'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions("photo-exif-up@example.com").await;
+    cleanup_user_contributions("photo-exif-mod@example.com").await;
+}
+
+#[db_test]
+async fn photo_upload_is_rate_limited(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    let loc = fixture_location(tx, "photo-rl", "Photo Rate Limit").await;
+    let cookie = verified_cookie(&app, &email, "photo-rl-up@example.com").await;
+    let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&cookie)).await;
+    let csrf = extract_csrf(&page);
+    let jpeg = tiny_jpeg();
+    for _ in 0..10 {
+        let (_, body) = multipart_upload(&jpeg, None, "----bikenestphoto");
+        let (s, _) = post_multipart(&app, &format!("/parking/{loc}/photo"), body, &cookie, Some(&csrf)).await;
+        assert_eq!(s, StatusCode::OK, "day-1 upload allowed: {s}");
+    }
+    let (_, body) = multipart_upload(&jpeg, None, "----bikenestphoto");
+    let (s, _) = post_multipart(&app, &format!("/parking/{loc}/photo"), body, &cookie, Some(&csrf)).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "11th same-day upload rate-limited");
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'photo-rl'")
+        .execute(&pool().await).await.unwrap();
+    cleanup_user_contributions("photo-rl-up@example.com").await;
+}
