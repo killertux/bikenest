@@ -110,7 +110,12 @@ The map/tile, geocoder, email, OAuth and object-storage integrations
 signed `/media` URLs (the bucket stays private, the app authorizes every read).
 Selectable by `S3_ENDPOINT`/`S3_BUCKET`; defaults target the compose MinIO.
 
-**Other providers (tiles, email, OAuth) still use dev impls —**
+**Email (Ledger #4) — done in code.** Provider is selected by `EMAIL_PROVIDER`
+(`fake` | `smtp` | `resend`, default `fake`; dev uses `smtp` → Mailpit). For
+production set `EMAIL_PROVIDER=resend` + `RESEND_API_KEY`/`RESEND_FROM`, or
+`smtp` + `SMTP_*`. Only the production relay/ESP credentials remain (ops).
+
+**Other providers (tiles, Google OAuth) still use dev impls —**
 **tiles are now configurable** (Ledger #3):
 
 - **Tiles / basemap.** `MAP_STYLE_URL` (default MapLibre demo tiles) reaches the
