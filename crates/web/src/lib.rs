@@ -24,8 +24,6 @@ pub struct PageLayout {
     pub description: String,
     /// OpenGraph type: "website" (default) or "article".
     pub og_type: &'static str,
-    /// Whether this page must not be indexed (account/admin/moderation/export).
-    pub noindex: bool,
 }
 
 impl PageLayout {
@@ -38,7 +36,6 @@ impl PageLayout {
             canonical: String::new(),
             description: String::new(),
             og_type: "website",
-            noindex: false,
         }
     }
 
@@ -51,7 +48,6 @@ impl PageLayout {
             canonical: String::new(),
             description: String::new(),
             og_type: "website",
-            noindex: false,
         }
     }
 
@@ -70,12 +66,6 @@ impl PageLayout {
     /// Set the OpenGraph type ("website" | "article").
     pub fn og_type(mut self, og_type: &'static str) -> Self {
         self.og_type = og_type;
-        self
-    }
-
-    /// Mark private pages as non-indexable (SEO §110).
-    pub fn noindex(mut self) -> Self {
-        self.noindex = true;
         self
     }
 

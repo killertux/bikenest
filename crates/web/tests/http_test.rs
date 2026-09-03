@@ -88,6 +88,30 @@ async fn security_headers_present_on_private_page(_tx: &mut TestTx) {
 }
 
 #[db_test]
+async fn security_headers_present_when_auth_short_circuits(_tx: &mut TestTx) {
+    // A state-changing request without a CSRF cookie → the auth middleware returns
+    // 403 *without* running the inner handler. The security-header middleware is
+    // outermost and must still apply CSP/nosniff to that response (§64/§65).
+    let app = test_app().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/logout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(
+        res.headers().contains_key("content-security-policy"),
+        "CSP must be present on a CSRF-403 response"
+    );
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
+}
+
+#[db_test]
 async fn csp_is_strict_no_unsafe_eval(_tx: &mut TestTx) {
     let headers = get_headers("/").await;
     let csp = headers["content-security-policy"].to_str().unwrap().to_string();

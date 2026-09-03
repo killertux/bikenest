@@ -137,7 +137,7 @@ pub fn cost_label(t: Translator, cost: &Cost) -> String {
 }
 
 /// Locale-aware decimal formatting (§116.6): pt-BR uses a comma as the decimal
-/// separator (`1.234,56`), en uses a dot. Applied to money/latency display.
+/// separator (`1234,56`), en uses a dot. Thousands separators are not added.
 pub fn format_money(t: Translator, value: f64) -> String {
     let s = format!("{value:.2}");
     if t.is_pt() { s.replace('.', ",") } else { s }

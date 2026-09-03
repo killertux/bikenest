@@ -264,11 +264,16 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
             )),
         )
         .fallback(not_found)
+        // Order matters: the LAST `.layer()` is the OUTERMOST middleware. We want
+        // the security-header middleware to wrap `auth_middleware` so that even
+        // when auth short-circuits (e.g. a CSRF-403 without calling the inner
+        // handler) the security/CSP headers are still applied. TraceLayer stays
+        // outermost so it observes every response.
+        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::auth_middleware))
         .layer(middleware::from_fn_with_state(
             SecurityHeaders::from_env(),
             crate::security::security_headers,
         ))
-        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::auth_middleware))
         .layer(
             tower_http::trace::TraceLayer::new_for_http()
                 .make_span_with(crate::observability::RequestSpan)

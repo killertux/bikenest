@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ layout.title }}</title>
   <meta name="csrf" content="{{ layout.csrf }}">
-  {% if layout.noindex %}
-  <meta name="robots" content="noindex">
-  {% endif %}
   {% if !layout.description.is_empty() %}
   <meta name="description" content="{{ layout.description }}">
   {% endif %}
