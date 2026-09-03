@@ -21,6 +21,7 @@ impl SqlxModerationRepository {
     }
 }
 
+#[derive(sqlx::FromRow)]
 struct ProposalRow {
     id: i64,
     location_id: i64,
@@ -33,12 +34,14 @@ struct ProposalRow {
     created_at: DateTime<Utc>,
 }
 
+#[derive(sqlx::FromRow)]
 struct ProposalLockRow {
     location_id: i64,
     status: String,
 }
 
 /// The AFTER-state core columns of a location, returned by the UPDATE…RETURNING.
+#[derive(sqlx::FromRow)]
 struct LocationRow {
     id: i64,
     name: String,
@@ -76,11 +79,8 @@ impl ModerationRepository for SqlxModerationRepository {
 
     async fn hide_review(&self, id: i64, moderator: UserId) -> Result<(), ModerationError> {
         let _ = moderator;
-        let res = sqlx::query!(
-            "UPDATE review SET moderation_state = 'HIDDEN', updated_at = now()
-             WHERE id = $1 AND moderation_state = 'ACTIVE'",
-            id
-        )
+        let res = sqlx::query("UPDATE review SET moderation_state = 'HIDDEN', updated_at = now()
+             WHERE id = $1 AND moderation_state = 'ACTIVE'").bind(id)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -92,11 +92,8 @@ impl ModerationRepository for SqlxModerationRepository {
 
     async fn restore_review(&self, id: i64, moderator: UserId) -> Result<(), ModerationError> {
         let _ = moderator;
-        let res = sqlx::query!(
-            "UPDATE review SET moderation_state = 'ACTIVE', updated_at = now()
-             WHERE id = $1 AND moderation_state = 'HIDDEN'",
-            id
-        )
+        let res = sqlx::query("UPDATE review SET moderation_state = 'ACTIVE', updated_at = now()
+             WHERE id = $1 AND moderation_state = 'HIDDEN'").bind(id)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -152,20 +149,14 @@ impl ModerationRepository for SqlxModerationRepository {
         let from_codes: Vec<String> = from.iter().map(|s| s.as_code().to_string()).collect();
         let mut tx = self.db.pool().begin().await.map_err(map_err)?;
 
-        let row = sqlx::query_as!(
-            LocationRow,
-            r#"
+        let row = sqlx::query_as::<_, LocationRow>(r#"
             UPDATE parking_location
             SET moderation_state = $2, version = version + 1, updated_at = now()
             WHERE id = $1 AND moderation_state = ANY($3)
             RETURNING id, name, address, description, parking_type, cost_kind, price_cents,
                       price_currency, price_unit, lat, lon, timezone, hours_unknown,
                       moderation_state, version
-            "#,
-            id,
-            to.as_code(),
-            &from_codes,
-        )
+            "#).bind(id).bind(to.as_code()).bind(&from_codes)
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_err)?;
@@ -180,17 +171,14 @@ impl ModerationRepository for SqlxModerationRepository {
     }
 
     async fn list_pending_proposals(&self) -> Result<Vec<Proposal>, ModerationError> {
-        let rows = sqlx::query_as!(
-            ProposalRow,
-            r#"
+        let rows = sqlx::query_as::<_, ProposalRow>(r#"
             SELECT p.id, p.location_id, l.name AS location_name, p.proposer_id, p.base_version,
                    p.kind, p.proposed, p.status, p.created_at
             FROM parking_proposal p
             JOIN parking_location l ON l.id = p.location_id
             WHERE p.status = 'PENDING'
             ORDER BY p.created_at, p.id
-            "#
-        )
+            "#)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -198,17 +186,13 @@ impl ModerationRepository for SqlxModerationRepository {
     }
 
     async fn get_proposal(&self, id: i64) -> Result<Option<Proposal>, ModerationError> {
-        let row = sqlx::query_as!(
-            ProposalRow,
-            r#"
+        let row = sqlx::query_as::<_, ProposalRow>(r#"
             SELECT p.id, p.location_id, l.name AS location_name, p.proposer_id, p.base_version,
                    p.kind, p.proposed, p.status, p.created_at
             FROM parking_proposal p
             JOIN parking_location l ON l.id = p.location_id
             WHERE p.id = $1
-            "#,
-            id
-        )
+            "#).bind(id)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -226,11 +210,7 @@ impl ModerationRepository for SqlxModerationRepository {
     ) -> Result<(), ModerationError> {
         let mut tx = self.db.pool().begin().await.map_err(map_err)?;
 
-        let prop = sqlx::query_as!(
-            ProposalLockRow,
-            "SELECT location_id, status FROM parking_proposal WHERE id = $1 FOR UPDATE",
-            id
-        )
+        let prop = sqlx::query_as::<_, ProposalLockRow>("SELECT location_id, status FROM parking_proposal WHERE id = $1 FOR UPDATE").bind(id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_err)?;
@@ -244,9 +224,7 @@ impl ModerationRepository for SqlxModerationRepository {
 
         let row = match &applied {
             ProposalApplication::MoveLocation { lat, lon, timezone } => {
-                sqlx::query_as!(
-                    LocationRow,
-                    r#"
+                sqlx::query_as::<_, LocationRow>(r#"
                     UPDATE parking_location
                     SET location = ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography,
                         timezone = $3, version = version + 1, updated_at = now()
@@ -254,31 +232,21 @@ impl ModerationRepository for SqlxModerationRepository {
                     RETURNING id, name, address, description, parking_type, cost_kind, price_cents,
                               price_currency, price_unit, lat, lon, timezone, hours_unknown,
                               moderation_state, version
-                    "#,
-                    lat,
-                    lon,
-                    timezone.name(),
-                    location_id,
-                )
+                    "#).bind(lat).bind(lon).bind(timezone.name()).bind(location_id)
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(map_err)?
             }
             ProposalApplication::ChangeExistence { exists } => {
                 let state = if *exists { "ACTIVE" } else { "REMOVED" };
-                sqlx::query_as!(
-                    LocationRow,
-                    r#"
+                sqlx::query_as::<_, LocationRow>(r#"
                     UPDATE parking_location
                     SET moderation_state = $2, version = version + 1, updated_at = now()
                     WHERE id = $1
                     RETURNING id, name, address, description, parking_type, cost_kind, price_cents,
                               price_currency, price_unit, lat, lon, timezone, hours_unknown,
                               moderation_state, version
-                    "#,
-                    location_id,
-                    state,
-                )
+                    "#).bind(location_id).bind(state)
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(map_err)?
@@ -315,12 +283,8 @@ impl ModerationRepository for SqlxModerationRepository {
 
     async fn reject_proposal(&self, id: i64, moderator: UserId, reason: &str) -> Result<(), ModerationError> {
         let _ = reason;
-        let res = sqlx::query!(
-            "UPDATE parking_proposal SET status = 'REJECTED', resolved_by = $2, resolved_at = now()
-             WHERE id = $1 AND status = 'PENDING'",
-            id,
-            moderator.0,
-        )
+        let res = sqlx::query("UPDATE parking_proposal SET status = 'REJECTED', resolved_by = $2, resolved_at = now()
+             WHERE id = $1 AND status = 'PENDING'").bind(id).bind(moderator.0)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -404,17 +368,14 @@ async fn read_hours_json(
     location_id: i64,
     unknown: bool,
 ) -> Result<serde_json::Value, ModerationError> {
+#[derive(sqlx::FromRow)]
     struct HourRow {
         day_of_week: i16,
         opens_at: chrono::NaiveTime,
         closes_at: chrono::NaiveTime,
         all_day: bool,
     }
-    let rows = sqlx::query_as!(
-        HourRow,
-        "SELECT day_of_week, opens_at, closes_at, all_day FROM opening_hours WHERE location_id = $1 ORDER BY day_of_week, opens_at",
-        location_id
-    )
+    let rows = sqlx::query_as::<_, HourRow>("SELECT day_of_week, opens_at, closes_at, all_day FROM opening_hours WHERE location_id = $1 ORDER BY day_of_week, opens_at").bind(location_id)
     .fetch_all(&mut **tx)
     .await
     .map_err(map_err)?;
@@ -436,15 +397,12 @@ async fn read_security_json(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     location_id: i64,
 ) -> Result<serde_json::Value, ModerationError> {
+#[derive(sqlx::FromRow)]
     struct SecRow {
         feature_code: String,
         state: i16,
     }
-    let rows = sqlx::query_as!(
-        SecRow,
-        "SELECT feature_code, state FROM parking_security WHERE location_id = $1",
-        location_id
-    )
+    let rows = sqlx::query_as::<_, SecRow>("SELECT feature_code, state FROM parking_security WHERE location_id = $1").bind(location_id)
     .fetch_all(&mut **tx)
     .await
     .map_err(map_err)?;

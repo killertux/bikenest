@@ -150,6 +150,13 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
     let (en, pt): (&str, &str) = match key {
         // --- nav / brand / footer -----------------------------------------
         "brand.home_aria" => ("BikeNest — home", "BikeNest — início"),
+        "a11y.primary_nav" => ("Primary", "Navegação principal"),
+        "a11y.mobile_nav" => ("Mobile", "Navegação móvel"),
+        "a11y.footer_nav" => ("Footer", "Rodapé"),
+        "a11y.breadcrumb" => ("Breadcrumb", "Trilha de navegação"),
+        "a11y.close" => ("Close", "Fechar"),
+        "a11y.report_filter" => ("Report state filter", "Filtro de estado do relato"),
+        "a11y.results_pages" => ("Results pages", "Páginas de resultados"),
         "nav.how" => ("How it works", "Como funciona"),
         "nav.spots" => ("Parking spots", "Vagas de bike"),
         "nav.community" => ("Community", "Comunidade"),

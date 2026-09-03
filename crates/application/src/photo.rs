@@ -17,7 +17,7 @@ use crate::rate_limit::{RateLimitError, RateLimiter};
 use crate::storage::{ObjectStorage, PutObject, StorageError};
 use async_trait::async_trait;
 use bikenest_domain::{
-    PhotoDimensions, PhotoModerationState, Role, UserId, bytes_within_limit,
+    PhotoDimensions, PhotoLimits, PhotoModerationState, Role, UserId, bytes_within_limit,
 };
 use chrono::{DateTime, Utc};
 use std::time::Duration;
@@ -280,6 +280,8 @@ pub struct PhotoDeps {
     pub rate_limiter: Box<dyn RateLimiter>,
     pub audit: Box<dyn AuditLog>,
     pub clock: Box<dyn Clock>,
+    /// Runtime photo pipeline limits (§30, Ledger #18); defaults to the domain constants.
+    pub limits: PhotoLimits,
 }
 
 pub struct PhotoService {
@@ -379,7 +381,7 @@ impl PhotoService {
         )
         .await?;
 
-        if !bytes_within_limit(bytes.len()) {
+        if !bytes_within_limit(bytes.len(), self.deps.limits.max_bytes) {
             return Err(PhotoError::TooLarge);
         }
         let alt = Self::normalize_alt(alt)?;

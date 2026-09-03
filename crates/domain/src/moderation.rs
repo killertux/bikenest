@@ -159,14 +159,19 @@ impl ReportDescription {
 
     /// Builds from a raw untrusted string. `Ok(None)` is not expressible here —
     /// the caller decides whether to store `Some` or `None` (it returns
-    /// [`Self`] for a non-empty, in-range description).
+    /// [`Self`] for a non-empty, in-range description). Uses [`Self::MAX_LEN`].
     pub fn new(raw: &str) -> Result<Self, DomainError> {
+        Self::new_with_len(raw, Self::MAX_LEN)
+    }
+
+    /// Builds with a runtime-configured max length (a value ≤ [`Self::MAX_LEN`];
+    /// the hard constant is the ceiling, the app may lower it, Ledger #19).
+    pub fn new_with_len(raw: &str, max_len: usize) -> Result<Self, DomainError> {
         let trimmed = raw.trim();
         let len = trimmed.chars().count();
-        if len > Self::MAX_LEN {
+        if len > max_len {
             return Err(DomainError::Invalid(format!(
-                "report description must be at most {} characters: {len}",
-                Self::MAX_LEN
+                "report description must be at most {max_len} characters: {len}"
             )));
         }
         Ok(Self(trimmed.to_string()))
@@ -174,6 +179,26 @@ impl ReportDescription {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// Runtime-tunable moderation limits (§43, Ledger #19). Default to the domain
+/// constants; the application passes its configured value (env-driven) so
+/// operators can tune without a rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModerationLimits {
+    pub report_description_max_len: usize,
+    pub report_create_user_limit: u32,
+    pub report_create_ip_limit: u32,
+}
+
+impl Default for ModerationLimits {
+    fn default() -> Self {
+        Self {
+            report_description_max_len: ReportDescription::MAX_LEN,
+            report_create_user_limit: 10,
+            report_create_ip_limit: 20,
+        }
     }
 }
 

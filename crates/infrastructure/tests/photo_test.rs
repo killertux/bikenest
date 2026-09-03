@@ -5,7 +5,7 @@ use bikenest_application::{
     ImageProcessor, NewPendingPhoto, ParkingPhotoReader, PhotoError, PhotoKind, PhotoRepository,
     PhotoTarget,
 };
-use bikenest_domain::{PhotoDimensions, UserId};
+use bikenest_domain::{PhotoDimensions, PhotoLimits, UserId};
 use bikenest_infrastructure::{
     Db, LocalImageProcessor, SqlxParkingPhotoReader, SqlxPhotoRepository,
 };
@@ -98,7 +98,7 @@ fn has_exif(jpeg: &[u8]) -> bool {
 #[tokio::test]
 async fn processor_round_trips_jpeg_to_derivatives_without_exif() {
     let source = base_jpeg(800, 600);
-    let out = LocalImageProcessor::new().process(&source).await.unwrap();
+    let out = LocalImageProcessor::new(PhotoLimits::default()).process(&source).await.unwrap();
     assert_eq!(out.content_type, "image/jpeg");
     assert_eq!(out.dimensions, PhotoDimensions { width: 800, height: 600 });
     // Both derivatives are non-empty JPEGs.
@@ -114,7 +114,7 @@ async fn processor_applies_exif_orientation_then_strips_exif() {
     // Orientation 6 = Rotate90 → a 400x300 source yields a 300x400 derivative.
     let source = base_jpeg(400, 300);
     let oriented = jpeg_with_exif_orientation(&source, 6);
-    let out = LocalImageProcessor::new().process(&oriented).await.unwrap();
+    let out = LocalImageProcessor::new(PhotoLimits::default()).process(&oriented).await.unwrap();
     assert_eq!(out.dimensions, PhotoDimensions { width: 300, height: 400 });
     assert!(!has_exif(&out.full), "EXIF must be stripped after applying orientation");
     assert!(!has_exif(&out.thumb));
@@ -125,7 +125,7 @@ async fn processor_rejects_non_allowlisted_format() {
     // BMP magic "BM" is sniffed as BMP → not in the allowlist → UnsupportedFormat.
     let bmp = b"BM\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
     assert!(matches!(
-        LocalImageProcessor::new().process(bmp).await,
+        LocalImageProcessor::new(PhotoLimits::default()).process(bmp).await,
         Err(PhotoError::UnsupportedFormat)
     ));
 }
@@ -133,12 +133,12 @@ async fn processor_rejects_non_allowlisted_format() {
 #[tokio::test]
 async fn processor_rejects_non_image_input_as_undecodable() {
     assert!(matches!(
-        LocalImageProcessor::new().process(b"this is definitely not an image").await,
+        LocalImageProcessor::new(PhotoLimits::default()).process(b"this is definitely not an image").await,
         Err(PhotoError::Undecodable)
     ));
     // Empty input.
     assert!(matches!(
-        LocalImageProcessor::new().process(b"").await,
+        LocalImageProcessor::new(PhotoLimits::default()).process(b"").await,
         Err(PhotoError::Undecodable)
     ));
 }
@@ -146,7 +146,7 @@ async fn processor_rejects_non_image_input_as_undecodable() {
 #[tokio::test]
 async fn processor_thumbnails_to_max_side() {
     let source = base_jpeg(1200, 2400); // tall
-    let out = LocalImageProcessor::new().process(&source).await.unwrap();
+    let out = LocalImageProcessor::new(PhotoLimits::default()).process(&source).await.unwrap();
     // Longest side must be ≤ THUMBNAIL_MAX_SIDE (400); aspect preserved.
     let (w, h) = decode_jpeg_dims(&out.thumb);
     assert!(w <= 400 && h <= 400, "thumb {w}x{h} exceeds 400 max side");

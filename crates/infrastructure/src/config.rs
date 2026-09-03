@@ -32,45 +32,14 @@ pub struct Config {
     pub moderation: ModerationConfig,
 }
 
-/// Photo upload/derivative limits (§30/#44). Current domain constants are the
-/// defaults; the domain crate keeps them as the enforcement values (see the
-/// M7/M8 note — making runtime-plumbed limits is a follow-up).
-#[derive(Debug, Clone, Copy)]
-pub struct PhotoConfig {
-    pub max_bytes: usize,
-    pub max_megapixels: u64,
-    pub thumb_max_side: u32,
-    pub derivative_quality: u8,
-}
+/// Photo upload/derivative limits (§30/#44, Ledger #18), env-driven with the
+/// domain constants as defaults. Runtime-plumbed through the photo pipeline in
+/// M8 so operators can tune without a rebuild.
+pub type PhotoConfig = bikenest_domain::PhotoLimits;
 
-impl Default for PhotoConfig {
-    fn default() -> Self {
-        Self {
-            max_bytes: bikenest_domain::MAX_PHOTO_BYTES,
-            max_megapixels: bikenest_domain::MAX_PHOTO_MEGAPIXELS,
-            thumb_max_side: bikenest_domain::THUMBNAIL_MAX_SIDE,
-            derivative_quality: bikenest_domain::DERIVATIVE_QUALITY,
-        }
-    }
-}
-
-/// Moderation limits (§43). Current constants are the defaults.
-#[derive(Debug, Clone, Copy)]
-pub struct ModerationConfig {
-    pub report_description_max_len: usize,
-    pub report_create_user_limit: u32,
-    pub report_create_ip_limit: u32,
-}
-
-impl Default for ModerationConfig {
-    fn default() -> Self {
-        Self {
-            report_description_max_len: 1000,
-            report_create_user_limit: 10,
-            report_create_ip_limit: 20,
-        }
-    }
-}
+/// Moderation limits (§43, Ledger #19), env-driven with the domain constants as
+/// defaults. Runtime-plumbed through the moderation service in M8.
+pub type ModerationConfig = bikenest_domain::ModerationLimits;
 
 impl Config {
     /// Loads configuration from the process environment (typically populated
@@ -89,11 +58,7 @@ impl Config {
             freshness: freshness_config_from_env(),
             retention: retention_from_env(),
             photo: photo_config_from_env(),
-            moderation: ModerationConfig {
-                report_description_max_len: env_usize("MOD_REPORT_DESC_MAX_LEN").unwrap_or(1000),
-                report_create_user_limit: env_u32("MOD_REPORT_USER_LIMIT").unwrap_or(10),
-                report_create_ip_limit: env_u32("MOD_REPORT_IP_LIMIT").unwrap_or(20),
-            },
+            moderation: moderation_config_from_env(),
         })
     }
 }
@@ -144,6 +109,19 @@ pub fn photo_config_from_env() -> PhotoConfig {
         max_megapixels: env_u64("PHOTO_MAX_MEGAPIXELS").unwrap_or(bikenest_domain::MAX_PHOTO_MEGAPIXELS),
         thumb_max_side: env_u32("PHOTO_THUMB_MAX_SIDE").unwrap_or(bikenest_domain::THUMBNAIL_MAX_SIDE),
         derivative_quality: env_u8("PHOTO_DERIVATIVE_QUALITY").unwrap_or(bikenest_domain::DERIVATIVE_QUALITY),
+    }
+}
+
+/// Moderation limits (§43, Ledger #19), from env with the domain defaults.
+pub fn moderation_config_from_env() -> ModerationConfig {
+    let d = bikenest_domain::ModerationLimits::default();
+    ModerationConfig {
+        report_description_max_len: env_usize("MOD_REPORT_DESC_MAX_LEN")
+            .unwrap_or(d.report_description_max_len),
+        report_create_user_limit: env_u32("MOD_REPORT_USER_LIMIT")
+            .unwrap_or(d.report_create_user_limit),
+        report_create_ip_limit: env_u32("MOD_REPORT_IP_LIMIT")
+            .unwrap_or(d.report_create_ip_limit),
     }
 }
 

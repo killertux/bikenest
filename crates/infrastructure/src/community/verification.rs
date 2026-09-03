@@ -74,21 +74,18 @@ impl VerificationRepository for SqlxVerificationRepository {
         &self,
         location_id: i64,
     ) -> Result<Vec<ExistenceSignal>, ContributionError> {
+#[derive(sqlx::FromRow)]
         struct SignalRow {
             user_id: Option<i64>,
             result: String,
             created_at: DateTime<Utc>,
         }
-        let rows = sqlx::query_as!(
-            SignalRow,
-            r#"
+        let rows = sqlx::query_as::<_, SignalRow>(r#"
             SELECT DISTINCT ON (user_id) user_id, result, created_at
             FROM verification
             WHERE location_id = $1 AND kind = 'existence' AND user_id IS NOT NULL
             ORDER BY user_id, created_at DESC
-            "#,
-            location_id
-        )
+            "#).bind(location_id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -108,14 +105,13 @@ impl VerificationRepository for SqlxVerificationRepository {
         &self,
         location_id: i64,
     ) -> Result<Vec<AttributeSummary>, ContributionError> {
+#[derive(sqlx::FromRow)]
         struct AttrRow {
             attribute_code: Option<String>,
             correct: Option<i64>,
             incorrect: Option<i64>,
         }
-        let rows = sqlx::query_as!(
-            AttrRow,
-            r#"
+        let rows = sqlx::query_as::<_, AttrRow>(r#"
             SELECT attribute_code,
                    COUNT(*) FILTER (WHERE result = 'correct') AS correct,
                    COUNT(*) FILTER (WHERE result = 'incorrect') AS incorrect
@@ -123,9 +119,7 @@ impl VerificationRepository for SqlxVerificationRepository {
             WHERE location_id = $1 AND kind = 'attribute'
             GROUP BY attribute_code
             ORDER BY attribute_code
-            "#,
-            location_id
-        )
+            "#).bind(location_id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;

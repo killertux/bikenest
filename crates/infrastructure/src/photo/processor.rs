@@ -3,7 +3,7 @@
 
 use async_trait::async_trait;
 use bikenest_application::{PhotoError, ProcessedImage};
-use bikenest_domain::{PhotoDimensions, DERIVATIVE_QUALITY, THUMBNAIL_MAX_SIDE};
+use bikenest_domain::{PhotoDimensions, PhotoLimits};
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops;
 use image::metadata::Orientation;
@@ -12,11 +12,13 @@ use std::io::Cursor;
 
 /// [`ImageProcessor`](bikenest_application::ImageProcessor) via the `image`
 /// crate. Deterministic, pure-Rust decode/re-encode for jpeg/png/webp inputs.
-pub struct LocalImageProcessor;
+pub struct LocalImageProcessor {
+    limits: PhotoLimits,
+}
 
 impl LocalImageProcessor {
-    pub fn new() -> Self {
-        Self
+    pub fn new(limits: PhotoLimits) -> Self {
+        Self { limits }
     }
 
     fn is_allowed(format: ImageFormat) -> bool {
@@ -56,7 +58,7 @@ impl bikenest_application::ImageProcessor for LocalImageProcessor {
         let mut decoder = reader.into_decoder().map_err(|_| PhotoError::Undecodable)?;
         let (raw_w, raw_h) = decoder.dimensions();
         let dims = PhotoDimensions { width: raw_w, height: raw_h };
-        if !dims.within_limit() {
+        if !dims.within_limit(self.limits.max_megapixels) {
             return Err(PhotoError::TooManyPixels);
         }
         let orientation = decoder
@@ -73,18 +75,18 @@ impl bikenest_application::ImageProcessor for LocalImageProcessor {
         // written). Constructing pixels from scratch guarantees the strip.
         let mut full = Vec::new();
         {
-            let mut enc = JpegEncoder::new_with_quality(&mut full, DERIVATIVE_QUALITY);
+            let mut enc = JpegEncoder::new_with_quality(&mut full, self.limits.derivative_quality);
             enc.encode_image(&oriented)
                 .map_err(|_| PhotoError::Undecodable)?;
         }
 
-        // Thumbnail: longest side ≤ THUMBNAIL_MAX_SIDE, aspect preserved.
+        // Thumbnail: longest side ≤ configured side, aspect preserved.
         let thumb_rgb = DynamicImage::ImageRgb8(oriented)
-            .thumbnail(THUMBNAIL_MAX_SIDE, THUMBNAIL_MAX_SIDE)
+            .thumbnail(self.limits.thumb_max_side, self.limits.thumb_max_side)
             .to_rgb8();
         let mut thumb = Vec::new();
         {
-            let mut enc = JpegEncoder::new_with_quality(&mut thumb, DERIVATIVE_QUALITY);
+            let mut enc = JpegEncoder::new_with_quality(&mut thumb, self.limits.derivative_quality);
             enc.encode_image(&thumb_rgb)
                 .map_err(|_| PhotoError::Undecodable)?;
         }

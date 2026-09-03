@@ -3,7 +3,7 @@
 <div class="mx-auto max-w-shell px-4 py-8 lg:px-8" x-data="detailsPanel">
 
   <!-- Breadcrumb -->
-  <nav class="mb-5 flex items-center gap-1.5 text-sm text-muted" aria-label="Breadcrumb">
+  <nav class="mb-5 flex items-center gap-1.5 text-sm text-muted" aria-label="{{ tr.t("a11y.breadcrumb") }}">
     <a href="/" class="hover:text-fg">{{ tr.t("details.breadcrumb.home") }}</a>
     <span aria-hidden="true">/</span>
     <a href="/search" class="hover:text-fg">{{ tr.t("details.breadcrumb.search") }}</a>
@@ -87,7 +87,7 @@
           <!-- Lightbox -->
           <div x-show="galleryOpen" x-cloak @keydown.escape.window="closeLightbox" class="fixed inset-0 z-50 flex items-center justify-center bg-[oklch(18%_0.015_240_/_0.85)] p-4" @click="closeLightbox">
             <img :src="gallerySrc" :alt="galleryAlt" class="max-h-[90vh] max-w-full rounded-xl" @click.stop />
-            <button @click="closeLightbox" aria-label="Close" class="absolute right-5 top-5 grid h-10 w-10 place-items-center rounded-full bg-white/90 text-fg">✕</button>
+            <button @click="closeLightbox" aria-label="{{ tr.t("a11y.close") }}" class="absolute right-5 top-5 grid h-10 w-10 place-items-center rounded-full bg-white/90 text-fg">✕</button>
           </div>
         {% endif %}
       </section>

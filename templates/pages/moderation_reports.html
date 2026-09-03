@@ -4,7 +4,7 @@
   <h1 class="font-display text-2xl font-bold tracking-tight">{{ tr.t("moderation.reports.title") }}</h1>
   <p class="mt-1 text-sm text-muted">{{ tr.t("moderation.reports.subtitle") }}</p>
 
-  <nav class="mt-4 flex flex-wrap items-center gap-2 text-sm" aria-label="Report state filter">
+  <nav class="mt-4 flex flex-wrap items-center gap-2 text-sm" aria-label="{{ tr.t("a11y.report_filter") }}">
     <a href="/moderation/reports" {% if state_filter == "" %}class="rounded-full bg-fg px-3 py-1 text-bg"{% else %}class="rounded-full border border-border px-3 py-1 text-muted hover:text-fg"{% endif %}>{{ tr.t("report.state.all") }}</a>
     <a href="/moderation/reports?state=OPEN" {% if state_filter == "OPEN" %}class="rounded-full bg-fg px-3 py-1 text-bg"{% else %}class="rounded-full border border-border px-3 py-1 text-muted hover:text-fg"{% endif %}>{{ tr.t("report.state.open") }}</a>
     <a href="/moderation/reports?state=UNDER_REVIEW" {% if state_filter == "UNDER_REVIEW" %}class="rounded-full bg-fg px-3 py-1 text-bg"{% else %}class="rounded-full border border-border px-3 py-1 text-muted hover:text-fg"{% endif %}>{{ tr.t("report.state.under_review") }}</a>

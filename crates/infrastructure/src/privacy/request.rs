@@ -18,6 +18,7 @@ impl SqlxPrivacyRequestRepository {
     }
 }
 
+#[derive(sqlx::FromRow)]
 struct RequestRow {
     id: i64,
     user_id: Option<i64>,
@@ -51,20 +52,15 @@ impl RequestRow {
 #[async_trait]
 impl PrivacyRequestRepository for SqlxPrivacyRequestRepository {
     async fn create(&self, r: &NewPrivacyRequest) -> Result<i64, PrivacyError> {
+#[derive(sqlx::FromRow)]
         struct IdRow {
             id: i64,
         }
-        let row = sqlx::query_as!(
-            IdRow,
-            r#"
+        let row = sqlx::query_as::<_, IdRow>(r#"
             INSERT INTO privacy_request (user_id, kind, state, details)
             VALUES ($1, $2, 'OPEN', $3)
             RETURNING id
-            "#,
-            r.user_id.0,
-            r.kind.as_code(),
-            r.details,
-        )
+            "#).bind(r.user_id.0).bind(r.kind.as_code()).bind(&r.details)
         .fetch_one(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -74,28 +70,21 @@ impl PrivacyRequestRepository for SqlxPrivacyRequestRepository {
     async fn list(&self, state: Option<PrivacyRequestState>) -> Result<Vec<PrivacyRequest>, PrivacyError> {
         let rows: Vec<RequestRow> = match state {
             Some(s) => {
-                sqlx::query_as!(
-                    RequestRow,
-                    r#"
+                sqlx::query_as::<_, RequestRow>(r#"
                     SELECT id, user_id, kind, state, details, fulfilled_by, fulfilled_at,
                            created_at, updated_at
                     FROM privacy_request WHERE state = $1 ORDER BY created_at, id
-                    "#,
-                    s.as_code(),
-                )
+                    "#).bind(s.as_code())
                 .fetch_all(self.db.pool())
                 .await
                 .map_err(map_err)?
             }
             None => {
-                sqlx::query_as!(
-                    RequestRow,
-                    r#"
+                sqlx::query_as::<_, RequestRow>(r#"
                     SELECT id, user_id, kind, state, details, fulfilled_by, fulfilled_at,
                            created_at, updated_at
                     FROM privacy_request ORDER BY created_at, id
-                    "#
-                )
+                    "#)
                 .fetch_all(self.db.pool())
                 .await
                 .map_err(map_err)?
@@ -105,15 +94,11 @@ impl PrivacyRequestRepository for SqlxPrivacyRequestRepository {
     }
 
     async fn get(&self, id: i64) -> Result<Option<PrivacyRequest>, PrivacyError> {
-        let row = sqlx::query_as!(
-            RequestRow,
-            r#"
+        let row = sqlx::query_as::<_, RequestRow>(r#"
             SELECT id, user_id, kind, state, details, fulfilled_by, fulfilled_at,
                    created_at, updated_at
             FROM privacy_request WHERE id = $1
-            "#,
-            id,
-        )
+            "#).bind(id)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -125,15 +110,11 @@ impl PrivacyRequestRepository for SqlxPrivacyRequestRepository {
 
     async fn fulfill(&self, id: i64, by: Option<UserId>) -> Result<(), PrivacyError> {
         let by = by.map(|u| u.0);
-        let res = sqlx::query!(
-            r#"
+        let res = sqlx::query(r#"
             UPDATE privacy_request
             SET state = 'COMPLETED', fulfilled_by = $2, fulfilled_at = now(), updated_at = now()
             WHERE id = $1 AND state IN ('OPEN', 'IN_PROGRESS')
-            "#,
-            id,
-            by,
-        )
+            "#).bind(id).bind(by)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;

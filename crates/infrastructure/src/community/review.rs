@@ -115,16 +115,11 @@ impl ReviewRepository for SqlxReviewRepository {
         location_id: i64,
         author: UserId,
     ) -> Result<Option<Review>, ContributionError> {
-        let row = sqlx::query_as!(
-            ReviewRow,
-            r#"
+        let row = sqlx::query_as::<_, ReviewRow>(r#"
             SELECT id, location_id, author_id, rating, body, created_at, updated_at
             FROM review
             WHERE location_id = $1 AND author_id = $2
-            "#,
-            location_id,
-            author.0
-        )
+            "#).bind(location_id).bind(author.0)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -132,16 +127,12 @@ impl ReviewRepository for SqlxReviewRepository {
     }
 
     async fn list_active(&self, location_id: i64) -> Result<Vec<Review>, ContributionError> {
-        let rows = sqlx::query_as!(
-            ReviewRow,
-            r#"
+        let rows = sqlx::query_as::<_, ReviewRow>(r#"
             SELECT id, location_id, author_id, rating, body, created_at, updated_at
             FROM review
             WHERE location_id = $1 AND moderation_state = 'ACTIVE'
             ORDER BY created_at DESC, id DESC
-            "#,
-            location_id
-        )
+            "#).bind(location_id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -149,6 +140,7 @@ impl ReviewRepository for SqlxReviewRepository {
     }
 }
 
+#[derive(sqlx::FromRow)]
 struct ReviewRow {
     id: i64,
     location_id: i64,

@@ -51,6 +51,7 @@ impl SqlxAccountRepository {
     }
 }
 
+#[derive(sqlx::FromRow)]
 struct UserRow {
     id: i64,
     email: String,
@@ -62,15 +63,11 @@ struct UserRow {
 #[async_trait]
 impl AccountRepository for SqlxAccountRepository {
     async fn find_by_email(&self, email: &UserEmail) -> Result<Option<User>, AuthError> {
-        let row = sqlx::query_as!(
-            UserRow,
-            r#"
+        let row = sqlx::query_as::<_, UserRow>(r#"
             SELECT id, email, display_name, account_state, email_verified_at
             FROM users
             WHERE email = $1
-            "#,
-            email.as_str()
-        )
+            "#).bind(email.as_str())
         .fetch_optional(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;
@@ -81,15 +78,11 @@ impl AccountRepository for SqlxAccountRepository {
     }
 
     async fn find_by_id(&self, id: UserId) -> Result<Option<User>, AuthError> {
-        let row = sqlx::query_as!(
-            UserRow,
-            r#"
+        let row = sqlx::query_as::<_, UserRow>(r#"
             SELECT id, email, display_name, account_state, email_verified_at
             FROM users
             WHERE id = $1
-            "#,
-            id.0
-        )
+            "#).bind(id.0)
         .fetch_optional(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;
@@ -256,6 +249,7 @@ impl AccountRepository for SqlxAccountRepository {
         provider: AuthenticationProvider,
         subject: &str,
     ) -> Result<Option<IdentityRecord>, AuthError> {
+#[derive(sqlx::FromRow)]
         struct Row {
             id: i64,
             user_id: i64,
@@ -263,16 +257,11 @@ impl AccountRepository for SqlxAccountRepository {
             provider_subject: String,
             credential_hash: Option<String>,
         }
-        let row = sqlx::query_as!(
-            Row,
-            r#"
+        let row = sqlx::query_as::<_, Row>(r#"
             SELECT id, user_id, provider, provider_subject, credential_hash
             FROM authentication_identities
             WHERE provider = $1 AND provider_subject = $2
-            "#,
-            provider.as_code(),
-            subject
-        )
+            "#).bind(provider.as_code()).bind(subject)
         .fetch_optional(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;
@@ -321,14 +310,11 @@ impl AccountRepository for SqlxAccountRepository {
     }
 
     async fn list_users(&self) -> Result<Vec<User>, AuthError> {
-        let rows = sqlx::query_as!(
-            UserRow,
-            r#"
+        let rows = sqlx::query_as::<_, UserRow>(r#"
             SELECT id, email, display_name, account_state, email_verified_at
             FROM users
             ORDER BY id DESC
-            "#
-        )
+            "#)
         .fetch_all(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;

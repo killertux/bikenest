@@ -15,6 +15,7 @@ impl SqlxParkingPhotoReader {
     }
 }
 
+#[derive(sqlx::FromRow)]
 struct PhotoRow {
     storage_key: String,
     thumbnail_key: Option<String>,
@@ -25,16 +26,12 @@ struct PhotoRow {
 #[async_trait]
 impl ParkingPhotoReader for SqlxParkingPhotoReader {
     async fn photos(&self, location_id: i64) -> Result<Vec<StoredPhoto>, ReaderError> {
-        let rows = sqlx::query_as!(
-            PhotoRow,
-            r#"
+        let rows = sqlx::query_as::<_, PhotoRow>(r#"
             SELECT storage_key, thumbnail_key, content_type, alt
             FROM parking_photo
             WHERE location_id = $1 AND moderation_state = 'APPROVED'
             ORDER BY position, id
-            "#,
-            location_id
-        )
+            "#).bind(location_id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_db_err)?;

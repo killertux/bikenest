@@ -23,6 +23,29 @@ pub const ALLOWED_INPUT_FORMATS: &[&str] = &["jpeg", "png", "webp"];
 /// JPEG quality for the re-encoded full derivative.
 pub const DERIVATIVE_QUALITY: u8 = 85;
 
+/// Runtime-tunable photo pipeline limits (§30, Ledger #18). The hard constants
+/// above are the defaults; the application/web layers pass their configured
+/// value (env-driven) so operators can tune without a rebuild. `Default` keeps
+/// behaviour identical to the constants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhotoLimits {
+    pub max_bytes: usize,
+    pub max_megapixels: u64,
+    pub thumb_max_side: u32,
+    pub derivative_quality: u8,
+}
+
+impl Default for PhotoLimits {
+    fn default() -> Self {
+        Self {
+            max_bytes: MAX_PHOTO_BYTES,
+            max_megapixels: MAX_PHOTO_MEGAPIXELS,
+            thumb_max_side: THUMBNAIL_MAX_SIDE,
+            derivative_quality: DERIVATIVE_QUALITY,
+        }
+    }
+}
+
 /// Pixel dimensions of a processed derivative.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhotoDimensions {
@@ -41,9 +64,10 @@ impl PhotoDimensions {
         self.pixel_count().div_ceil(1_000_000)
     }
 
-    /// Whether the dimensions satisfy the §30 decoded-pixel cap.
-    pub fn within_limit(&self) -> bool {
-        self.megapixels() <= MAX_PHOTO_MEGAPIXELS
+    /// Whether the dimensions satisfy the §30 decoded-pixel cap (the configured
+    /// megapixel limit, which defaults to [`MAX_PHOTO_MEGAPIXELS`]).
+    pub fn within_limit(&self, max_megapixels: u64) -> bool {
+        self.megapixels() <= max_megapixels
     }
 }
 
@@ -88,9 +112,10 @@ impl PhotoModerationState {
     }
 }
 
-/// Whether raw byte length is within the §30 max upload size.
-pub fn bytes_within_limit(bytes: usize) -> bool {
-    bytes <= MAX_PHOTO_BYTES
+/// Whether raw byte length is within the §30 max upload size (the configured
+/// limit, which defaults to [`MAX_PHOTO_BYTES`]).
+pub fn bytes_within_limit(bytes: usize, max_bytes: usize) -> bool {
+    bytes <= max_bytes
 }
 
 /// Whether a content-sniffed format is in the §30 allowlist.
@@ -126,21 +151,30 @@ mod tests {
 
     #[test]
     fn byte_limit_boundary() {
-        assert!(bytes_within_limit(MAX_PHOTO_BYTES));
-        assert!(bytes_within_limit(MAX_PHOTO_BYTES - 1));
-        assert!(!bytes_within_limit(MAX_PHOTO_BYTES + 1));
+        assert!(bytes_within_limit(MAX_PHOTO_BYTES, MAX_PHOTO_BYTES));
+        assert!(bytes_within_limit(MAX_PHOTO_BYTES - 1, MAX_PHOTO_BYTES));
+        assert!(!bytes_within_limit(MAX_PHOTO_BYTES + 1, MAX_PHOTO_BYTES));
     }
 
     #[test]
     fn megapixel_limit_boundary_is_inclusive() {
         // Exactly 20 MP (20,000,000 px) = at the limit → allowed.
-        assert!(PhotoDimensions { width: 5000, height: 4000 }.within_limit());
+        assert!(PhotoDimensions { width: 5000, height: 4000 }.within_limit(MAX_PHOTO_MEGAPIXELS));
         // One pixel past the cap (20,000,001 px) rounds to 21 MP → over.
-        assert!(!PhotoDimensions { width: 5000, height: 4001 }.within_limit());
+        assert!(!PhotoDimensions { width: 5000, height: 4001 }.within_limit(MAX_PHOTO_MEGAPIXELS));
         // Below the cap → allowed (a 19.995 MP image rounds up to 20 MP, still ≤ 20).
-        assert!(PhotoDimensions { width: 5000, height: 3999 }.within_limit());
+        assert!(PhotoDimensions { width: 5000, height: 3999 }.within_limit(MAX_PHOTO_MEGAPIXELS));
         // A small square is trivially fine.
-        assert!(PhotoDimensions { width: 800, height: 600 }.within_limit());
+        assert!(PhotoDimensions { width: 800, height: 600 }.within_limit(MAX_PHOTO_MEGAPIXELS));
+    }
+
+    #[test]
+    fn limits_default_to_constants() {
+        let l = PhotoLimits::default();
+        assert_eq!(l.max_bytes, MAX_PHOTO_BYTES);
+        assert_eq!(l.max_megapixels, MAX_PHOTO_MEGAPIXELS);
+        assert_eq!(l.thumb_max_side, THUMBNAIL_MAX_SIDE);
+        assert_eq!(l.derivative_quality, DERIVATIVE_QUALITY);
     }
 
     #[test]

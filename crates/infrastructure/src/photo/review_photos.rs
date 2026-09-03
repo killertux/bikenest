@@ -16,6 +16,7 @@ impl SqlxReviewPhotosReader {
     }
 }
 
+#[derive(sqlx::FromRow)]
 struct Row {
     storage_key: String,
     thumbnail_key: Option<String>,
@@ -24,16 +25,12 @@ struct Row {
 #[async_trait]
 impl ReviewPhotosReader for SqlxReviewPhotosReader {
     async fn photos(&self, review_id: i64) -> Result<Vec<StoredPhoto>, ReaderError> {
-        let rows = sqlx::query_as!(
-            Row,
-            r#"
+        let rows = sqlx::query_as::<_, Row>(r#"
             SELECT storage_key, thumbnail_key
             FROM review_photo
             WHERE review_id = $1 AND moderation_state = 'APPROVED'
             ORDER BY position, id
-            "#,
-            review_id
-        )
+            "#).bind(review_id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_db_err)?;

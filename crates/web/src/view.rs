@@ -285,6 +285,7 @@ pub fn build_results(
     destination_label: Option<String>,
     query_string: String,
     now: chrono::DateTime<chrono::Utc>,
+    thresholds: &bikenest_domain::FreshnessThresholds,
     storage: &dyn ObjectStorage,
 ) -> ResultsData {
     let items: Vec<CardVm> = page
@@ -294,7 +295,7 @@ pub fn build_results(
             let freshness = bikenest_domain::categorize(
                 s.last_verified_at,
                 now,
-                &bikenest_domain::DEFAULT_THRESHOLDS,
+                thresholds,
             );
             let photo_url = resolve_photo(storage, s.photo_key.as_deref());
             CardVm::from_summary(t, s, freshness, photo_url)
@@ -835,8 +836,12 @@ pub fn audit_row_vm(t: Translator, e: &bikenest_application::AuditStoredEvent) -
 // ---------------------------------------------------------------------------
 
 /// A locale-neutral ISO date-time label (YYYY-MM-DD HH:MM).
-pub fn iso_datetime_label(dt: chrono::DateTime<chrono::Utc>) -> String {
-    dt.format("%Y-%m-%d %H:%M").to_string()
+pub fn iso_datetime_label(t: Translator, dt: chrono::DateTime<chrono::Utc>) -> String {
+    if t.is_pt() {
+        dt.format("%d/%m/%Y %H:%M").to_string()
+    } else {
+        dt.format("%Y-%m-%d %H:%M").to_string()
+    }
 }
 
 /// One row of the C7 export-status page (status + optional single-use link).
@@ -866,8 +871,8 @@ pub fn export_vm(t: Translator, e: &bikenest_application::Export, token: Option<
         id: e.id,
         state_code: e.state.as_code(),
         state_label: export_state_label(t, e.state),
-        created_label: iso_datetime_label(e.created_at),
-        expires_label: iso_datetime_label(e.expires_at),
+        created_label: iso_datetime_label(t, e.created_at),
+        expires_label: iso_datetime_label(t, e.expires_at),
         download_token: if e.state == bikenest_domain::ExportState::Ready { token } else { None },
         is_ready: e.state == bikenest_domain::ExportState::Ready,
     }
@@ -912,7 +917,7 @@ pub fn privacy_request_vm(t: Translator, r: &bikenest_application::PrivacyReques
         kind_label: privacy_request_kind_label(t, r.kind),
         state_code: r.state.as_code(),
         state_label: privacy_request_state_label(t, r.state),
-        created_label: iso_datetime_label(r.created_at),
+        created_label: iso_datetime_label(t, r.created_at),
     }
 }
 
@@ -925,12 +930,12 @@ pub struct PolicyVersionVm {
 }
 
 pub fn policy_version_vm(
-    _t: Translator,
+    t: Translator,
     doc: &bikenest_application::PolicyDocument,
 ) -> PolicyVersionVm {
     PolicyVersionVm {
         version: doc.version.clone(),
-        effective_label: iso_datetime_label(doc.effective_at),
+        effective_label: iso_datetime_label(t, doc.effective_at),
         is_current: doc.superseded_at.is_none(),
     }
 }

@@ -10,8 +10,9 @@ use crate::photo::PhotoKind;
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use async_trait::async_trait;
 use bikenest_domain::{
-    ModerationState, ProposalKind, ProposalStatus, ReportDescription, ReportOutcome, ReportState,
-    ReportTargetType, Role, UserId, is_known_report_reason, reason_allowed_for,
+    ModerationLimits, ModerationState, ProposalKind, ProposalStatus, ReportDescription,
+    ReportOutcome, ReportState, ReportTargetType, Role, UserId, is_known_report_reason,
+    reason_allowed_for,
 };
 use chrono::{DateTime, Utc};
 use std::time::Duration;
@@ -240,12 +241,10 @@ pub trait ModerationRepository: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Rate-limit defaults (§45). Keys `report:create:user:{id}` and
-// `report:create:ip:{ip}`. Moderator actions are audited, not rate-limited.
+// Rate-limit keys (§45): `report:create:user:{id}` and `report:create:ip:{ip}`.
+// Limits are configured via [`ModerationLimits`] (Ledger #19). Moderator actions
+// are audited, not rate-limited.
 // ---------------------------------------------------------------------------
-
-const REPORT_CREATE_USER_LIMIT: u32 = 10;
-const REPORT_CREATE_IP_LIMIT: u32 = 20;
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -261,6 +260,8 @@ pub struct ModerationDeps {
     pub audit_reader: Box<dyn AuditLogReader>,
     pub history: Box<dyn crate::community::ContributionHistoryReader>,
     pub rate_limiter: Box<dyn RateLimiter>,
+    /// Runtime moderation limits (§43, Ledger #19); defaults to the domain constants.
+    pub limits: ModerationLimits,
 }
 
 pub struct ModerationService {
@@ -321,11 +322,16 @@ impl ModerationService {
     ) -> Result<i64, ModerationError> {
         self.allowed(
             &format!("report:create:user:{}", user.id.0),
-            REPORT_CREATE_USER_LIMIT,
+            self.deps.limits.report_create_user_limit,
             DAY,
         )
         .await?;
-        self.allowed(&format!("report:create:ip:{ip}"), REPORT_CREATE_IP_LIMIT, DAY).await?;
+        self.allowed(
+            &format!("report:create:ip:{ip}"),
+            self.deps.limits.report_create_ip_limit,
+            DAY,
+        )
+        .await?;
 
         if !is_known_report_reason(reason) {
             return Err(ModerationError::InvalidReason);
@@ -334,8 +340,11 @@ impl ModerationService {
             return Err(ModerationError::InvalidReason);
         }
         let description = match description {
-            Some(raw) if !raw.trim().is_empty() => ReportDescription::new(&raw)?,
-            _ => ReportDescription::new("")?,
+            Some(raw) if !raw.trim().is_empty() => ReportDescription::new_with_len(
+                &raw,
+                self.deps.limits.report_description_max_len,
+            )?,
+            _ => ReportDescription::new_with_len("", self.deps.limits.report_description_max_len)?,
         };
 
         if !self.deps.moderation.target_exists(target_type, target_id).await? {

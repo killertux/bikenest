@@ -12,7 +12,7 @@ use axum::{
 };
 use bikenest_application::{
     AuditFilter, AuthError, AuthService, CheckReadiness, ContributionDeps, ContributionError,
-    ContributionService, EmailProvider, GetParkingDetails, ModerationDeps, ModerationError,
+    ContributionService, EmailProvider, FreshnessConfig, GetParkingDetails, ModerationDeps, ModerationError,
     ModerationService, NewParkingLocation, NewVerification, ObjectStorage, ParkingEdit,
     ParkingPhotoReader, PasswordHasher, PhotoDeps, PhotoError, PhotoKind, PhotoService,
     PhotoTarget, PrivacyDeps, PrivacyError, PrivacyService, ProposalApplication, Readiness,
@@ -61,6 +61,9 @@ pub struct AppState {
     pub db: Db,
     pub search: Arc<SearchParking>,
     pub details: Arc<GetParkingDetails>,
+    /* Configured freshness thresholds, used for display categorization so the
+       cards honour the same env-tunable value as the search/detail services. */
+    pub freshness: FreshnessConfig,
     pub photos: Arc<dyn ParkingPhotoReader>,
     pub storage: Arc<dyn ObjectStorage>,
     pub auth: Arc<AuthService>,
@@ -133,12 +136,15 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
     });
     let storage = LocalDiskStorage::from_env(); // Ledger #7
     let photo_service = PhotoService::new(PhotoDeps {
-        processor: Box::new(LocalImageProcessor::new()),
+        processor: Box::new(LocalImageProcessor::new(
+            bikenest_infrastructure::config::photo_config_from_env(),
+        )),
         repository: Box::new(SqlxPhotoRepository::new(db.clone())),
         storage: Box::new(storage.clone()),
         rate_limiter: Box::new(InMemoryRateLimiter::new()), // Ledger #6
         audit: Box::new(SqlxAuditLog::new(db.clone())),
         clock: Box::new(SystemClock),
+        limits: bikenest_infrastructure::config::photo_config_from_env(),
     });
     let moderation_service = ModerationService::new(ModerationDeps {
         reports: Box::new(SqlxReportRepository::new(db.clone())),
@@ -147,6 +153,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         audit_reader: Box::new(SqlxAuditLogReader::new(db.clone())),
         history: Box::new(SqlxContributionHistoryReader::new(db.clone())),
         rate_limiter: Box::new(InMemoryRateLimiter::new()), // Ledger #6
+        limits: bikenest_infrastructure::config::moderation_config_from_env(), // Ledger #19
     });
     let privacy_service = PrivacyService::new(PrivacyDeps {
         exports: Box::new(SqlxExportRepository::new(db.clone())),
@@ -166,6 +173,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         db: db.clone(),
         search: Arc::new(search_uc),
         details: Arc::new(details),
+        freshness: bikenest_infrastructure::config::freshness_config_from_env(),
         photos: Arc::new(SqlxParkingPhotoReader::new(db.clone())),
         storage: Arc::new(storage),
         auth: Arc::new(auth_service),
@@ -231,7 +239,9 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         .route(
             "/parking/{id}/photo",
             post(upload_photo)
-                .layer(DefaultBodyLimit::max(bikenest_domain::MAX_PHOTO_BYTES + 64 * 1024)),
+                .layer(DefaultBodyLimit::max(
+                    bikenest_infrastructure::config::photo_config_from_env().max_bytes + 64 * 1024,
+                )),
         )
         .route("/moderation/photos", get(moderation_photos))
         .route("/moderation/photos/{kind}/{id}/approve", post(moderation_photo_approve))
@@ -366,7 +376,7 @@ async fn home(State(state): State<AppState>, locale: Locale, auth: Auth) -> Resp
                         bikenest_domain::categorize(
                             s.last_verified_at,
                             now,
-                            &bikenest_domain::DEFAULT_THRESHOLDS,
+                            &state.freshness.thresholds,
                         ),
                         photo_url,
                     )
@@ -502,6 +512,7 @@ async fn search(
                 label,
                 query_string,
                 chrono::Utc::now(),
+                &state.freshness.thresholds,
                 &*state.storage,
             )
         }
@@ -2335,7 +2346,7 @@ async fn policy_page_impl(state: &AppState, tr: Translator, kind: PolicyKind) ->
                 kind_code,
                 kind_label,
                 version: doc.version.clone(),
-                effective_label: view::iso_datetime_label(doc.effective_at),
+                effective_label: view::iso_datetime_label(tr, doc.effective_at),
                 content: doc.content.clone(),
             },
             StatusCode::OK,
@@ -3604,7 +3615,7 @@ async fn account_favorites(
             let freshness = bikenest_domain::categorize(
                 loc.last_verified_at(),
                 now,
-                &bikenest_domain::DEFAULT_THRESHOLDS,
+                &state.freshness.thresholds,
             );
             let photo_url = view::resolve_photo(&*state.storage, None);
             items.push(CardVm::from_summary(tr, &summary, freshness, photo_url));

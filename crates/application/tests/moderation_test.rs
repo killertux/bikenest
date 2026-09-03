@@ -11,8 +11,8 @@ use bikenest_application::{
     Report, ReportRepository, RateLimitError, RateLimiter,
 };
 use bikenest_domain::{
-    AccountState, ModerationState, ProposalKind, ProposalStatus, ReportOutcome, ReportState,
-    ReportTargetType, Role, UserEmail, UserId,
+    AccountState, ModerationLimits, ModerationState, ProposalKind, ProposalStatus, ReportOutcome,
+    ReportState, ReportTargetType, Role, UserEmail, UserId,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -305,6 +305,7 @@ fn harness(allow_rate: bool) -> Harness {
         audit_reader: Box::new(FakeAuditReader),
         history: Box::new(FakeHistory),
         rate_limiter: Box::new(FakeRate { allow: allow_rate }),
+        limits: ModerationLimits::default(),
     });
     Harness { service, moderation, audit }
 }
@@ -417,6 +418,7 @@ async fn claim_wrong_state_is_invalid_state() {
         audit_reader: Box::new(FakeAuditReader),
         history: Box::new(FakeHistory),
         rate_limiter: Box::new(FakeRate { allow: true }),
+        limits: ModerationLimits::default(),
     });
     assert!(matches!(
         service.claim_report(&moderator(), 1).await,

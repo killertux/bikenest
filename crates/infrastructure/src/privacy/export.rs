@@ -29,6 +29,7 @@ impl SqlxExportRepository {
 
 // Row structs — field names must match the SELECT column names (sqlx `query_as!`).
 
+#[derive(sqlx::FromRow)]
 struct AccountRow {
     id: i64,
     email: String,
@@ -38,27 +39,32 @@ struct AccountRow {
     created_at: DateTime<Utc>,
 }
 
+#[derive(sqlx::FromRow)]
 struct RoleRow {
     role: String,
 }
 
+#[derive(sqlx::FromRow)]
 struct IdentityRow {
     provider: String,
     provider_subject: String,
     email_verified: Option<bool>,
 }
 
+#[derive(sqlx::FromRow)]
 struct SessionRow {
     created_at: DateTime<Utc>,
     last_seen_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
 }
 
+#[derive(sqlx::FromRow)]
 struct FavoriteRow {
     location_id: i64,
     created_at: DateTime<Utc>,
 }
 
+#[derive(sqlx::FromRow)]
 struct ReviewRow {
     id: i64,
     location_id: i64,
@@ -69,12 +75,14 @@ struct ReviewRow {
     updated_at: DateTime<Utc>,
 }
 
+#[derive(sqlx::FromRow)]
 struct RevisionRow {
     rating: i16,
     body: String,
     edited_at: DateTime<Utc>,
 }
 
+#[derive(sqlx::FromRow)]
 struct VerificationRow {
     location_id: i64,
     kind: String,
@@ -83,6 +91,7 @@ struct VerificationRow {
     created_at: DateTime<Utc>,
 }
 
+#[derive(sqlx::FromRow)]
 struct ProposalRow {
     location_id: i64,
     base_version: i64,
@@ -92,6 +101,7 @@ struct ProposalRow {
     created_at: DateTime<Utc>,
 }
 
+#[derive(sqlx::FromRow)]
 struct ReportRow {
     target_type: String,
     target_id: i64,
@@ -101,6 +111,7 @@ struct ReportRow {
     created_at: DateTime<Utc>,
 }
 
+#[derive(sqlx::FromRow)]
 struct ParkingPhotoRow {
     location_id: i64,
     storage_key: String,
@@ -110,6 +121,7 @@ struct ParkingPhotoRow {
     created_at: DateTime<Utc>,
 }
 
+#[derive(sqlx::FromRow)]
 struct ReviewPhotoRow {
     review_id: i64,
     storage_key: String,
@@ -118,6 +130,7 @@ struct ReviewPhotoRow {
     created_at: DateTime<Utc>,
 }
 
+#[derive(sqlx::FromRow)]
 struct ExportRow {
     id: i64,
     user_id: i64,
@@ -127,6 +140,7 @@ struct ExportRow {
     downloaded_at: Option<DateTime<Utc>>,
 }
 
+#[derive(sqlx::FromRow)]
 struct DownloadRow {
     payload: serde_json::Value,
 }
@@ -150,23 +164,15 @@ impl ExportRepository for SqlxExportRepository {
         let now = Utc::now();
 
         let account = {
-            let row = sqlx::query_as!(
-                AccountRow,
-                r#"
+            let row = sqlx::query_as::<_, AccountRow>(r#"
                 SELECT id, email, display_name, account_state, email_verified_at, created_at
                 FROM users WHERE id = $1
-                "#,
-                user_id.0,
-            )
+                "#).bind(user_id.0)
             .fetch_optional(pool)
             .await
             .map_err(map_err)?
             .ok_or(PrivacyError::NotFound)?;
-            let roles: Vec<String> = sqlx::query_as!(
-                RoleRow,
-                "SELECT role FROM user_roles WHERE user_id = $1 ORDER BY role",
-                user_id.0,
-            )
+            let roles: Vec<String> = sqlx::query_as::<_, RoleRow>("SELECT role FROM user_roles WHERE user_id = $1 ORDER BY role").bind(user_id.0)
             .fetch_all(pool)
             .await
             .map_err(map_err)?
@@ -184,17 +190,13 @@ impl ExportRepository for SqlxExportRepository {
             }
         };
 
-        let authentication = sqlx::query_as!(
-            IdentityRow,
-            r#"
+        let authentication = sqlx::query_as::<_, IdentityRow>(r#"
             SELECT ai.provider, ai.provider_subject,
                    COALESCE((u.email_verified_at IS NOT NULL), false) AS email_verified
             FROM authentication_identities ai
             LEFT JOIN users u ON u.id = ai.user_id
             WHERE ai.user_id = $1
-            "#,
-            user_id.0,
-        )
+            "#).bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -206,11 +208,7 @@ impl ExportRepository for SqlxExportRepository {
         })
         .collect();
 
-        let sessions = sqlx::query_as!(
-            SessionRow,
-            "SELECT created_at, last_seen_at, expires_at FROM sessions WHERE user_id = $1 ORDER BY created_at",
-            user_id.0,
-        )
+        let sessions = sqlx::query_as::<_, SessionRow>("SELECT created_at, last_seen_at, expires_at FROM sessions WHERE user_id = $1 ORDER BY created_at").bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -222,11 +220,7 @@ impl ExportRepository for SqlxExportRepository {
         })
         .collect();
 
-        let favorites = sqlx::query_as!(
-            FavoriteRow,
-            "SELECT location_id, created_at FROM favorite WHERE user_id = $1 ORDER BY created_at",
-            user_id.0,
-        )
+        let favorites = sqlx::query_as::<_, FavoriteRow>("SELECT location_id, created_at FROM favorite WHERE user_id = $1 ORDER BY created_at").bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -235,24 +229,16 @@ impl ExportRepository for SqlxExportRepository {
         .collect();
 
         let reviews = {
-            let rows = sqlx::query_as!(
-                ReviewRow,
-                r#"
+            let rows = sqlx::query_as::<_, ReviewRow>(r#"
                 SELECT id, location_id, rating, body, moderation_state, created_at, updated_at
                 FROM review WHERE author_id = $1 ORDER BY created_at
-                "#,
-                user_id.0,
-            )
+                "#).bind(user_id.0)
             .fetch_all(pool)
             .await
             .map_err(map_err)?;
             let mut out = Vec::with_capacity(rows.len());
             for r in rows {
-                let revisions = sqlx::query_as!(
-                    RevisionRow,
-                    "SELECT rating, body, edited_at FROM review_revision WHERE review_id = $1 ORDER BY edited_at",
-                    r.id,
-                )
+                let revisions = sqlx::query_as::<_, RevisionRow>("SELECT rating, body, edited_at FROM review_revision WHERE review_id = $1 ORDER BY edited_at").bind(r.id)
                 .fetch_all(pool)
                 .await
                 .map_err(map_err)?
@@ -277,14 +263,10 @@ impl ExportRepository for SqlxExportRepository {
             out
         };
 
-        let verifications = sqlx::query_as!(
-            VerificationRow,
-            r#"
+        let verifications = sqlx::query_as::<_, VerificationRow>(r#"
             SELECT location_id, kind, result, attribute_code, created_at
             FROM verification WHERE user_id = $1 ORDER BY created_at
-            "#,
-            user_id.0,
-        )
+            "#).bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -298,14 +280,10 @@ impl ExportRepository for SqlxExportRepository {
         })
         .collect();
 
-        let proposals = sqlx::query_as!(
-            ProposalRow,
-            r#"
+        let proposals = sqlx::query_as::<_, ProposalRow>(r#"
             SELECT location_id, base_version, kind, proposed, status, created_at
             FROM parking_proposal WHERE proposer_id = $1 ORDER BY created_at
-            "#,
-            user_id.0,
-        )
+            "#).bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -320,14 +298,10 @@ impl ExportRepository for SqlxExportRepository {
         })
         .collect();
 
-        let reports = sqlx::query_as!(
-            ReportRow,
-            r#"
+        let reports = sqlx::query_as::<_, ReportRow>(r#"
             SELECT target_type, target_id, reason, description, state, created_at
             FROM report WHERE reporter_id = $1 ORDER BY created_at
-            "#,
-            user_id.0,
-        )
+            "#).bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -343,14 +317,10 @@ impl ExportRepository for SqlxExportRepository {
         .collect();
 
         let mut photos = Vec::new();
-        for r in sqlx::query_as!(
-            ParkingPhotoRow,
-            r#"
+        for r in sqlx::query_as::<_, ParkingPhotoRow>(r#"
             SELECT location_id, storage_key, thumbnail_key, content_type, moderation_state, created_at
             FROM parking_photo WHERE uploader_id = $1 ORDER BY created_at
-            "#,
-            user_id.0,
-        )
+            "#).bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -366,14 +336,10 @@ impl ExportRepository for SqlxExportRepository {
                 created_at: r.created_at,
             });
         }
-        for r in sqlx::query_as!(
-            ReviewPhotoRow,
-            r#"
+        for r in sqlx::query_as::<_, ReviewPhotoRow>(r#"
             SELECT review_id, storage_key, thumbnail_key, moderation_state, created_at
             FROM review_photo WHERE uploader_id = $1 ORDER BY created_at
-            "#,
-            user_id.0,
-        )
+            "#).bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -405,23 +371,17 @@ impl ExportRepository for SqlxExportRepository {
     }
 
     async fn create(&self, e: &NewExport) -> Result<i64, PrivacyError> {
+#[derive(sqlx::FromRow)]
         struct IdRow {
             id: i64,
         }
         let token_hash = sha256_hex(&e.token);
         let payload = serde_json::to_value(&e.payload).map_err(|_| PrivacyError::Internal)?;
-        let row = sqlx::query_as!(
-            IdRow,
-            r#"
+        let row = sqlx::query_as::<_, IdRow>(r#"
             INSERT INTO personal_data_export (user_id, state, token_hash, payload, expires_at)
             VALUES ($1, 'READY', $2, $3, $4)
             RETURNING id
-            "#,
-            e.user_id.0,
-            token_hash,
-            payload,
-            e.expires_at,
-        )
+            "#).bind(e.user_id.0).bind(token_hash).bind(payload).bind(e.expires_at)
         .fetch_one(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -429,14 +389,10 @@ impl ExportRepository for SqlxExportRepository {
     }
 
     async fn list_for_user(&self, user_id: UserId) -> Result<Vec<Export>, PrivacyError> {
-        let rows = sqlx::query_as!(
-            ExportRow,
-            r#"
+        let rows = sqlx::query_as::<_, ExportRow>(r#"
             SELECT id, user_id, state, created_at, expires_at, downloaded_at
             FROM personal_data_export WHERE user_id = $1 ORDER BY created_at DESC
-            "#,
-            user_id.0,
-        )
+            "#).bind(user_id.0)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -444,14 +400,10 @@ impl ExportRepository for SqlxExportRepository {
     }
 
     async fn get(&self, id: i64) -> Result<Option<Export>, PrivacyError> {
-        let row = sqlx::query_as!(
-            ExportRow,
-            r#"
+        let row = sqlx::query_as::<_, ExportRow>(r#"
             SELECT id, user_id, state, created_at, expires_at, downloaded_at
             FROM personal_data_export WHERE id = $1
-            "#,
-            id,
-        )
+            "#).bind(id)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -468,27 +420,20 @@ impl ExportRepository for SqlxExportRepository {
         now: DateTime<Utc>,
     ) -> Result<ExportDownload, PrivacyError> {
         let token_hash = sha256_hex(token);
-        let row = sqlx::query_as!(
-            DownloadRow,
-            "SELECT payload FROM personal_data_export WHERE id = $1",
-            id,
-        )
+        let row = sqlx::query_as::<_, DownloadRow>("SELECT payload FROM personal_data_export WHERE id = $1").bind(id)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?
         .ok_or(PrivacyError::NotFound)?;
 
         // Validate token + state + expiry against the authoritative row.
+#[derive(sqlx::FromRow)]
         struct CheckRow {
             token_hash: String,
             state: String,
             expires_at: DateTime<Utc>,
         }
-        let check = sqlx::query_as!(
-            CheckRow,
-            "SELECT token_hash, state, expires_at FROM personal_data_export WHERE id = $1",
-            id,
-        )
+        let check = sqlx::query_as::<_, CheckRow>("SELECT token_hash, state, expires_at FROM personal_data_export WHERE id = $1").bind(id)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?
@@ -505,15 +450,11 @@ impl ExportRepository for SqlxExportRepository {
         }
 
         // Single-use transition, guarded so a concurrent win cannot double-download.
-        let res = sqlx::query!(
-            r#"
+        let res = sqlx::query(r#"
             UPDATE personal_data_export
             SET state = 'DOWNLOADED', downloaded_at = $2
             WHERE id = $1 AND state = 'READY' AND expires_at > $2
-            "#,
-            id,
-            now,
-        )
+            "#).bind(id).bind(now)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -526,10 +467,7 @@ impl ExportRepository for SqlxExportRepository {
     }
 
     async fn purge_expired(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
-        let res = sqlx::query!(
-            "DELETE FROM personal_data_export WHERE state = 'READY' AND expires_at < $1",
-            now,
-        )
+        let res = sqlx::query("DELETE FROM personal_data_export WHERE state = 'READY' AND expires_at < $1").bind(now)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;

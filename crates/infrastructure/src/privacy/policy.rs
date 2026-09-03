@@ -17,6 +17,7 @@ impl SqlxPolicyReader {
     }
 }
 
+#[derive(sqlx::FromRow)]
 struct PolicyRow {
     id: i64,
     kind: String,
@@ -43,17 +44,13 @@ impl PolicyRow {
 #[async_trait]
 impl PolicyReader for SqlxPolicyReader {
     async fn current(&self, kind: PolicyKind) -> Result<Option<PolicyDocument>, PrivacyError> {
-        let row = sqlx::query_as!(
-            PolicyRow,
-            r#"
+        let row = sqlx::query_as::<_, PolicyRow>(r#"
             SELECT id, kind, version, effective_at, superseded_at, content
             FROM policy_version
             WHERE kind = $1 AND superseded_at IS NULL
             ORDER BY effective_at DESC
             LIMIT 1
-            "#,
-            kind.as_code(),
-        )
+            "#).bind(kind.as_code())
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -64,16 +61,12 @@ impl PolicyReader for SqlxPolicyReader {
     }
 
     async fn history(&self, kind: PolicyKind) -> Result<Vec<PolicyDocument>, PrivacyError> {
-        let rows = sqlx::query_as!(
-            PolicyRow,
-            r#"
+        let rows = sqlx::query_as::<_, PolicyRow>(r#"
             SELECT id, kind, version, effective_at, superseded_at, content
             FROM policy_version
             WHERE kind = $1
             ORDER BY effective_at DESC, id DESC
-            "#,
-            kind.as_code(),
-        )
+            "#).bind(kind.as_code())
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;

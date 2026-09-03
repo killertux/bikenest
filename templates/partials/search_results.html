@@ -23,7 +23,7 @@
     </div>
 
     {% if let Some(url) = results.cursor_url %}
-      <nav class="mt-7 flex items-center justify-end" aria-label="Results pages">
+      <nav class="mt-7 flex items-center justify-end" aria-label="{{ tr.t("a11y.results_pages") }}">
         <button
           hx-get="{{ url }}"
           hx-target="#results"

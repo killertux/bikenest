@@ -22,6 +22,7 @@ impl SqlxSessionStore {
     }
 }
 
+#[derive(sqlx::FromRow)]
 struct SessionRow {
     token_hash: String,
     user_id: i64,
@@ -43,16 +44,10 @@ impl SessionStore for SqlxSessionStore {
     ) -> Result<(), AuthError> {
         let token_hash = sha256_hex(raw.as_bytes());
         let expires_at = now + ABSOLUTE_CAP;
-        sqlx::query!(
-            r#"
+        sqlx::query(r#"
             INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at)
             VALUES ($1, $2, $3, $4)
-            "#,
-            token_hash,
-            user_id.0,
-            csrf.to_base64url(),
-            expires_at,
-        )
+            "#).bind(token_hash).bind(user_id.0).bind(csrf.to_base64url()).bind(expires_at)
         .execute(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;
@@ -61,15 +56,11 @@ impl SessionStore for SqlxSessionStore {
 
     async fn resolve(&self, raw: &SessionId, now: DateTime<Utc>) -> Result<Option<Session>, AuthError> {
         let token_hash = sha256_hex(raw.as_bytes());
-        let row = sqlx::query_as!(
-            SessionRow,
-            r#"
+        let row = sqlx::query_as::<_, SessionRow>(r#"
             SELECT token_hash, user_id, csrf_token, created_at, last_seen_at, expires_at, revoked_at
             FROM sessions
             WHERE token_hash = $1
-            "#,
-            token_hash
-        )
+            "#).bind(token_hash)
         .fetch_optional(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;

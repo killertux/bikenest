@@ -22,11 +22,13 @@ const DUPLICATE_RADIUS_M: u32 = 500;
 const DUPLICATE_SIMILARITY: f64 = 0.55;
 
 /// Returned `id` for the INSERT...RETURNING writes (compile-time checked).
+#[derive(sqlx::FromRow)]
 struct IdRow {
     id: i64,
 }
 
 /// The AFTER-state tuple returned by the optimistic `apply_edit` UPDATE.
+#[derive(sqlx::FromRow)]
 struct EditApplyRow {
     version: i64,
     name: String,
@@ -71,9 +73,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
 
         let (cost_kind, price_cents, price_currency, price_unit) = cost_parts(&new.cost);
 
-        let row = sqlx::query_as!(
-            IdRow,
-            r#"
+        let row = sqlx::query_as::<_, IdRow>(r#"
             INSERT INTO parking_location
                 (name, address, description, parking_type, cost_kind,
                  price_cents, price_currency, price_unit,
@@ -84,22 +84,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
                     $11, $12, 'ACTIVE',
                     $13, 1, $14, $14, $14)
             RETURNING id
-            "#,
-            new.name.trim(),
-            new.address.trim(),
-            new.description.as_deref(),
-            new.parking_type.as_code(),
-            cost_kind,
-            price_cents,
-            price_currency,
-            price_unit,
-            new.point.lat(),
-            new.point.lon(),
-            tz.name(),
-            new.hours.is_unknown(),
-            creator.0,
-            now,
-        )
+            "#).bind(new.name.trim()).bind(new.address.trim()).bind(new.description.as_deref()).bind(new.parking_type.as_code()).bind(cost_kind).bind(price_cents).bind(price_currency).bind(price_unit).bind(new.point.lat()).bind(new.point.lon()).bind(tz.name()).bind(new.hours.is_unknown()).bind(creator.0).bind(now)
         .fetch_one(&mut *tx)
         .await
         .map_err(map_db_err_to_contribution)?;
@@ -151,9 +136,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         let (cost_kind, price_cents, price_currency, price_unit) = cost_parts(&edit.cost);
 
         // Optimistic concurrency: only bump when `version` still matches.
-        let row = sqlx::query_as!(
-            EditApplyRow,
-            r#"
+        let row = sqlx::query_as::<_, EditApplyRow>(r#"
             UPDATE parking_location
             SET name = $1, address = $2, description = $3, parking_type = $4,
                 cost_kind = $5, price_cents = $6, price_currency = $7, price_unit = $8,
@@ -161,20 +144,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
                 version = version + 1, updated_at = $10, last_meaningful_update_at = $10
             WHERE id = $11 AND version = $12
             RETURNING version, name, address, description, parking_type
-            "#,
-            edit.name.trim(),
-            edit.address.trim(),
-            edit.description.as_deref(),
-            edit.parking_type.as_code(),
-            cost_kind,
-            price_cents,
-            price_currency,
-            price_unit,
-            edit.hours.is_unknown(),
-            now,
-            id,
-            expected_version,
-        )
+            "#).bind(edit.name.trim()).bind(edit.address.trim()).bind(edit.description.as_deref()).bind(edit.parking_type.as_code()).bind(cost_kind).bind(price_cents).bind(price_currency).bind(price_unit).bind(edit.hours.is_unknown()).bind(now).bind(id).bind(expected_version)
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_db_err_to_contribution)?;
@@ -222,20 +192,12 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
     }
 
     async fn create_proposal(&self, p: &NewProposal) -> Result<i64, ContributionError> {
-        let row = sqlx::query_as!(
-            IdRow,
-            r#"
+        let row = sqlx::query_as::<_, IdRow>(r#"
             INSERT INTO parking_proposal
                 (location_id, proposer_id, base_version, kind, proposed, status)
             VALUES ($1, $2, $3, $4, $5, 'PENDING')
             RETURNING id
-            "#,
-            p.location_id,
-            p.proposer_id.0,
-            p.base_version,
-            p.kind.as_code(),
-            &p.proposed,
-        )
+            "#).bind(p.location_id).bind(p.proposer_id.0).bind(p.base_version).bind(p.kind.as_code()).bind(&p.proposed)
         .fetch_one(self.db.pool())
         .await
         .map_err(map_db_err_to_contribution)?;
@@ -243,22 +205,19 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
     }
 
     async fn revision_history(&self, id: i64) -> Result<Vec<RevisionSummary>, ContributionError> {
+#[derive(sqlx::FromRow)]
         struct RevRow {
             version: i64,
             change_kind: String,
             summary: Option<String>,
             created_at: chrono::DateTime<chrono::Utc>,
         }
-        let rows = sqlx::query_as!(
-            RevRow,
-            r#"
+        let rows = sqlx::query_as::<_, RevRow>(r#"
             SELECT version, change_kind, summary, created_at
             FROM parking_revision
             WHERE location_id = $1
             ORDER BY version DESC
-            "#,
-            id
-        )
+            "#).bind(id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_db_err_to_contribution)?;
@@ -281,25 +240,20 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         point: GeoPoint,
         name: &str,
     ) -> Result<Vec<DuplicateCandidate>, ContributionError> {
+#[derive(sqlx::FromRow)]
         struct CandidateRow {
             id: i64,
             name: String,
             address: String,
             distance_m: Option<f64>,
         }
-        let rows = sqlx::query_as!(
-            CandidateRow,
-            r#"
+        let rows = sqlx::query_as::<_, CandidateRow>(r#"
             SELECT id, name, address, ST_Distance(location, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography) AS distance_m
             FROM parking_location
             WHERE moderation_state = 'ACTIVE'
               AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography, $3)
             LIMIT 50
-            "#,
-            point.lat(),
-            point.lon(),
-            f64::from(DUPLICATE_RADIUS_M),
-        )
+            "#).bind(point.lat()).bind(point.lon()).bind(f64::from(DUPLICATE_RADIUS_M))
         .fetch_all(self.db.pool())
         .await
         .map_err(map_db_err_to_contribution)?;

@@ -49,7 +49,7 @@ fn modified_older_than(mtime: std::time::SystemTime, now: DateTime<Utc>, ttl: Du
 #[async_trait]
 impl RetentionRepository for SqlxRetentionRepository {
     async fn purge_expired_password_reset_tokens(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
-        let res = sqlx::query!("DELETE FROM password_reset_tokens WHERE expires_at < $1", now)
+        let res = sqlx::query("DELETE FROM password_reset_tokens WHERE expires_at < $1").bind(now)
             .execute(self.db.pool())
             .await
             .map_err(map_err)?;
@@ -57,7 +57,7 @@ impl RetentionRepository for SqlxRetentionRepository {
     }
 
     async fn purge_expired_email_verification_tokens(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
-        let res = sqlx::query!("DELETE FROM email_verification_tokens WHERE expires_at < $1", now)
+        let res = sqlx::query("DELETE FROM email_verification_tokens WHERE expires_at < $1").bind(now)
             .execute(self.db.pool())
             .await
             .map_err(map_err)?;
@@ -66,11 +66,7 @@ impl RetentionRepository for SqlxRetentionRepository {
 
     async fn purge_expired_sessions(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
         let idle_cutoff = now - self.policy.session_idle;
-        let res = sqlx::query!(
-            "DELETE FROM sessions WHERE expires_at < $1 OR last_seen_at < $2",
-            now,
-            idle_cutoff,
-        )
+        let res = sqlx::query("DELETE FROM sessions WHERE expires_at < $1 OR last_seen_at < $2").bind(now).bind(idle_cutoff)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -78,10 +74,7 @@ impl RetentionRepository for SqlxRetentionRepository {
     }
 
     async fn purge_expired_parked_here(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
-        let res = sqlx::query!(
-            "DELETE FROM verification WHERE kind = 'parked_here' AND expires_at IS NOT NULL AND expires_at < $1",
-            now,
-        )
+        let res = sqlx::query("DELETE FROM verification WHERE kind = 'parked_here' AND expires_at IS NOT NULL AND expires_at < $1").bind(now)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -89,7 +82,7 @@ impl RetentionRepository for SqlxRetentionRepository {
     }
 
     async fn purge_expired_exports(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
-        let res = sqlx::query!("DELETE FROM personal_data_export WHERE expires_at < $1", now)
+        let res = sqlx::query("DELETE FROM personal_data_export WHERE expires_at < $1").bind(now)
             .execute(self.db.pool())
             .await
             .map_err(map_err)?;
@@ -141,12 +134,11 @@ impl RetentionRepository for SqlxRetentionRepository {
     }
 
     async fn anonymize_inactive_accounts(&self, cutoff: DateTime<Utc>) -> Result<u64, PrivacyError> {
+#[derive(sqlx::FromRow)]
         struct IdRow {
             id: i64,
         }
-        let candidates: Vec<i64> = sqlx::query_as!(
-            IdRow,
-            r#"
+        let candidates: Vec<i64> = sqlx::query_as::<_, IdRow>(r#"
             SELECT u.id FROM users u
             WHERE u.account_state <> 'DELETED'
               AND NOT EXISTS (SELECT 1 FROM user_roles r WHERE r.user_id = u.id AND r.role = 'ADMIN')
@@ -154,9 +146,7 @@ impl RetentionRepository for SqlxRetentionRepository {
                     (SELECT max(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id),
                     u.created_at
                   ) < $1
-            "#,
-            cutoff,
-        )
+            "#).bind(cutoff)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?
@@ -174,10 +164,7 @@ impl RetentionRepository for SqlxRetentionRepository {
     }
 
     async fn purge_deleted_accounts(&self, cutoff: DateTime<Utc>) -> Result<u64, PrivacyError> {
-        let res = sqlx::query!(
-            "DELETE FROM users WHERE account_state = 'DELETED' AND deleted_at < $1",
-            cutoff,
-        )
+        let res = sqlx::query("DELETE FROM users WHERE account_state = 'DELETED' AND deleted_at < $1").bind(cutoff)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;

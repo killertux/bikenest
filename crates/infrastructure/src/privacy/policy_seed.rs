@@ -37,27 +37,17 @@ pub async fn seed_policy(
     // Supersede the current row, but only when the incoming version is actually
     // newer (no effective-date conflict — an older version must not dethrone a
     // newer current one).
-    sqlx::query!(
-        "UPDATE policy_version SET superseded_at = $2 \
-         WHERE kind = $1 AND superseded_at IS NULL AND effective_at < $2",
-        kind.as_code(),
-        effective_at,
-    )
+    sqlx::query("UPDATE policy_version SET superseded_at = $2 \
+         WHERE kind = $1 AND superseded_at IS NULL AND effective_at < $2").bind(kind.as_code()).bind(effective_at)
     .execute(db.pool())
     .await
     .map_err(map_err)?;
 
     // Insert the new current version.
-    sqlx::query!(
-        r#"
+    sqlx::query(r#"
         INSERT INTO policy_version (kind, version, effective_at, content)
         VALUES ($1, $2, $3, $4)
-        "#,
-        kind.as_code(),
-        version,
-        effective_at,
-        content,
-    )
+        "#).bind(kind.as_code()).bind(version).bind(effective_at).bind(content)
     .execute(db.pool())
     .await
     .map_err(map_err)?;

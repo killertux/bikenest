@@ -24,7 +24,8 @@ pub use community::{
     is_known_attribute_code,
 };
 pub use moderation::{
-    ReportDescription, ReportOutcome, ReportState, ReportTargetType, REPORT_REASONS,
+    ModerationLimits, ReportDescription, ReportOutcome, ReportState, ReportTargetType,
+    REPORT_REASONS,
     is_known_report_reason, reason_allowed_for,
 };
 pub use freshness::{categorize, FreshnessCategory, FreshnessThresholds, DEFAULT_THRESHOLDS};
@@ -35,7 +36,8 @@ pub use parking::{
 };
 pub use photo::{
     ALLOWED_INPUT_FORMATS, DERIVATIVE_QUALITY, MAX_PHOTO_BYTES, MAX_PHOTO_MEGAPIXELS,
-    PhotoDimensions, PhotoModerationState, THUMBNAIL_MAX_SIDE, bytes_within_limit, format_allowed,
+    PhotoDimensions, PhotoLimits, PhotoModerationState, THUMBNAIL_MAX_SIDE, bytes_within_limit,
+    format_allowed,
 };
 pub use privacy::{
     ExportState, PolicyKind, PrivacyRequestKind, PrivacyRequestState, RetentionPolicy,

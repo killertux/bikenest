@@ -62,19 +62,16 @@ impl FavoriteRepository for SqlxFavoriteRepository {
     }
 
     async fn list(&self, user: UserId) -> Result<Vec<i64>, ContributionError> {
+#[derive(sqlx::FromRow)]
         struct Row {
             location_id: i64,
         }
-        let rows = sqlx::query_as!(
-            Row,
-            r#"
+        let rows = sqlx::query_as::<_, Row>(r#"
             SELECT location_id
             FROM favorite
             WHERE user_id = $1
             ORDER BY created_at DESC, location_id DESC
-            "#,
-            user.0
-        )
+            "#).bind(user.0)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;

@@ -22,6 +22,7 @@ impl SqlxParkingSearchReader {
     }
 }
 
+#[derive(sqlx::FromRow)]
 struct SearchRow {
     id: i64,
     name: String,
@@ -123,9 +124,7 @@ impl bikenest_application::ParkingSearchReader for SqlxParkingSearchReader {
             bikenest_application::Sort::RecentlyVerified => "recently_verified",
         };
 
-        let rows: Vec<SearchRow> = sqlx::query_as!(
-            SearchRow,
-            r#"
+        let rows: Vec<SearchRow> = sqlx::query_as::<_, SearchRow>(r#"
             WITH base AS (
                 SELECT
                     pl.id,
@@ -211,19 +210,7 @@ impl bikenest_application::ParkingSearchReader for SqlxParkingSearchReader {
             WHERE ($9::float8 IS NULL OR (sort_key, id) > ($9::float8, $10::int8))
             ORDER BY sort_key ASC, id ASC
             LIMIT $11
-            "#,
-            request.origin.lat(),
-            request.origin.lon(),
-            f64::from(request.radius_m),
-            cost,
-            types as Option<Vec<String>>,
-            request.filters.open_now,
-            security_all as Option<Vec<String>>,
-            sort,
-            cursor.map(|c| c.v),
-            cursor.map(|c| c.id),
-            limit as i64,
-        )
+            "#).bind(request.origin.lat()).bind(request.origin.lon()).bind(f64::from(request.radius_m)).bind(cost).bind(types as Option<Vec<String>>).bind(request.filters.open_now).bind(security_all as Option<Vec<String>>).bind(sort).bind(cursor.map(|c| c.v)).bind(cursor.map(|c| c.id)).bind(limit as i64)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_db_err)?;

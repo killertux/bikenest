@@ -6,7 +6,7 @@ use bikenest_application::{
     AuditLog, Clock, ImageProcessor, ObjectStorage, PhotoDeps, PhotoError, PhotoKind,
     PhotoRepository, PhotoService, PhotoTarget, ProcessedImage, PutObject,
 };
-use bikenest_domain::{AccountState, PhotoDimensions, PhotoModerationState, Role, UserEmail, UserId};
+use bikenest_domain::{AccountState, PhotoDimensions, PhotoLimits, PhotoModerationState, Role, UserEmail, UserId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -307,6 +307,7 @@ fn harness(processor: FakeImageProcessor) -> Harness {
         rate_limiter: Box::new(FakeRate { allow: true }),
         audit: Box::new(audit.as_ref().clone()),
         clock: Box::new(FakeClock(chrono::Utc::now())),
+        limits: PhotoLimits::default(),
     });
     Harness { service, storage, repo, audit }
 }
@@ -358,6 +359,7 @@ async fn upload_is_rate_limited() {
         rate_limiter: Box::new(FakeRate { allow: false }),
         audit: Box::new(audit.as_ref().clone()),
         clock: Box::new(FakeClock(chrono::Utc::now())),
+        limits: PhotoLimits::default(),
     });
     assert!(matches!(
         service.upload_photo(&verified_user(), "1.2.3.4", PhotoTarget::Parking(10), b"x", None).await,
@@ -427,6 +429,7 @@ async fn upload_compensates_deletes_row_when_second_put_fails() {
         rate_limiter: Box::new(FakeRate { allow: true }),
         audit: Box::new(audit.as_ref().clone()),
         clock: Box::new(FakeClock(chrono::Utc::now())),
+        limits: PhotoLimits::default(),
     });
     assert!(matches!(
         service.upload_photo(&verified_user(), "1.2.3.4", PhotoTarget::Parking(10), b"xyz", None).await,
