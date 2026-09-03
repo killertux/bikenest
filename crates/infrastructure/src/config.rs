@@ -125,6 +125,54 @@ pub fn moderation_config_from_env() -> ModerationConfig {
     }
 }
 
+/// Client-side map configuration (**Ledger #3**). The style URL defaults to
+/// MapLibre's public demo tiles; a Mapbox style also needs its public access
+/// token embedded client-side (only when the style is Mapbox-based).
+pub const DEFAULT_MAP_STYLE_URL: &str = "https://demotiles.maplibre.org/style.json";
+
+#[derive(Debug, Clone)]
+pub struct MapConfig {
+    pub style_url: String,
+    /// Public Mapbox token for the style/tiles; empty for a non-Mapbox style.
+    pub access_token: String,
+}
+
+/// Is the style URL a Mapbox style (which needs a client-side access token)?
+fn is_mapbox_style(style_url: &str) -> bool {
+    style_url.starts_with("mapbox://") || style_url.contains("api.mapbox.com")
+}
+
+/// Pure resolver (separated from env so it is unit-testable without mutating
+/// process global environment).
+fn resolve_map_config(
+    style_url: Option<String>,
+    map_token: Option<String>,
+    fallback_token: Option<String>,
+) -> MapConfig {
+    let style_url = style_url.unwrap_or_else(|| DEFAULT_MAP_STYLE_URL.to_string());
+    let access_token = if is_mapbox_style(&style_url) {
+        map_token.or(fallback_token).unwrap_or_default()
+    } else {
+        // Non-Mapbox style (e.g. demo tiles) needs no token; keep it off the page.
+        String::new()
+    };
+    MapConfig {
+        style_url,
+        access_token,
+    }
+}
+
+/// Build the map config from env: `MAP_STYLE_URL` (default demo tiles), plus the
+/// Mapbox access token (`MAPBOX_MAP_ACCESS_TOKEN`, or the geocoder's
+/// `MAPBOX_ACCESS_TOKEN` as a fallback) when the style is Mapbox-based.
+pub fn map_config_from_env() -> MapConfig {
+    resolve_map_config(
+        std::env::var("MAP_STYLE_URL").ok(),
+        std::env::var("MAPBOX_MAP_ACCESS_TOKEN").ok(),
+        std::env::var("MAPBOX_ACCESS_TOKEN").ok(),
+    )
+}
+
 fn env_u32(key: &str) -> Option<u32> {
     std::env::var(key).ok().and_then(|v| v.parse().ok())
 }
@@ -222,5 +270,45 @@ mod tests {
         assert_eq!(m.report_description_max_len, 1000);
         assert_eq!(m.report_create_user_limit, 10);
         assert_eq!(m.report_create_ip_limit, 20);
+    }
+
+    #[test]
+    fn map_style_defaults_to_demo_tiles() {
+        let c = resolve_map_config(None, None, None);
+        assert_eq!(c.style_url, DEFAULT_MAP_STYLE_URL);
+        assert_eq!(c.access_token, "");
+    }
+
+    #[test]
+    fn mapbox_style_pulls_token() {
+        let c = resolve_map_config(
+            Some("mapbox://styles/u/s".to_string()),
+            Some("public-map-tok".to_string()),
+            Some("geo-tok".to_string()),
+        );
+        // The dedicated map token wins; the geocoder token is only a fallback.
+        assert_eq!(c.access_token, "public-map-tok");
+
+        let fallback = resolve_map_config(
+            Some("https://api.mapbox.com/styles/v1/u/s".to_string()),
+            None,
+            Some("geo-tok".to_string()),
+        );
+        assert_eq!(fallback.access_token, "geo-tok");
+    }
+
+    #[test]
+    fn non_mapbox_style_never_leaks_token() {
+        // A non-Mapbox style (e.g. demo tiles / a self-hosted style) must not
+        // embed a Mapbox token even when one is configured for geocoding.
+        let c = resolve_map_config(
+            Some("https://tiles.example/style.json".to_string()),
+            None,
+            Some("geo-tok".to_string()),
+        );
+        assert_eq!(c.access_token, "");
+        assert!(!is_mapbox_style("https://tiles.example/style.json"));
+        assert!(is_mapbox_style("mapbox://styles/u/s"));
+        assert!(is_mapbox_style("https://api.mapbox.com/styles/v1/u/s"));
     }
 }

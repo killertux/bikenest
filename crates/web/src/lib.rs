@@ -24,11 +24,18 @@ pub struct PageLayout {
     pub description: String,
     /// OpenGraph type: "website" (default) or "article".
     pub og_type: &'static str,
+    /// Map style URL (Ledger #3); rendered onto `<body>` data attributes so the
+    /// map JS (search.js / details-map.js) reads it, CSP-safe (no inline script).
+    pub map_style_url: String,
+    /// Public Mapbox access token for the style/tiles; empty for a non-Mapbox
+    /// style (e.g. demo tiles) so the token never lands on the page.
+    pub map_access_token: String,
 }
 
 impl PageLayout {
     /// A public page layout (no CSRF token).
     pub fn new(title: String, current: &str) -> Self {
+        let map = bikenest_infrastructure::map_config_from_env();
         Self {
             title,
             current: current.to_string(),
@@ -36,11 +43,14 @@ impl PageLayout {
             canonical: String::new(),
             description: String::new(),
             og_type: "website",
+            map_style_url: map.style_url,
+            map_access_token: map.access_token,
         }
     }
 
     /// A layout carrying the session's CSRF token (for authenticated forms).
     pub fn with_csrf(title: String, current: &str, csrf: String) -> Self {
+        let map = bikenest_infrastructure::map_config_from_env();
         Self {
             title,
             current: current.to_string(),
@@ -48,6 +58,8 @@ impl PageLayout {
             canonical: String::new(),
             description: String::new(),
             og_type: "website",
+            map_style_url: map.style_url,
+            map_access_token: map.access_token,
         }
     }
 

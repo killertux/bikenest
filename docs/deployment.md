@@ -42,6 +42,8 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | `APP_ENV` | `production` → JSON structured logs (machine-parseable, forward to a log aggregator) |
 | `GEOCODER` | **Geocoder** (Ledger #2): `mapbox` \| `fake` (default `fake`). `mapbox` sends the query to Mapbox server-side (§77/§83) |
 | `MAPBOX_ACCESS_TOKEN` | Mapbox token; required when `GEOCODER=mapbox` (missing token falls back to `fake`) |
+| `MAP_STYLE_URL` | **Basemap** (Ledger #3): style URL; default MapLibre demo tiles |
+| `MAPBOX_MAP_ACCESS_TOKEN` | **Basemap** public Mapbox token (client-side); falls back to `MAPBOX_ACCESS_TOKEN` if unset; only loaded when the style is Mapbox-based |
 | `EMAIL_PROVIDER` | `smtp` or `resend` in production (not `fake`) |
 | `SMTP_*` / `RESEND_API_KEY` / `RESEND_FROM` | the chosen email backend |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | `seed-admin` bootstrap (run once) |
@@ -98,7 +100,17 @@ The map/tile, geocoder, email, OAuth and object-storage integrations
   Mapbox is a paid hosted SaaS (free tier ≈100k geocode/mo); self-hosted Photon
   (OSM) is the no-cost, no-external-transfer alternative if preferred.
 
-Other providers (tiles, email, OAuth, object storage) still use dev impls.
+Other providers (tiles, email, OAuth, object storage) still use dev impls —
+**tiles are now configurable** (Ledger #3):
+
+- **Tiles / basemap.** `MAP_STYLE_URL` (default MapLibre demo tiles) reaches the
+  browser via `<body data-*>` (CSP-safe — no inline script) and is read by
+  `search.js` / `details-map.js`. For production set a real basemap: a Mapbox
+  style (`mapbox://styles/<user>/<style>` + a public `MAPBOX_MAP_ACCESS_TOKEN`,
+  or the HTTPS styles URL), or a self-hosted vector style (Protomaps PMTiles /
+  OpenFreeMap — free, no per-request cost, no external transfer). Attribution is
+  rendered by MapLibre's attribution control; a hosted provider's ToS /
+  attribution / usage limits + DPA (§C) still apply.
 
 
 ## 5b. Rate limiter (ValKey, Ledger #6)

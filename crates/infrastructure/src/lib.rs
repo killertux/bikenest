@@ -27,7 +27,7 @@ pub use community::{
 pub use email::{
     CapturedEmail, FakeEmailProvider, ResendEmailProvider, SmtpEmailProvider, from_env as email_from_env,
 };
-pub use config::Config;
+pub use config::{Config, MapConfig, map_config_from_env};
 pub use db::Db;
 pub use geocoding::{FakeGeocoder, MapboxGeocoder, geocoder_from, geocoder_from_env};
 pub use moderation::{SqlxAuditLogReader, SqlxModerationRepository, SqlxReportRepository};

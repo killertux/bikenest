@@ -8,7 +8,12 @@
 (function () {
   "use strict";
 
-  var STYLE_URL = "https://demotiles.maplibre.org/style.json"; // dev tiles — Ledger #3
+  /* Ledger #3: the style URL and (Mapbox) access token come from the server via
+   * <body data-map-style-url / data-map-access-token>. Default: MapLibre demo tiles
+   * so the map still renders before MAP_STYLE_URL is configured. */
+  var bodyCfg = document.body ? document.body.dataset : {};
+  var STYLE_URL = bodyCfg.mapStyleUrl || "https://demotiles.maplibre.org/style.json";
+  var ACCESS_TOKEN = bodyCfg.mapAccessToken || "";
   var CENTER_FALLBACK = [-49.2733, -25.4284]; // Curitiba [lon, lat]
 
   // Per-page-view state, keyed off the #map element so a fresh map (after a
@@ -89,6 +94,7 @@
     }
 
     if (!st.map) {
+      if (ACCESS_TOKEN) maplibregl.accessToken = ACCESS_TOKEN;
       st.map = new maplibregl.Map({ container: mapEl, style: STYLE_URL, center: center, zoom: zoom });
       st.map.addControl(new maplibregl.NavigationControl());
       st.map.addControl(new maplibregl.GeolocateControl());
