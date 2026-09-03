@@ -35,6 +35,9 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | `MEDIA_SIGNING_SECRET` | signs the expiring `/media` GET URLs. Set a long random secret; rotate deliberately |
 | `MEDIA_ROOT` | object-storage directory (default `/app/media`) — the mounted volume |
 | `TLS_ON` | set `true` to emit HSTS behind a real TLS terminator |
+| `VALKEY_URL` | **Rate limiter** (Ledger #6) single node, e.g. `valkey://valkey:6379`. Shared across auth/photo/contribution/moderation, survives restarts, aggregates across instances |
+| `VALKEY_CLUSTER_URLS` | comma-separated node URLs → **cluster** mode (wins over `VALKEY_URL`) |
+| `RATE_LIMIT_FAIL_OPEN` | `true` (default) → a ValKey outage **allows** requests (goes fail-open); `false` → **denies** (429s the rate-limited endpoints) |
 | `CSP_TILE_HOSTS` / `CSP_GEOCODE_HOSTS` | origins allowed by the strict CSP for map tiles / geocoding |
 | `APP_ENV` | `production` → JSON structured logs (machine-parseable, forward to a log aggregator) |
 | `EMAIL_PROVIDER` | `smtp` or `resend` in production (not `fake`) |
@@ -76,6 +79,38 @@ Migrations are **forward-only** (`sqlx` records applied versions). This means:
 The map/tile, geocoder, email, OAuth and object-storage integrations are
 currently **dev impls** (see `PENDING_FOR_PRODUCTION.md` §A–§B). Wire the real
 providers there; the env surface is already in place.
+
+## 5b. Rate limiter (ValKey, Ledger #6)
+
+The rate limiter is a sliding-window counter shared by auth, photo, contribution
+and moderation. Dev uses an in-memory limiter; production should run ValKey
+(Redis-compatible), which aggregates limits across instances and survives
+restarts. The app picks the backend from env (no code change):
+
+- no `VALKEY_URL`/`VALKEY_CLUSTER_URLS` → in-memory (default, dev/test).
+- `VALKEY_URL` → `ValKeyRateLimiter::single` (one node).
+- `VALKEY_CLUSTER_URLS` → `ValKeyRateLimiter::cluster` (a real cluster; the
+  `redis-rs` `ClusterClient` auto-discovers nodes and routes each key to its
+  owning slot). Cluster wins over `VALKEY_URL`.
+
+**Atomicity:** each `check` runs a Lua script against a ValKey sorted set
+(`ZREMRANGEBYSCORE` → `ZCARD` → `ZADD`), so the trim+count+record is atomic and
+correct under concurrency, including in cluster mode (the script touches a
+single key, so it stays within one hash slot).
+
+**Failure mode — fail open by default.** `Check` on a ValKey outage returns
+*allow* and logs a `warn!` (`RATE_LIMIT_FAIL_OPEN=true`), so a ValKey outage
+degrades brute-force protection without taking the site down (the application
+maps any `RateLimitError` to 429 — fail closed — which would 429 every
+rate-limited endpoint during an outage). Set `RATE_LIMIT_FAIL_OPEN=false` to
+fail closed instead (stricter, but an outage 429s auth/photo/moderation).
+
+**Docker compose:** the dev stack runs a single-node ValKey
+(`docker-compose.yml`, `valkey` service, wired as `VALKEY_URL`). For cluster
+mode use `docker-compose.valkey-cluster.yml` (a cluster-enabled node covering
+all slots — portable on Docker Desktop for Mac; see the file header for a
+multi-node variant).
+
 
 ## 6. Rolling deploy + rollback
 

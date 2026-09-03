@@ -15,8 +15,8 @@ use bikenest_application::{
     ContributionService, EmailProvider, FreshnessConfig, GetParkingDetails, ModerationDeps, ModerationError,
     ModerationService, NewParkingLocation, NewVerification, ObjectStorage, ParkingEdit,
     ParkingPhotoReader, PasswordHasher, PhotoDeps, PhotoError, PhotoKind, PhotoService,
-    PhotoTarget, PrivacyDeps, PrivacyError, PrivacyService, ProposalApplication, Readiness,
-    SearchInput, SearchParking, TokenGenerator,
+    PhotoTarget, PrivacyDeps, PrivacyError, PrivacyService, ProposalApplication, RateLimiter,
+    Readiness, SearchInput, SearchParking, TokenGenerator,
 };
 use bikenest_domain::{
     Cost, CurrencyCode, GeoPoint, Money, ModerationState, OpeningHours, ParkingLocation, ParkingType,
@@ -27,14 +27,14 @@ use bikenest_domain::{
 use bikenest_domain::{ExistenceResult, ProposalKind, Role, UserEmail, UserId};
 use bikenest_infrastructure::probe::SqlxDatabaseProbe;
 use bikenest_infrastructure::{
-    Argon2PasswordHasher, Db, FakeGeocoder, FakeOAuthProvider, InMemoryRateLimiter,
-    LocalDiskStorage, LocalImageProcessor, OfflineTimezoneResolver, RealTokenGenerator,
-    SqlxAccountRepository, SqlxAnonymizationRepository, SqlxAuditLog, SqlxAuditLogReader,
-    SqlxContributionHistoryReader, SqlxExportRepository, SqlxFavoriteRepository,
-    SqlxModerationRepository, SqlxParkingContributionRepository, SqlxParkingDetailsReader,
-    SqlxParkingPhotoReader, SqlxParkingSearchReader, SqlxPhotoRepository, SqlxPolicyReader,
-    SqlxPrivacyRequestRepository, SqlxReportRepository, SqlxReviewPhotosReader,
-    SqlxReviewRepository, SqlxSessionStore, SqlxTokenStore, SqlxVerificationRepository, SystemClock,
+    Argon2PasswordHasher, Db, FakeGeocoder, FakeOAuthProvider, LocalDiskStorage, LocalImageProcessor,
+    OfflineTimezoneResolver, RealTokenGenerator, SharedRateLimiter, SqlxAccountRepository,
+    SqlxAnonymizationRepository, SqlxAuditLog, SqlxAuditLogReader, SqlxContributionHistoryReader,
+    SqlxExportRepository, SqlxFavoriteRepository, SqlxModerationRepository,
+    SqlxParkingContributionRepository, SqlxParkingDetailsReader, SqlxParkingPhotoReader,
+    SqlxParkingSearchReader, SqlxPhotoRepository, SqlxPolicyReader, SqlxPrivacyRequestRepository,
+    SqlxReportRepository, SqlxReviewPhotosReader, SqlxReviewRepository, SqlxSessionStore,
+    SqlxTokenStore, SqlxVerificationRepository, SystemClock, rate_limiter_from_env,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -76,6 +76,8 @@ pub struct AppState {
 
 /// Builds the full application router with a real database handle and the
 /// email provider selected by `EMAIL_PROVIDER` (default dev = SMTP → Mailpit).
+/// The rate limiter is selected by `VALKEY_URL`/`VALKEY_CLUSTER_URLS`
+/// (`rate_limiter_from_env`, falling back to in-memory).
 pub fn app_router(db: Db, probe_timeout: std::time::Duration) -> Router {
     app_router_with(
         db,
@@ -83,19 +85,26 @@ pub fn app_router(db: Db, probe_timeout: std::time::Duration) -> Router {
         bikenest_infrastructure::email_from_env(),
         FakeOAuthProvider::from_env(),
         Argon2PasswordHasher,
+        rate_limiter_from_env(),
     )
 }
 
-/// Builds the router with injectable email/OAuth/password providers (tests pass
-/// fakes — e.g. a fast [`TestPasswordHasher`] — to keep the suite fast). See
+/// Builds the router with injectable email/OAuth/password/rate-limiter
+/// providers (tests pass fakes — e.g. a fast [`TestPasswordHasher`] and a fresh
+/// in-memory limiter — to keep the suite fast and isolated). See
 /// plans/m2-accounts-auth.md §7 for the wiring.
+///
+/// The passed limiter is shared by the auth, contributions, photo and
+/// moderation services so they all read one store (Ledger #6).
 pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
     db: Db,
     probe_timeout: std::time::Duration,
     email: Box<dyn EmailProvider>,
     oauth: FakeOAuthProvider,
     hasher: H,
+    rate_limiter: Box<dyn RateLimiter>,
 ) -> Router {
+    let rate_limiter: Arc<dyn RateLimiter> = Arc::from(rate_limiter);
     let probe = SqlxDatabaseProbe::new(db.clone(), probe_timeout);
     let search_uc = SearchParking::new(
         Box::new(FakeGeocoder),                                   // Ledger #2
@@ -116,7 +125,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         Box::new(SystemClock),
         email,                                       // EmailProvider (Ledger #4)
         Box::new(oauth),                             // Ledger #5
-        Box::new(InMemoryRateLimiter::new()),        // Ledger #6
+        Box::new(SharedRateLimiter::new(rate_limiter.clone())), // Ledger #6 (shared ValKey)
         Box::new(SqlxAuditLog::new(db.clone())),
         base_url_from_env(),
     );
@@ -129,7 +138,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         favorites: Box::new(SqlxFavoriteRepository::new(db.clone())),
         history: Box::new(SqlxContributionHistoryReader::new(db.clone())),
         review_photos: Box::new(SqlxReviewPhotosReader::new(db.clone())),
-        rate_limiter: Box::new(InMemoryRateLimiter::new()), // Ledger #6
+        rate_limiter: Box::new(SharedRateLimiter::new(rate_limiter.clone())), // Ledger #6
         audit: Box::new(SqlxAuditLog::new(db.clone())),
         clock: Box::new(SystemClock),
         freshness: bikenest_infrastructure::config::freshness_config_from_env(),
@@ -141,7 +150,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         )),
         repository: Box::new(SqlxPhotoRepository::new(db.clone())),
         storage: Box::new(storage.clone()),
-        rate_limiter: Box::new(InMemoryRateLimiter::new()), // Ledger #6
+        rate_limiter: Box::new(SharedRateLimiter::new(rate_limiter.clone())), // Ledger #6
         audit: Box::new(SqlxAuditLog::new(db.clone())),
         clock: Box::new(SystemClock),
         limits: bikenest_infrastructure::config::photo_config_from_env(),
@@ -152,7 +161,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         audit: Box::new(SqlxAuditLog::new(db.clone())),
         audit_reader: Box::new(SqlxAuditLogReader::new(db.clone())),
         history: Box::new(SqlxContributionHistoryReader::new(db.clone())),
-        rate_limiter: Box::new(InMemoryRateLimiter::new()), // Ledger #6
+        rate_limiter: Box::new(SharedRateLimiter::new(rate_limiter.clone())), // Ledger #6
         limits: bikenest_infrastructure::config::moderation_config_from_env(), // Ledger #19
     });
     let privacy_service = PrivacyService::new(PrivacyDeps {

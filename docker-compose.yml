@@ -35,6 +35,9 @@ services:
       # is the mounted /app/media; the signing secret is dev-only here.
       MEDIA_ROOT: /app/media
       MEDIA_SIGNING_SECRET: dev-compose-media-secret
+      # Rate limiter (Ledger #6): ValKey backend, shared across auth/photo/
+      # contribution/moderation. Ephemeral keys (TTL), so no persistence.
+      VALKEY_URL: valkey://valkey:6379
       # Email: the app uses SMTP in dev, delivering to Mailpit (see below).
       EMAIL_PROVIDER: smtp
       EMAIL_FROM: BikeNest <no-reply@bikenest.local>
@@ -51,6 +54,8 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_started
+      valkey:
+        condition: service_healthy
     # NOTE: literal block (|) with the `cargo watch` invocation on ONE physical
     # line. A folded (>) block keeps extra-indented lines as newlines, which in
     # sh would terminate `exec cargo watch` before its flags — cargo-watch would
@@ -98,8 +103,38 @@ services:
       - "1025:1025"   # SMTP relay (what the app connects to)
       - "8025:8025"   # web UI: http://localhost:8025
 
+  # ValKey (Ledger #6): shared rate-limit store behind the ValKeyRateLimiter
+  # (single-node path, VALKEY_URL). Redis-compatible. Ephemeral by design
+  # (no persistence — rate-limit keys carry their own TTL), so the data volume is
+  # optional and the image is easy to scrape clean.
+  valkey:
+    image: valkey/valkey:8
+    container_name: bikenest-valkey
+    command:
+      - "valkey-server"
+      - "--port"
+      - "6379"
+      - "--save"
+      - ""
+      - "--appendonly"
+      - "no"
+    ports:
+      - "${VALKEY_HOST_PORT:-6380}:6379"
+    volumes:
+      - bikenest-valkeydata:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Real ValKey cluster (Ledger #6, cluster path) is optional — see
+  # docker-compose.valkey-cluster.yml (single cluster-enabled node covering all
+  # slots; portable on Docker Desktop for Mac).
+
 volumes:
   bikenest-pgdata:
+  bikenest-valkeydata:
   cargo-target:
   cargo-registry:
   node_modules:

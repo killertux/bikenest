@@ -434,6 +434,7 @@ async fn auth_app() -> (axum::Router, FakeEmailProvider) {
         Box::new(email.clone()),
         oauth,
         TestPasswordHasher,
+        Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
     );
     (app, email)
 }

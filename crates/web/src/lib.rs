@@ -760,15 +760,16 @@ pub fn app_router(db: bikenest_infrastructure::Db, probe_timeout: std::time::Dur
     http::app_router(db, probe_timeout)
 }
 
-/// Test-oriented constructor: inject email/OAuth/password providers (tests pass
-/// a fast [`bikenest_test_support::TestPasswordHasher`] to keep argon2 out of
-/// the suite).
+/// Test-oriented constructor: inject email/OAuth/password/rate-limiter providers
+/// (tests pass a fast [`bikenest_test_support::TestPasswordHasher`] and a fresh
+/// in-memory limiter to keep argon2 and ValKey out of the suite).
 pub fn app_router_with<H: bikenest_application::PasswordHasher + Clone + 'static>(
     db: bikenest_infrastructure::Db,
     probe_timeout: std::time::Duration,
     email: Box<dyn bikenest_application::EmailProvider>,
     oauth: bikenest_infrastructure::FakeOAuthProvider,
     hasher: H,
+    rate_limiter: Box<dyn bikenest_application::RateLimiter>,
 ) -> axum::Router {
-    http::app_router_with(db, probe_timeout, email, oauth, hasher)
+    http::app_router_with(db, probe_timeout, email, oauth, hasher, rate_limiter)
 }

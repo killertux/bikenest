@@ -1,0 +1,43 @@
+# Optional ValKey cluster (Ledger #6, cluster path).
+#
+# A single cluster-enabled ValKey node that owns all 16384 slots. This is a real
+# ValKey cluster: it speaks the cluster protocol (CLUSTER SLOTS + slot-based
+# routing), and the app's `ValKeyRateLimiter` connects via the `redis-rs`
+# `ClusterClient` and routes each key to its owning slot — the exact same code
+# path it uses against a multi-node cluster.
+#
+# It is sized as ONE node because a multi-node cluster must advertise a
+# host-reachable address (`--cluster-announce-ip`), and host networking (required
+# to expose a bridge-networked multi-node mesh to a host-side client) is
+# unreliable on Docker Desktop for Mac. A single cluster-enabled node is portable
+# and exercises the identical client integration. For a genuine 3-master topology
+# (Linux engine), add two more cluster-enabled nodes and run
+# `valkey-cli --cluster create 127.0.0.1:7001 127.0.0.1:7002 127.0.0.1:7003
+# --cluster-replicas 0 --cluster-yes`; nothing in the app changes — just list all
+# node URLs in `VALKEY_CLUSTER_URLS`.
+#
+# Start it, then run the cluster test from the host:
+#
+#   docker compose -f docker-compose.valkey-cluster.yml up -d
+#   VALKEY_TEST_CLUSTER_URLS=valkey://127.0.0.1:7001 \
+#     cargo test -p bikenest-infrastructure --test valkey_rate_limit -- --nocapture
+#
+# To teardown: `docker compose -f docker-compose.valkey-cluster.yml down -v`.
+
+services:
+  valkey-cluster:
+    image: valkey/valkey:8
+    container_name: bikenest-valkey-cluster
+    # Self-init: start the server (cluster-enabled), then create a single-node
+    # cluster on itself so the node registers the host-reachable 127.0.0.1:7001
+    # in the slot map (a host-side client reaches it via the port mapping).
+    entrypoint: ["sh", "-c"]
+    command:
+      - 'valkey-server --port 7001 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly no --save "" & sleep 2; valkey-cli --cluster create 127.0.0.1:7001 --cluster-replicas 0 --cluster-yes >/dev/null 2>&1 || true; wait'
+    ports:
+      - "7001:7001"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-p", "7001", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

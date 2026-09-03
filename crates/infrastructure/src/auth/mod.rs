@@ -19,7 +19,7 @@ pub use audit::SqlxAuditLog;
 pub use clock::SystemClock;
 pub use oauth::FakeOAuthProvider;
 pub use password::Argon2PasswordHasher;
-pub use rate_limit::InMemoryRateLimiter;
+pub use rate_limit::{InMemoryRateLimiter, SharedRateLimiter, ValKeyRateLimiter, rate_limiter_from_env};
 pub use seed::{seed_admin, SeedOutcome};
 pub use session_store::SqlxSessionStore;
 pub use token::RealTokenGenerator;

@@ -224,6 +224,9 @@ cargo test
   `docs/backups.md` (pg_dump + WAL, media, restore incl. the §98 retention re-run), and
   `docs/incident-response.md` (§81 nine-step flow + audit-based incident records).
 - **Retention:** `docs/retention-policy.md` (TTLs + config-gated anonymization steps).
+- **Rate limiter (Ledger #6):** shared ValKey sliding-window limiter for auth/photo/contribution/moderation.
+  Single node: `docker-compose.yml` (`valkey` service, wired as `VALKEY_URL`). Cluster:
+  `docker-compose.valkey-cluster.yml`. Docs are in `docs/deployment.md` §5b.
 
 ## Layout
 
