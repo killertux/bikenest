@@ -40,6 +40,8 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | `RATE_LIMIT_FAIL_OPEN` | `true` (default) → a ValKey outage **allows** requests (goes fail-open); `false` → **denies** (429s the rate-limited endpoints) |
 | `CSP_TILE_HOSTS` / `CSP_GEOCODE_HOSTS` | origins allowed by the strict CSP for map tiles / geocoding |
 | `APP_ENV` | `production` → JSON structured logs (machine-parseable, forward to a log aggregator) |
+| `GEOCODER` | **Geocoder** (Ledger #2): `mapbox` \| `fake` (default `fake`). `mapbox` sends the query to Mapbox server-side (§77/§83) |
+| `MAPBOX_ACCESS_TOKEN` | Mapbox token; required when `GEOCODER=mapbox` (missing token falls back to `fake`) |
 | `EMAIL_PROVIDER` | `smtp` or `resend` in production (not `fake`) |
 | `SMTP_*` / `RESEND_API_KEY` / `RESEND_FROM` | the chosen email backend |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | `seed-admin` bootstrap (run once) |
@@ -76,9 +78,28 @@ Migrations are **forward-only** (`sqlx` records applied versions). This means:
 
 ## 5. Providers
 
-The map/tile, geocoder, email, OAuth and object-storage integrations are
-currently **dev impls** (see `PENDING_FOR_PRODUCTION.md` §A–§B). Wire the real
-providers there; the env surface is already in place.
+The map/tile, geocoder, email, OAuth and object-storage integrations
+(Ledger #2/#3/#4/#5/#7) are replaced via `PENDING_FOR_PRODUCTION.md` §A–§B.
+
+**Geocoder (Ledger #2).** Selectable at wiring time with `GEOCODER`
+(`mapbox` | `fake`, default `fake`):
+
+- `fake` — deterministic dev geocoder (landmark table + hashed jitter).
+- `mapbox` — real `MapboxGeocoder` calling the Mapbox Geocoding API
+  (hosted, OSM-derived; §83). Requires `MAPBOX_ACCESS_TOKEN`; if the token is
+  missing it logs and falls back to `fake`.
+
+  **§77 boundary:** the query is sent **server-side** with only the free-text
+  destination — no account identity, cookie, or client IP crosses to Mapbox
+  (see `docs/provider-transfer-inventory.md`). A Mapbox error is **graceful**: the
+  search page shows a "location service unavailable" message rather than a 500.
+  Terms of service, attribution, rate limits and the **provider contract / DPA /
+  international-transfer review** (§C of `PENDING_FOR_PRODUCTION.md`) apply —
+  Mapbox is a paid hosted SaaS (free tier ≈100k geocode/mo); self-hosted Photon
+  (OSM) is the no-cost, no-external-transfer alternative if preferred.
+
+Other providers (tiles, email, OAuth, object storage) still use dev impls.
+
 
 ## 5b. Rate limiter (ValKey, Ledger #6)
 

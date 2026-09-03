@@ -27,14 +27,14 @@ use bikenest_domain::{
 use bikenest_domain::{ExistenceResult, ProposalKind, Role, UserEmail, UserId};
 use bikenest_infrastructure::probe::SqlxDatabaseProbe;
 use bikenest_infrastructure::{
-    Argon2PasswordHasher, Db, FakeGeocoder, FakeOAuthProvider, LocalDiskStorage, LocalImageProcessor,
+    Argon2PasswordHasher, Db, FakeOAuthProvider, LocalDiskStorage, LocalImageProcessor,
     OfflineTimezoneResolver, RealTokenGenerator, SharedRateLimiter, SqlxAccountRepository,
     SqlxAnonymizationRepository, SqlxAuditLog, SqlxAuditLogReader, SqlxContributionHistoryReader,
     SqlxExportRepository, SqlxFavoriteRepository, SqlxModerationRepository,
     SqlxParkingContributionRepository, SqlxParkingDetailsReader, SqlxParkingPhotoReader,
     SqlxParkingSearchReader, SqlxPhotoRepository, SqlxPolicyReader, SqlxPrivacyRequestRepository,
     SqlxReportRepository, SqlxReviewPhotosReader, SqlxReviewRepository, SqlxSessionStore,
-    SqlxTokenStore, SqlxVerificationRepository, SystemClock, rate_limiter_from_env,
+    SqlxTokenStore, SqlxVerificationRepository, SystemClock, geocoder_from_env, rate_limiter_from_env,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -107,7 +107,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
     let rate_limiter: Arc<dyn RateLimiter> = Arc::from(rate_limiter);
     let probe = SqlxDatabaseProbe::new(db.clone(), probe_timeout);
     let search_uc = SearchParking::new(
-        Box::new(FakeGeocoder),                                   // Ledger #2
+        geocoder_from_env(),                                   // Ledger #2 (mapbox | fake)
         Box::new(SqlxParkingSearchReader::new(db.clone())),
         bikenest_infrastructure::config::recommendation_config_from_env(), // Ledger #8
         bikenest_infrastructure::config::freshness_config_from_env(),      // Ledger #9/#17
@@ -531,6 +531,16 @@ async fn search(
             items: Vec::new(),
             cursor_url: None,
             error: Some(tr.t("search.missing").to_string()),
+            map_json: serde_json::json!({ "origin": null, "items": [] }).to_string(),
+        },
+        // Geocoder outage / rate-limit / bad token → graceful "can't reach the
+        // geocoder" page, not a 500 (a hosted provider is a soft dependency).
+        Err(bikenest_application::SearchError::Geocode(_)) => ResultsData {
+            destination_label: None,
+            total_label: String::new(),
+            items: Vec::new(),
+            cursor_url: None,
+            error: Some(tr.t("search.geocode_unavailable").to_string()),
             map_json: serde_json::json!({ "origin": null, "items": [] }).to_string(),
         },
         Err(_) => return internal_error(tr),

@@ -29,7 +29,7 @@ pub use email::{
 };
 pub use config::Config;
 pub use db::Db;
-pub use geocoding::FakeGeocoder;
+pub use geocoding::{FakeGeocoder, MapboxGeocoder, geocoder_from, geocoder_from_env};
 pub use moderation::{SqlxAuditLogReader, SqlxModerationRepository, SqlxReportRepository};
 pub use parking::{SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader};
 pub use privacy::{
