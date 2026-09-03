@@ -10,6 +10,10 @@ A community-maintained bicycle parking finder. See `REQUIREMENTS.md` (what/how),
 - [x] **M1** core search & map (read-only): the full read-only product loop over mock data
 - [x] **M2** accounts & authentication: register → verify → log in/out; seeded admin; sessions + CSRF; roles
 - [x] **M3** community contributions: verified users add/edit/propose/review/verify/favorite; field-level history + optimistic concurrency; confidence (§106)
+- [x] **M4** photos (upload → validate → process → moderate → publish)
+- [x] **M5** moderation & reporting
+- [x] **M6** privacy & account lifecycle
+- [~] **M7** hardening & production readiness: **core shipped** (stored-XSS fix; security headers + strict nonce-free CSP with the Alpine CSP build; JSON structured logging + redacted request traces; env-configurable tuning constants; SEO/i18n core: `robots.txt`/`sitemap.xml`/canonical/meta/OG/`hreflang`/`noindex` + locale money). **Deferred to M8:** real providers + gating, Playwright E2E + axe-core AA, production `Dockerfile` + deployment/backups/incident-response docs. See `plans/m7-hardening.md` and `plans/m8-production-and-e2e.md`.
 
 ### M1 — core search & map (read-only)
 
@@ -186,6 +190,10 @@ credentials needed.
 - `RESEND_API_KEY` / `RESEND_FROM` — Resend API backend.
 - `ADMIN_EMAIL` / `ADMIN_PASSWORD` — `seed-admin` bootstrap (Ledger #10; password must be 8+ chars).
 - `FAKE_OAUTH_EMAIL` / `FAKE_OAUTH_SUB` — deterministic `FakeOAuthProvider` dev identity (Ledger #5).
+
+M7 also documents **security/**csp/**tuning** knobs: `TLS_ON`, `CSP_TILE_HOSTS`, `CSP_GEOCODE_HOSTS`,
+`APP_ENV` (`production` → JSON structured logs), and the configurable constants
+(`REC_WEIGHT_*`, `FRESHNESS_*`, `PHOTO_*`, `MOD_*`, `RETENTION_*`) — see `.env.example`.
 
 ### Reset local data
 

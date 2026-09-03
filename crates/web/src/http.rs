@@ -58,6 +58,7 @@ use crate::{
 #[derive(Clone)]
 pub struct AppState {
     pub readiness: Arc<CheckReadiness<SqlxDatabaseProbe>>,
+    pub db: Db,
     pub search: Arc<SearchParking>,
     pub details: Arc<GetParkingDetails>,
     pub photos: Arc<dyn ParkingPhotoReader>,
@@ -96,12 +97,12 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
     let search_uc = SearchParking::new(
         Box::new(FakeGeocoder),                                   // Ledger #2
         Box::new(SqlxParkingSearchReader::new(db.clone())),
-        bikenest_application::DEFAULT_RECOMMENDATION_CONFIG,
-        Default::default(),
+        bikenest_infrastructure::config::recommendation_config_from_env(), // Ledger #8
+        bikenest_infrastructure::config::freshness_config_from_env(),      // Ledger #9/#17
     );
     let details = GetParkingDetails::new(
         Box::new(SqlxParkingDetailsReader::new(db.clone())),
-        Default::default(),
+        bikenest_infrastructure::config::freshness_config_from_env(),
     );
     let auth_service = AuthService::new(
         Box::new(SqlxAccountRepository::new(db.clone())),
@@ -128,7 +129,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         rate_limiter: Box::new(InMemoryRateLimiter::new()), // Ledger #6
         audit: Box::new(SqlxAuditLog::new(db.clone())),
         clock: Box::new(SystemClock),
-        freshness: Default::default(),
+        freshness: bikenest_infrastructure::config::freshness_config_from_env(),
     });
     let storage = LocalDiskStorage::from_env(); // Ledger #7
     let photo_service = PhotoService::new(PhotoDeps {
@@ -162,6 +163,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         Arc::new(SqlxPolicyReader::new(db.clone()));
     let state = AppState {
         readiness: Arc::new(CheckReadiness::new(probe)),
+        db: db.clone(),
         search: Arc::new(search_uc),
         details: Arc::new(details),
         photos: Arc::new(SqlxParkingPhotoReader::new(db.clone())),
@@ -178,6 +180,8 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         .route("/search", get(search))
         .route("/parking/{id}", get(parking_details))
         .route("/about", get(about))
+        .route("/robots.txt", get(robots_txt))
+        .route("/sitemap.xml", get(sitemap_xml))
         .route("/lang/{code}", get(set_lang))
         .route("/media/{*key}", get(media))
         .route("/healthz", get(healthz))
@@ -297,6 +301,35 @@ async fn readyz(State(state): State<AppState>) -> Response {
     }
 }
 
+/// GET /robots.txt — indexing policy (§109). Public pages are crawlable;
+/// private account/admin/moderation paths are disallowed here (and also get
+/// `X-Robots-Tag: noindex` on their responses).
+async fn robots_txt() -> Response {
+    const BODY: &str =
+        "User-agent: *\nAllow: /\nDisallow: /account\nDisallow: /admin\nDisallow: /moderation\n";
+    ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], BODY).into_response()
+}
+
+/// GET /sitemap.xml — static pages + ACTIVE public parking (§111 stable URLs).
+async fn sitemap_xml(State(state): State<AppState>) -> Response {
+    let base = base_url_from_env();
+    let static_urls = ["/", "/search", "/about", "/privacy", "/terms", "/cookies"];
+    let parking_ids: Vec<i64> = bikenest_infrastructure::parking::active_parking_ids(&state.db)
+        .await
+        .unwrap_or_default();
+
+    let mut xml =
+        String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+    for url in static_urls {
+        xml.push_str(&format!("  <url><loc>{base}{url}</loc></url>\n"));
+    }
+    for id in parking_ids {
+        xml.push_str(&format!("  <url><loc>{base}/parking/{id}</loc></url>\n"));
+    }
+    xml.push_str("</urlset>\n");
+    ([(header::CONTENT_TYPE, "application/xml; charset=utf-8")], xml).into_response()
+}
+
 // ---------------------------------------------------------------------------
 // Pages
 // ---------------------------------------------------------------------------
@@ -338,7 +371,10 @@ async fn home(State(state): State<AppState>, locale: Locale, auth: Auth) -> Resp
         .unwrap_or_default();
 
     let page = HomePage {
-        layout: PageLayout::new(tr.t("home.title").to_string(), "home").csrf(auth.csrf_value()),
+        layout: PageLayout::new(tr.t("home.title").to_string(), "home")
+            .canonical(format!("{}/", base_url_from_env().trim_end_matches('/')))
+            .description(tr.t("home.hero.subtitle").to_string())
+            .csrf(auth.csrf_value()),
         tr,
         featured,
     };
@@ -480,7 +516,10 @@ async fn search(
         render(vm, StatusCode::OK)
     } else {
         let vm = SearchPageVm {
-            layout: PageLayout::new(tr.t("search.title").to_string(), "search").csrf(auth.csrf_value()),
+            layout: PageLayout::new(tr.t("search.title").to_string(), "search")
+                .canonical(format!("{}/search", base_url_from_env().trim_end_matches('/')))
+                .description(tr.t("search.title").to_string())
+                .csrf(auth.csrf_value()),
             tr,
             results,
             form: params.0.clone(),
@@ -1545,7 +1584,10 @@ fn photo_error(tr: Translator, e: &PhotoError) -> (StatusCode, String) {
 async fn about(locale: Locale, auth: Auth) -> Response {
     let tr = Translator::new(locale);
     let page = AboutPage {
-        layout: PageLayout::new(tr.t("about.title").to_string(), "about").csrf(auth.csrf_value()),
+        layout: PageLayout::new(tr.t("about.title").to_string(), "about")
+            .canonical(format!("{}/about", base_url_from_env().trim_end_matches('/')))
+            .description(tr.t("about.title").to_string())
+            .csrf(auth.csrf_value()),
         tr,
     };
     render(page, StatusCode::OK)

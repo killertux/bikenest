@@ -18,6 +18,14 @@ pub struct PageLayout {
     pub title: String,
     pub current: String,
     pub csrf: String,
+    /// Canonical URL (§111) — rendered as `<link rel="canonical">` + `og:url`.
+    pub canonical: String,
+    /// Meta description + `og:description` (short, localised).
+    pub description: String,
+    /// OpenGraph type: "website" (default) or "article".
+    pub og_type: &'static str,
+    /// Whether this page must not be indexed (account/admin/moderation/export).
+    pub noindex: bool,
 }
 
 impl PageLayout {
@@ -27,6 +35,10 @@ impl PageLayout {
             title,
             current: current.to_string(),
             csrf: String::new(),
+            canonical: String::new(),
+            description: String::new(),
+            og_type: "website",
+            noindex: false,
         }
     }
 
@@ -36,7 +48,35 @@ impl PageLayout {
             title,
             current: current.to_string(),
             csrf,
+            canonical: String::new(),
+            description: String::new(),
+            og_type: "website",
+            noindex: false,
         }
+    }
+
+    /// Set (or overwrite) the canonical URL (SEO §109).
+    pub fn canonical(mut self, url: impl Into<String>) -> Self {
+        self.canonical = url.into();
+        self
+    }
+
+    /// Set (or overwrite) the meta description (SEO §109).
+    pub fn description(mut self, desc: impl Into<String>) -> Self {
+        self.description = desc.into();
+        self
+    }
+
+    /// Set the OpenGraph type ("website" | "article").
+    pub fn og_type(mut self, og_type: &'static str) -> Self {
+        self.og_type = og_type;
+        self
+    }
+
+    /// Mark private pages as non-indexable (SEO §110).
+    pub fn noindex(mut self) -> Self {
+        self.noindex = true;
+        self
     }
 
     /// Set (or overwrite) the CSRF token on an existing layout (for pages whose

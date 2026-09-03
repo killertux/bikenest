@@ -77,6 +77,7 @@ pub async fn security_headers(
     req: Request<Body>,
     next: Next,
 ) -> Response {
+    let path_is_private = is_private_path(req.uri().path());
     let mut res = next.run(req).await;
     let head = res.headers_mut();
     head.insert(
@@ -108,7 +109,18 @@ pub async fn security_headers(
             HeaderValue::from_static("max-age=31536000; includeSubDomains"),
         );
     }
+    // Private data must never be indexed (§110). Also enforced in robots.txt.
+    if path_is_private {
+        head.insert("X-Robots-Tag", HeaderValue::from_static("noindex, nofollow"));
+    }
     res
+}
+
+/// Private (account/admin/moderation) paths — never indexable (§110).
+fn is_private_path(path: &str) -> bool {
+    path.starts_with("/account")
+        || path.starts_with("/admin")
+        || path.starts_with("/moderation")
 }
 
 fn env_flag(key: &str) -> bool {

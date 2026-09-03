@@ -85,7 +85,7 @@ async fn main() {
             let storage = bikenest_infrastructure::LocalDiskStorage::from_env();
             let retention = bikenest_infrastructure::SqlxRetentionRepository::new(
                 db.clone(),
-                bikenest_domain::RetentionPolicy::default(),
+                config.retention.clone(),
                 Box::new(storage),
                 media_root,
             );

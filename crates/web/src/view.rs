@@ -128,11 +128,19 @@ pub fn cost_label(t: Translator, cost: &Cost) -> String {
                 PricingUnit::Entry => t.t("unit.entry"),
             };
             format!(
-                "{} {major:.2} / {unit}",
-                currency_symbol(money.currency().as_str())
+                "{} {} / {unit}",
+                currency_symbol(money.currency().as_str()),
+                format_money(t, major)
             )
         }
     }
+}
+
+/// Locale-aware decimal formatting (§116.6): pt-BR uses a comma as the decimal
+/// separator (`1.234,56`), en uses a dot. Applied to money/latency display.
+pub fn format_money(t: Translator, value: f64) -> String {
+    let s = format!("{value:.2}");
+    if t.is_pt() { s.replace('.', ",") } else { s }
 }
 
 pub fn rating_label(t: Translator, avg: Option<f64>, count: i64) -> String {

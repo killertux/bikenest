@@ -5,6 +5,29 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ layout.title }}</title>
   <meta name="csrf" content="{{ layout.csrf }}">
+  {% if layout.noindex %}
+  <meta name="robots" content="noindex">
+  {% endif %}
+  {% if !layout.description.is_empty() %}
+  <meta name="description" content="{{ layout.description }}">
+  {% endif %}
+  {% if !layout.canonical.is_empty() %}
+  <link rel="canonical" href="{{ layout.canonical }}">
+  <!-- Locale is selected via Accept-Language + `lang` cookie (§116.7); the same
+       URL serves both pt-BR and en, so hreflang points at the identical URL. -->
+  <link rel="alternate" hreflang="pt-BR" href="{{ layout.canonical }}">
+  <link rel="alternate" hreflang="en" href="{{ layout.canonical }}">
+  <link rel="alternate" hreflang="x-default" href="{{ layout.canonical }}">
+  {% endif %}
+  <meta property="og:site_name" content="BikeNest">
+  <meta property="og:title" content="{{ layout.title }}">
+  <meta property="og:type" content="{{ layout.og_type }}">
+  {% if !layout.description.is_empty() %}
+  <meta property="og:description" content="{{ layout.description }}">
+  {% endif %}
+  {% if !layout.canonical.is_empty() %}
+  <meta property="og:url" content="{{ layout.canonical }}">
+  {% endif %}
   <link rel="stylesheet" href="/static/css/app.css">
   <!-- MapLibre base styles (map clipping, canvas layout, control/attribution
        positioning). Must load before map.css so the page's map overrides win. -->

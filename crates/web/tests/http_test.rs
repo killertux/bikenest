@@ -106,6 +106,73 @@ async fn hsts_absent_in_dev_without_tls(_tx: &mut TestTx) {
 }
 
 // ---------------------------------------------------------------------------
+// SEO / indexing (§109/§110/§111)
+// ---------------------------------------------------------------------------
+
+#[db_test]
+async fn robots_txt_matches_crawl_policy(_tx: &mut TestTx) {
+    let (status, body) = get("/robots.txt").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("User-agent: *"));
+    assert!(body.contains("Allow: /"));
+    assert!(body.contains("Disallow: /account"));
+    assert!(body.contains("Disallow: /admin"));
+    assert!(body.contains("Disallow: /moderation"));
+}
+
+#[db_test]
+async fn sitemap_includes_static_pages_and_active_parking(tx: &mut TestTx) {
+    const MARK: &str = "fix-http-sitemap";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let conn = tx.executor();
+    let loc = ParkingBuilder::new()
+        .with_fixture_tag(MARK)
+        .with_name("Sitemap Fixture")
+        .at(-33.920_000, -70.620_000)
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    let (status, body) = get("/sitemap.xml").await;
+    assert_eq!(status, StatusCode::OK);
+    let base = "http://localhost:8080";
+    assert!(body.contains(&format!("<loc>{base}/about</loc>")), "static page in sitemap");
+    assert!(body.contains(&format!("<loc>{base}/search</loc>")), "static page in sitemap");
+    assert!(body.contains(&format!("<loc>{base}/parking/{}</loc>", loc.id())), "active parking in sitemap");
+
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+#[db_test]
+async fn public_page_has_canonical_description_and_hreflang(_tx: &mut TestTx) {
+    let (status, body) = get("/").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("rel=\"canonical\""), "home has canonical link");
+    assert!(body.contains("name=\"description\""), "home has meta description");
+    assert!(body.contains("property=\"og:title\""), "home has og:title");
+    assert!(body.contains("hreflang=\"pt-BR\""), "hreflang pt-BR present");
+    assert!(body.contains("hreflang=\"en\""), "hreflang en present");
+}
+
+#[db_test]
+async fn private_pages_are_noindex(_tx: &mut TestTx) {
+    for path in ["/account", "/admin/users", "/moderation"] {
+        let headers = get_headers(path).await;
+        let v = headers["x-robots-tag"].to_str().unwrap();
+        assert!(v.contains("noindex"), "{path} must be noindex, got: {v}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // M1: pages
 // ---------------------------------------------------------------------------
 

@@ -239,28 +239,42 @@ See `plans/m6-privacy.md` for the full plan and decisions.
 
 ## M7 — Hardening & production readiness
 
+> **Status: partially complete.** The security & robustness hardening and the SEO/i18n core are
+> shipped (see `plans/m7-hardening.md`); the real-provider cutover, Playwright E2E + axe-core
+> accessibility, and the production deployment/backups/incident-response docs are deferred to
+> **`plans/m8-production-and-e2e.md`** (and `PENDING_FOR_PRODUCTION.md`).
+
 **Goal:** a production-deployable, observable, accessible, localized application.
 
-**Build:**
+**Shipped in M7 (code):**
 
-- Security headers + **CSP**; htmx-4 error-response swap handling (§116.6). **CSP ↔ Alpine/HTMX
-  decision (§64/§65):** the current templates use inline Alpine expressions (`x-data`, `@click`) and
-  `hx-boost`, which a strict policy would break (Alpine's default build needs `unsafe-eval`). Adopt
-  **either** Alpine's CSP build (pre-registered components, no inline expressions) **or** a
-  nonce-based CSP — decided as part of this milestone. Until then, avoid adding new inline-expression
-  templates that would deepen the migration. (Tracked as Ledger #15.)
-- Structured logging; separate diagnostic logs vs audit events; log retention.
-- **Incident-response strategy (§81):** document detection → classification → containment → impact /
-  personal-data assessment → escalation → regulatory/user notification → remediation → incident record.
-- Replace fakes/dev impls with real providers: geocoder, map/tile provider, email (SMTP/ESP),
-  **object storage (S3-compatible, replacing `LocalDiskStorage`; real `MEDIA_SIGNING_SECRET`)**,
-  Google OAuth (real credentials) — **clears the corresponding Ledger entries**.
-- E2E browser tests for critical journeys; accessibility pass (WCAG 2.2 AA) incl. keyboard-only.
-- **i18n finish (§102):** the runtime (bilingual catalog, `Accept-Language` + `lang`-cookie
-  resolution, header toggle) shipped in **M1**; M7 adds SEO `hreflang`, audits any strings added by
-  M2–M6 features, and confirms locale-aware dates/currency where practical.
-- SEO (titles/meta/canonical/sitemap/robots); stable URLs.
-- Deployment architecture, backups, restore, disaster recovery, performance-target validation.
+- **Stored-XSS fix** (§103): the search map-JSON blob is HTML-escaped (`<`/`>`/`&`/U+2028/U+2029 →
+  `\uXXXX`) so UGC `name`/`address` cannot break out of the `<script type="application/json">` block.
+  Regression test; landed first.
+- **Security headers + strict CSP** (§64/§65/§109): a middleware adds `Strict-Transport-Security`
+  (only when `TLS_ON`), `Content-Security-Policy`, `X-Content-Type-Options`, `Referrer-Policy`,
+  `Permissions-Policy`, `X-Frame-Options`, and `X-Robots-Tag: noindex` on account/admin/moderation
+  paths. The CSP is strict and **nonce-free** (`script-src 'self'`, no `'unsafe-eval'`); tile/geocode
+  origins are config-templated. **CSP ↔ Alpine/HTMX decision (Ledger #15):** adopted **Alpine's CSP
+  build** — 34 inline `x-data`/`@click` expressions migrated to pre-registered components
+  (`web/static/js/app.js`); htmx 4 + MapLibre were verified eval-free.
+- **Observability** (§86): JSON structured logging in production (`APP_ENV=production`), human-readable
+  in dev; a `TraceLayer` logs one line per request (`method`/`path`/`status`/`latency_ms`) and **never
+  records headers**, so no cookie/token/PII reaches the log. PII-free `info`/`warn` events at key
+  boundaries (login failure, report, moderation, privacy request).
+- **Configurable constants** (Ledger #8/#9/#17/#20, part of #18/#19): `RecommendationConfig`,
+  `FreshnessConfig`, `RetentionPolicy`, `PhotoConfig` and `ModerationConfig` are env-driven with
+  documented defaults (`.env.example`); recommendation/freshness/retention are wired through the
+  services.
+- **SEO + i18n core** (§109/§110/§111): `robots.txt`, `sitemap.xml` (static + ACTIVE parking),
+  `canonical` + `meta description` + minimal OG + `hreflang` (pt-BR/en/x-default) on public pages,
+  `noindex` on private paths, and a locale-aware money formatter (pt-BR comma decimals).
+
+**Deferred to M8 (see `plans/m8-production-and-e2e.md`):** real providers
+(geocoder/tiles/S3/OAuth/Redis rate limiter) + production gating (Ledger #1/#2/#3/#5/#6/#7/#10/#13/#14/#16);
+Playwright E2E + axe-core AA + keyboard-only; production `Dockerfile` + `docs/deployment.md`,
+`docs/backups.md`, `docs/incident-response.md` (incl. a restore exercise); full runtime plumbing of
+`PhotoConfig`/`ModerationConfig` limits; locale-aware date formatting.
 
 **Working app means:** a production-like deployment is documented; E2E is green; a strict CSP is enforced with Alpine still working; language is switchable with `hreflang`; backups and restore are configured and tested.
 
@@ -298,16 +312,16 @@ Bookkeeping for anything temporary, mocked, or knowingly incomplete. **Each entr
 | 5 | `FakeOAuthProvider` (Google stub) | fake/stub | M2 | M7 | Replace with real Google OAuth client + credentials. |
 | 6 | In-memory `RateLimiter` | stub | **M2** (moved earlier from M3, §45) | M7 | Auth limits in M2; contribution limits (parking/edit/proposal/review/verification/parked-here) in M3; photo-upload limits (10/day/user + 20/day/IP) in M4; report-creation limits (10/day/user + 20/day/IP) in M5. Replace with shared/Redis-backed store if multi-instance. |
 | 7 | `LocalDiskStorage` (local-filesystem `ObjectStorage`) | dev impl | **M1** (moved earlier from M4) | M7 | Signed, expiring `/media` URLs (S3-presign parity). Replace with S3-compatible storage. |
-| 8 | Hardcoded recommendation weights | improve | M1 | M7 | Make configurable in application code (§34). |
-| 9 | Hardcoded freshness thresholds (review-side) | improve | M3 | M7 | Parking-side thresholds already configurable via `FreshnessConfig` (M1); the review-side thresholds are now exercised by M3's confidence rule (`Verified`/`RecentlyVerified`/`Stale`). |
+| 8 | Hardcoded recommendation weights | improve | M1 | M7 | **Done:** `RecommendationConfig` is env-driven with M1 defaults; wired into `SearchParking` (§34). |
+| 9 | Hardcoded freshness thresholds (review-side) | improve | M3 | M7 | **Done:** `FreshnessConfig` (parking + review) is env-driven with M1 defaults; wired into the search/detail/contribution services (§40/§106). |
 | 10 | `seed-admin` command | improve | M2 | M7 | Ensure idempotent + secret-safe in production. |
-| 11 | Hardcoded user-facing strings | improve | M0 | M7 | **Largely resolved in M1**: catalog + `Accept-Language`/cookie resolution + toggle (§102). M7 = SEO `hreflang` + audit strings added by M2–M6. |
+| 11 | Hardcoded user-facing strings | improve | M0 | M7 | **Done:** catalog + `Accept-Language`/cookie resolution + toggle (§102) shipped in M1; M7 added SEO `hreflang`, canonical/meta/OG and a locale-aware money formatter. Catalog audit largely complete; a deeper string audit is an M8 follow-up. |
 | 13 | `seed_key` column on `parking_location`/`parking_photo` | mock data support | M1 | M7 (drop when seeder is dev-flag-gated) | Identifies mock rows for idempotent re-seeding and cleanup. |
 | 14 | `MEDIA_SIGNING_SECRET` dev default | improve/secret | M1 | M7 | Local `/media` URL signing uses a dev-insecure default; set a real secret in production. |
-| 15 | CSP ↔ inline Alpine/HTMX interaction | risk | M1 | M7 | Inline `x-data`/`@click` + `hx-boost` need `unsafe-eval`; a strict CSP requires Alpine's CSP build or nonces — decide in M7, don't deepen inline usage meanwhile (§64/§65). |
+| 15 | CSP ↔ inline Alpine/HTMX interaction | risk | M1 | M7 | **Done:** adopted **Alpine's CSP build** — 34 inline `x-data`/`@click` expressions migrated to pre-registered components (`web/static/js/app.js`); strict `script-src 'self'`, no `unsafe-eval`. htmx 4 + MapLibre verified eval-free. |
 | 16 | `OfflineTimezoneResolver` (bundled polygon data) | improve/dev | M3 | M7 | Real offline coordinate→IANA resolver replacing M1's static Curitiba mapping; re-evaluate against a provider reverse-timezone, keep as fallback. |
-| 17 | Confidence-state thresholds + conflict rule hardcoded in domain | improve | M3 | M7 | Make configurable like `FreshnessConfig`; document for tuning (§106). |
-| 18 | Photo upload/processing constants hardcoded (10 MiB, 20 MP, JPEG q85, 400 px thumb, rate-limit defaults) | improve | M4 | M7 | Make size/dimension/quality/limits configurable; document for tuning (§30). |
-| 19 | Moderation constants hardcoded (report description length, report rate-limit defaults 10/day/user + 20/day/IP, proposal/adjust values) | improve | M5 | M7 | Made configurable + documented for tuning, like Ledger #18. |
-| 20 | Retention/export TTLs hardcoded (reset 1h, verification 24h, session 30d/90d, parked-here 90d, export 24h, upload-orphan 24h) | improve | M6 | M7 | Make configurable via `RetentionPolicy`/env, like Ledger #18/#19. |
+| 17 | Confidence-state thresholds + conflict rule hardcoded in domain | improve | M3 | M7 | **Done:** thresholds live in `Config.freshness` (env-driven); conflict rule stays in domain as a stated rule (§106). |
+| 18 | Photo upload/processing constants hardcoded (10 MiB, 20 MP, JPEG q85, 400 px thumb, rate-limit defaults) | improve | M4 | M7 | **Partial:** `PhotoConfig` env knobs + documented defaults exposed (`.env.example`); full runtime plumbing of limits (so the domain validation honours them) is an **M8** follow-up (§30). |
+| 19 | Moderation constants hardcoded (report description length, report rate-limit defaults 10/day/user + 20/day/IP, proposal/adjust values) | improve | M5 | M7 | **Partial:** `ModerationConfig` env knobs + documented defaults exposed (`.env.example`); full runtime plumbing is an **M8** follow-up, like Ledger #18. |
+| 20 | Retention/export TTLs hardcoded (reset 1h, verification 24h, session 30d/90d, parked-here 90d, export 24h, upload-orphan 24h) | improve | M6 | M7 | **Done:** `Config.retention` is env-driven with §75 defaults; wired into the retention command. |
 | 21 | `seed-policies` placeholder legal text (privacy/terms/cookies) | placeholder | M6 | legal review (product) | §71: content is product/legal content, not assumed final text. |
