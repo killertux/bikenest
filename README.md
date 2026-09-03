@@ -13,7 +13,8 @@ A community-maintained bicycle parking finder. See `REQUIREMENTS.md` (what/how),
 - [x] **M4** photos (upload → validate → process → moderate → publish)
 - [x] **M5** moderation & reporting
 - [x] **M6** privacy & account lifecycle
-- [~] **M7** hardening & production readiness: **core shipped** (stored-XSS fix; security headers + strict nonce-free CSP with the Alpine CSP build; JSON structured logging + redacted request traces; env-configurable tuning constants; SEO/i18n core: `robots.txt`/`sitemap.xml`/canonical/meta/OG/`hreflang`/`noindex` + locale money). **Deferred to M8:** real providers + gating, Playwright E2E + axe-core AA, production `Dockerfile` + deployment/backups/incident-response docs. See `plans/m7-hardening.md` and `plans/m8-production-and-e2e.md`.
+- [~] **M7** hardening & production readiness: **core shipped** (stored-XSS fix; security headers + strict nonce-free CSP with the Alpine CSP build; JSON structured logging + redacted request traces; env-configurable tuning constants; SEO/i18n core: `robots.txt`/`sitemap.xml`/canonical/meta/OG/`hreflang`/`noindex` + locale money). See `plans/m7-hardening.md`.
+- [x] **M8** production readiness & config plumbing: runtime-plumbed `PhotoConfig`/`ModerationConfig` limits + configured freshness for display, locale-aware date formatter + string audit, multi-stage production `Dockerfile` (DB-free build) + `docs/deployment.md`/`docs/backups.md`/`docs/incident-response.md`, and a runtime-SQLx refactor (`cargo build` no longer needs a database). See `plans/m8-production-readiness.md`. **Real providers + gating** remain in `PENDING_FOR_PRODUCTION.md`; browser E2E/axe-core was removed from scope.
 
 ### M1 — core search & map (read-only)
 
@@ -145,8 +146,8 @@ npm install
 npm run build:assets           # vendor htmx + hx-alpine-compat + alpine + maplibre → web/static/vendor
 npm run build:css              # Tailwind 4.3 → web/static/css/app.css
 
-# The DB must be running before `cargo build` — SQLx compile-time query checking
-# reads DATABASE_URL from .env.
+# No DB is needed to build: queries are runtime-checked (M8 drops the
+# compile-time sqlx macros), so `cargo build` is self-contained.
 cargo run -- seed-mock         # mock data (dev only)
 
 # Seed an admin user (Ledger #10): set ADMIN_EMAIL/ADMIN_PASSWORD in .env first.
@@ -210,10 +211,19 @@ cargo test
 - Domain tests are pure unit tests (opening hours incl. DST, freshness, cost tri-state, type/currency
   validation, scoring neutrality). No database needed.
 - `#[db_test]` tests (integration + HTTP) require the compose database running (`docker compose up -d db`)
-  — it must be up even to *build*, because SQLx compile-time query checking connects to it (§9).
+  — it must be up to *run* the DB-backed tests (the `#[db_test]` harness connects to it); `cargo build`
+  itself needs no database (M8 replaced the compile-time `sqlx::query!` macros with runtime queries, §9).
 - Most tests run inside a transaction rolled back at the end. Read-model tests whose queries run on
   *other* pool connections use the committed-fixture pattern instead: rows are tagged with a unique
   `seed_key` marker, committed, asserted against, then deleted by tag (see `parking_test.rs`).
+
+## Deployment & ops
+
+- **Build:** `docker build -t bikenest .` — no database needed at build time (M8 runtime queries).
+- **Runbook:** `docs/deployment.md` (env, TLS, migrations, health checks, rollback),
+  `docs/backups.md` (pg_dump + WAL, media, restore incl. the §98 retention re-run), and
+  `docs/incident-response.md` (§81 nine-step flow + audit-based incident records).
+- **Retention:** `docs/retention-policy.md` (TTLs + config-gated anonymization steps).
 
 ## Layout
 

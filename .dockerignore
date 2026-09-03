@@ -1,0 +1,12 @@
+# Keep the build context small and secrets out of the image build.
+.git
+target
+node_modules
+media
+data
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.DS_Store

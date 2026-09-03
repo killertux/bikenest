@@ -242,7 +242,7 @@ See `plans/m6-privacy.md` for the full plan and decisions.
 > **Status: partially complete.** The security & robustness hardening and the SEO/i18n core are
 > shipped (see `plans/m7-hardening.md`); the real-provider cutover, Playwright E2E + axe-core
 > accessibility, and the production deployment/backups/incident-response docs are deferred to
-> **`plans/m8-production-and-e2e.md`** (and `PENDING_FOR_PRODUCTION.md`).
+> **`plans/m8-production-readiness.md`** (and `PENDING_FOR_PRODUCTION.md`).
 
 **Goal:** a production-deployable, observable, accessible, localized application.
 
@@ -270,11 +270,16 @@ See `plans/m6-privacy.md` for the full plan and decisions.
   `canonical` + `meta description` + minimal OG + `hreflang` (pt-BR/en/x-default) on public pages,
   `noindex` on private paths, and a locale-aware money formatter (pt-BR comma decimals).
 
-**Deferred to M8 (see `plans/m8-production-and-e2e.md`):** real providers
-(geocoder/tiles/S3/OAuth/Redis rate limiter) + production gating (Ledger #1/#2/#3/#5/#6/#7/#10/#13/#14/#16);
-Playwright E2E + axe-core AA + keyboard-only; production `Dockerfile` + `docs/deployment.md`,
-`docs/backups.md`, `docs/incident-response.md` (incl. a restore exercise); full runtime plumbing of
-`PhotoConfig`/`ModerationConfig` limits; locale-aware date formatting.
+**Done in M8 (see `plans/m8-production-readiness.md`):** runtime plumbing of `PhotoConfig`/`ModerationConfig`
+limits (§30/§43) through validation + processor + body limit / moderation service; display-categorization
+now uses the configured freshness thresholds; locale-aware date formatter + string audit (accessible `aria-label`s);
+multi-stage production `Dockerfile` (DB-free build) + `docs/deployment.md`, `docs/backups.md`,
+`docs/incident-response.md`; and the **runtime-SQLx refactor** (dropped all 105 compile-time `sqlx::query!`/
+`query_as!` sites in `crates/infrastructure/src` for a DB-free `cargo build`).
+
+**Still deferred (not in M8):** real providers (geocoder/tiles/S3/OAuth/Redis rate limiter) + production
+gating (Ledger #1/#2/#3/#5/#6/#7/#10/#13/#14/#16). Browser Playwright E2E + axe-core was **removed from
+scope** (see `m7-hardening.md` — the strict CSP + Alpine build stands statically verified).
 
 **Working app means:** a production-like deployment is documented; E2E is green; a strict CSP is enforced with Alpine still working; language is switchable with `hreflang`; backups and restore are configured and tested.
 
@@ -321,7 +326,7 @@ Bookkeeping for anything temporary, mocked, or knowingly incomplete. **Each entr
 | 15 | CSP ↔ inline Alpine/HTMX interaction | risk | M1 | M7 | **Done:** adopted **Alpine's CSP build** — 34 inline `x-data`/`@click` expressions migrated to pre-registered components (`web/static/js/app.js`); strict `script-src 'self'`, no `unsafe-eval`. htmx 4 + MapLibre verified eval-free. |
 | 16 | `OfflineTimezoneResolver` (bundled polygon data) | improve/dev | M3 | M7 | Real offline coordinate→IANA resolver replacing M1's static Curitiba mapping; re-evaluate against a provider reverse-timezone, keep as fallback. |
 | 17 | Confidence-state thresholds + conflict rule hardcoded in domain | improve | M3 | M7 | **Done:** thresholds live in `Config.freshness` (env-driven); conflict rule stays in domain as a stated rule (§106). |
-| 18 | Photo upload/processing constants hardcoded (10 MiB, 20 MP, JPEG q85, 400 px thumb, rate-limit defaults) | improve | M4 | M7 | **Partial:** `PhotoConfig` env knobs + documented defaults exposed (`.env.example`); full runtime plumbing of limits (so the domain validation honours them) is an **M8** follow-up (§30). |
-| 19 | Moderation constants hardcoded (report description length, report rate-limit defaults 10/day/user + 20/day/IP, proposal/adjust values) | improve | M5 | M7 | **Partial:** `ModerationConfig` env knobs + documented defaults exposed (`.env.example`); full runtime plumbing is an **M8** follow-up, like Ledger #18. |
+| 18 | Photo upload/processing constants hardcoded (10 MiB, 20 MP, JPEG q85, 400 px thumb, rate-limit defaults) | improve | M4 | M7 | **Done:** `PhotoConfig` (now `bikenest_domain::PhotoLimits`) is env-driven and threaded into the byte/dimension validation, the `LocalImageProcessor` (quality + thumb-side) and the web `DefaultBodyLimit` (§30). |
+| 19 | Moderation constants hardcoded (report description length, report rate-limit defaults 10/day/user + 20/day/IP, proposal/adjust values) | improve | M5 | M7 | **Done:** `ModerationConfig` (now `ModerationLimits`) is env-driven and threaded into the report rate limits + description max length (§43/§45). |
 | 20 | Retention/export TTLs hardcoded (reset 1h, verification 24h, session 30d/90d, parked-here 90d, export 24h, upload-orphan 24h) | improve | M6 | M7 | **Done:** `Config.retention` is env-driven with §75 defaults; wired into the retention command. |
 | 21 | `seed-policies` placeholder legal text (privacy/terms/cookies) | placeholder | M6 | legal review (product) | §71: content is product/legal content, not assumed final text. |
