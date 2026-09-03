@@ -435,6 +435,7 @@ async fn auth_app() -> (axum::Router, FakeEmailProvider) {
         oauth,
         TestPasswordHasher,
         Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
+        std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
     );
     (app, email)
 }

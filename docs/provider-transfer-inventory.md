@@ -9,7 +9,7 @@
 | Email provider (SMTP/Resend) | verification/reset mail | email, token link | ⚠ review | processor | TLS | provider-specific | provider DPA |
 | Geocoding provider (**Mapbox**, via `GEOCODER=mapbox`) | address→coords | query string + resolved coordinates (§77: no account identity) | ⚠ review | processor | HTTPS (server-side) | request-scoped | — |
 | Map/tile provider | render map | tile requests (§77: no authenticated identity) | ⚠ review | processor | HTTPS | request-scoped | — |
-| Object-storage provider | photo binaries | derivative bytes under opaque keys (§77: no user metadata in keys) | ⚠ review | processor | HTTPS | until rejected/anonymized | `ObjectStorage::delete` |
+| Object-storage provider (**S3-compatible** / MinIO in dev) | photo binaries | derivative bytes under opaque keys (§77: no user metadata in keys) | ⚠ review | processor | HTTPS | until rejected/anonymized | `ObjectStorage::delete` |
 | Hosting provider | run app | full app + DB | ⚠ review | processor | — | per SLA | standard |
 | Observability / error tracking | logs/metrics | logs (no secrets; PII minimized) | ⚠ review | processor | — | per config | standard |
 

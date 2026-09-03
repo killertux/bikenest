@@ -782,6 +782,7 @@ pub fn app_router_with<H: bikenest_application::PasswordHasher + Clone + 'static
     oauth: bikenest_infrastructure::FakeOAuthProvider,
     hasher: H,
     rate_limiter: Box<dyn bikenest_application::RateLimiter>,
+    storage: std::sync::Arc<dyn bikenest_application::ObjectStorage>,
 ) -> axum::Router {
-    http::app_router_with(db, probe_timeout, email, oauth, hasher, rate_limiter)
+    http::app_router_with(db, probe_timeout, email, oauth, hasher, rate_limiter, storage)
 }

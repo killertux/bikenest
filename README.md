@@ -92,10 +92,10 @@ A community-maintained bicycle parking finder. See `REQUIREMENTS.md` (what/how),
 
 ### Pulled forward from later milestones
 
-- [x] **Object storage** (from M4): `ObjectStorage` port + `LocalDiskStorage` issuing HMAC-signed,
-      expiring `/media/{key}` URLs (S3-presign parity; swapping to S3 later is a wiring change).
-      A minimal `parking_photo` table (photos default `APPROVED`); the full upload/validation/EXIF/
-      thumbnail/moderation pipeline still lands in M4.
+- [x] **Object storage** (from M4 → M8): `ObjectStorage` port + `S3ObjectStorage` (S3-compatible;
+      MinIO in dev) issuing signed `/media/{key}` URLs served by the app. `LocalDiskStorage` was
+      replaced (tests use an in-memory double). Photos are stored in an S3 bucket; the full
+      upload/validation/EXIF/ thumbnail/moderation pipeline still lands in M4.
 - [x] **Internationalization** (from M7, §102): pt-BR + en, auto-detected from `Accept-Language`
       (fallback pt-BR), overridable via a `lang` cookie set by `GET /lang/{pt-br|en}`. All user-facing
       strings live in a catalog (`crates/web/src/i18n.rs`), not hard-coded in domain/application logic.
@@ -182,8 +182,11 @@ credentials needed.
 
 - `DATABASE_URL` — Postgres connection (required, read at build time by SQLx).
 - `BIND_ADDR` — HTTP bind address (default `0.0.0.0:8080`).
-- `MEDIA_ROOT` — object-storage directory (default `<repo>/media`, gitignored).
+- `MEDIA_ROOT` — legacy local media directory (default `<repo>/media`, gitignored); only the
+  retention orphan-media sweep reads it. Media objects now live in the S3 bucket.
 - `MEDIA_SIGNING_SECRET` — signs the expiring `/media` GET URLs (set a real secret outside dev).
+- `S3_ENDPOINT` / `S3_REGION` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` —
+  S3-compatible object storage (Ledger #7); defaults target a local MinIO in docker-compose.
 - `BASE_URL` — builds emailed verification/reset links (default `http://localhost:8080`).
 - `EMAIL_PROVIDER` — `fake | smtp | resend` (default `fake`). Dev uses `smtp`.
 - `EMAIL_FROM` — envelope sender for every email.

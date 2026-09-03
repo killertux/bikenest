@@ -6,6 +6,10 @@ edition.workspace = true
 [dependencies]
 argon2 = "0.5"
 async-trait = "0.1"
+aws-config = "1.11.0"
+aws-credential-types = "1.3.0"
+aws-sdk-s3 = "1.144.0"
+aws-smithy-types = "1.6.2"
 bikenest-application = { version = "0.1.0", path = "../application" }
 bikenest-domain = { version = "0.1.0", path = "../domain" }
 chrono = "0.4"

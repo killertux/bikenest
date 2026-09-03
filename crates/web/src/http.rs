@@ -27,14 +27,15 @@ use bikenest_domain::{
 use bikenest_domain::{ExistenceResult, ProposalKind, Role, UserEmail, UserId};
 use bikenest_infrastructure::probe::SqlxDatabaseProbe;
 use bikenest_infrastructure::{
-    Argon2PasswordHasher, Db, FakeOAuthProvider, LocalDiskStorage, LocalImageProcessor,
-    OfflineTimezoneResolver, RealTokenGenerator, SharedRateLimiter, SqlxAccountRepository,
-    SqlxAnonymizationRepository, SqlxAuditLog, SqlxAuditLogReader, SqlxContributionHistoryReader,
-    SqlxExportRepository, SqlxFavoriteRepository, SqlxModerationRepository,
-    SqlxParkingContributionRepository, SqlxParkingDetailsReader, SqlxParkingPhotoReader,
-    SqlxParkingSearchReader, SqlxPhotoRepository, SqlxPolicyReader, SqlxPrivacyRequestRepository,
-    SqlxReportRepository, SqlxReviewPhotosReader, SqlxReviewRepository, SqlxSessionStore,
-    SqlxTokenStore, SqlxVerificationRepository, SystemClock, geocoder_from_env, rate_limiter_from_env,
+    Argon2PasswordHasher, Db, FakeOAuthProvider, LocalImageProcessor,
+    OfflineTimezoneResolver, RealTokenGenerator, SharedObjectStorage, SharedRateLimiter,
+    SqlxAccountRepository, SqlxAnonymizationRepository, SqlxAuditLog, SqlxAuditLogReader,
+    SqlxContributionHistoryReader, SqlxExportRepository, SqlxFavoriteRepository,
+    SqlxModerationRepository, SqlxParkingContributionRepository, SqlxParkingDetailsReader,
+    SqlxParkingPhotoReader, SqlxParkingSearchReader, SqlxPhotoRepository, SqlxPolicyReader,
+    SqlxPrivacyRequestRepository, SqlxReportRepository, SqlxReviewPhotosReader,
+    SqlxReviewRepository, SqlxSessionStore, SqlxTokenStore, SqlxVerificationRepository, SystemClock,
+    geocoder_from_env, rate_limiter_from_env,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -86,6 +87,7 @@ pub fn app_router(db: Db, probe_timeout: std::time::Duration) -> Router {
         FakeOAuthProvider::from_env(),
         Argon2PasswordHasher,
         rate_limiter_from_env(),
+        Arc::new(bikenest_infrastructure::storage_from_env()), // Ledger #7 (MinIO/S3)
     )
 }
 
@@ -103,6 +105,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
     oauth: FakeOAuthProvider,
     hasher: H,
     rate_limiter: Box<dyn RateLimiter>,
+    storage: Arc<dyn ObjectStorage>,
 ) -> Router {
     let rate_limiter: Arc<dyn RateLimiter> = Arc::from(rate_limiter);
     let probe = SqlxDatabaseProbe::new(db.clone(), probe_timeout);
@@ -143,13 +146,12 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         clock: Box::new(SystemClock),
         freshness: bikenest_infrastructure::config::freshness_config_from_env(),
     });
-    let storage = LocalDiskStorage::from_env(); // Ledger #7
     let photo_service = PhotoService::new(PhotoDeps {
         processor: Box::new(LocalImageProcessor::new(
             bikenest_infrastructure::config::photo_config_from_env(),
         )),
         repository: Box::new(SqlxPhotoRepository::new(db.clone())),
-        storage: Box::new(storage.clone()),
+        storage: Box::new(SharedObjectStorage::new(storage.clone())), // Ledger #7
         rate_limiter: Box::new(SharedRateLimiter::new(rate_limiter.clone())), // Ledger #6
         audit: Box::new(SqlxAuditLog::new(db.clone())),
         clock: Box::new(SystemClock),
@@ -184,7 +186,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         details: Arc::new(details),
         freshness: bikenest_infrastructure::config::freshness_config_from_env(),
         photos: Arc::new(SqlxParkingPhotoReader::new(db.clone())),
-        storage: Arc::new(storage),
+        storage: storage.clone(),
         auth: Arc::new(auth_service),
         contributions: Arc::new(contribution_service),
         photo: Arc::new(photo_service),

@@ -14,6 +14,9 @@ use tokio::sync::OnceCell;
 /// Re-exported so test crates only need `bikenest_test_support` in scope.
 pub use bikenest_test_macros::db_test;
 
+pub mod object_storage;
+pub use object_storage::{MEDIA_BASE_PATH, TestObjectStorage};
+
 // ---------------------------------------------------------------------------
 // Shared runtime + pool
 // ---------------------------------------------------------------------------

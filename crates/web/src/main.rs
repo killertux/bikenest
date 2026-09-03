@@ -43,7 +43,7 @@ async fn main() {
                 eprintln!("migration error: {err}");
                 std::process::exit(1);
             });
-            let storage = bikenest_infrastructure::LocalDiskStorage::from_env();
+            let storage = bikenest_infrastructure::storage_from_env();
             match bikenest_infrastructure::parking::seed_mock(&db, &storage).await {
                 Ok(n) => {
                     println!("seeded {n} mock parking locations + photos (Ledger #1/#7, dev only)");
@@ -82,7 +82,7 @@ async fn main() {
             let media_root = std::env::var("MEDIA_ROOT")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| std::path::PathBuf::from("media"));
-            let storage = bikenest_infrastructure::LocalDiskStorage::from_env();
+            let storage = bikenest_infrastructure::storage_from_env();
             let retention = bikenest_infrastructure::SqlxRetentionRepository::new(
                 db.clone(),
                 config.retention.clone(),

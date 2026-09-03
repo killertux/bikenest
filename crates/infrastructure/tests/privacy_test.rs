@@ -12,10 +12,11 @@ use bikenest_application::{
 };
 use bikenest_domain::{PolicyKind, RetentionPolicy, UserId};
 use bikenest_infrastructure::{
+
     Db, SqlxAnonymizationRepository, SqlxExportRepository, SqlxPolicyReader,
     SqlxRetentionRepository,
 };
-use bikenest_test_support::{ParkingBuilder, UserBuilder, db_test, pool};
+use bikenest_test_support::{ParkingBuilder, TestObjectStorage, UserBuilder, db_test, pool};
 use chrono::{DateTime, Duration, Utc};
 
 async fn db() -> Db {
@@ -299,7 +300,12 @@ async fn retention_purges_only_expired(tx: &mut bikenest_test_support::TestTx) {
     .bind(uid).bind(now + Duration::hours(2)).execute(tx.executor()).await.unwrap();
     tx.commit_fixture().await;
 
-    let repo = SqlxRetentionRepository::new(db().await, RetentionPolicy::default(), Box::new(db_storage()), "media".into());
+    let repo = SqlxRetentionRepository::new(
+        db().await,
+        RetentionPolicy::default(),
+        Box::new(TestObjectStorage::new()),
+        "media".into(),
+    );
     let n = repo.purge_expired_password_reset_tokens(now).await.unwrap();
     assert_eq!(n, 1);
     let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM password_reset_tokens WHERE user_id = $1")
@@ -359,12 +365,4 @@ async fn policy_reader_current_and_history(tx: &mut bikenest_test_support::TestT
         .execute(&pool)
         .await
         .unwrap();
-}
-
-// A local-disk ObjectStorage for the retention repo (best-effort media sweep).
-fn db_storage() -> bikenest_infrastructure::LocalDiskStorage {
-    bikenest_infrastructure::LocalDiskStorage::new(
-        std::env::temp_dir().join("bikenest-privacy-retention-media"),
-        b"test-secret".to_vec(),
-    )
 }

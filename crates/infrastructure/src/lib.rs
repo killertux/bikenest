@@ -37,5 +37,5 @@ pub use privacy::{
     SqlxPrivacyRequestRepository, SqlxRetentionRepository, seed_policy,
 };
 pub use photo::{LocalImageProcessor, SqlxPhotoRepository, SqlxReviewPhotosReader};
-pub use storage::{LocalDiskStorage, MEDIA_BASE_PATH};
+pub use storage::{SharedObjectStorage, S3ObjectStorage, storage_from_env};
 pub use timezone::OfflineTimezoneResolver;
