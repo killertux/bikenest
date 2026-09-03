@@ -1,6 +1,6 @@
 {% extends "layouts/base.html" %}
 {% block content %}
-<div x-data="{ filtersOpen: true, mapOpen: window.innerWidth >= 1024 }">
+<div x-data="searchFilters">
 
 <!-- ======== Search strip (P2 — pre-filled, editable) ======== -->
 <section class="border-b border-border bg-surface">
@@ -36,14 +36,7 @@
           {{ tr.t("home.search.button") }}
         </button>
         <button
-          type="button" x-data="{ locating: false }" @click="
-            if (!navigator.geolocation) { return; }
-            locating = true;
-            navigator.geolocation.getCurrentPosition(
-              (pos) => { window.location = '/search?lat=' + pos.coords.latitude.toFixed(6) + '&lon=' + pos.coords.longitude.toFixed(6); },
-              () => { locating = false; }
-            );
-          "
+          type="button" @click="locate"
           class="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-surface px-4 text-[15px] font-medium text-fg transition-colors hover:border-fg sm:flex-none"
         >
           <svg aria-hidden="true" class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
@@ -63,7 +56,7 @@
         {% if results.error.is_some() %}{% else %}{{ results.total_label }}{% endif %}
       </p>
       <div class="flex items-center gap-2.5">
-        <button @click="mapOpen = !mapOpen" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg lg:hidden">
+        <button @click="toggleMap" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg lg:hidden">
           <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.5 9.9 3.8 4 6v15l5.9-2.2 4.2 1.7 5.9-2.3V3.7Z" /><path d="M9.9 3.8v15" /><path d="M14.1 5.5v15" /></svg>
           <span x-text="mapOpen ? '{{ tr.t("search.map.hide") }}' : '{{ tr.t("search.map.show") }}'">{{ tr.t("search.map.show") }}</span>
         </button>
@@ -79,7 +72,7 @@
           <label class="flex items-center gap-2 text-sm text-muted">
             {{ tr.t("search.sort.label") }}
             <select
-              name="sort" @change="$el.form.requestSubmit()"
+              name="sort" @change="submitSort"
               class="h-9 rounded-lg border border-border bg-surface px-2.5 text-sm font-medium text-fg focus:border-accent focus:outline-none"
             >
               <option value="recommended" {% if sort_is("recommended") || sort_none() %}selected{% endif %}>{{ tr.t("search.sort.recommended") }}</option>
@@ -90,7 +83,7 @@
             </select>
           </label>
         </form>
-        <button @click="filtersOpen = !filtersOpen" :aria-expanded="filtersOpen" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg">
+        <button @click="toggleFilters" :aria-expanded="filtersOpen" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg">
           <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18" /><path d="M7 12h10" /><path d="M10 18h4" /></svg>
           {{ tr.t("search.filters.button") }}
         </button>
@@ -193,7 +186,7 @@
       </div>
 
       <!-- Results list (the accessible non-map alternative, §23) -->
-      <div class="lg:col-span-7" :class="mapOpen ? 'lg:col-span-7' : 'lg:col-span-12'">
+      <div class="lg:col-span-7" :class="resultsClass">
         <div class="relative">
           <!-- HTMX loading overlay -->
           <div class="htmx-indicator absolute inset-0 z-10 items-center justify-center rounded-2xl bg-[oklch(98%_0.004_240_/_0.7)]" aria-hidden="true">

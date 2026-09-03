@@ -41,6 +41,7 @@ use std::sync::Arc;
 
 use crate::auth::{anon_csrf_token, Auth, clear_session_cookie, set_anon_csrf_cookie, set_session_cookie};
 use crate::i18n::{Locale, Translator};
+use crate::security::SecurityHeaders;
 use crate::view::{self, CardVm, ResultsData};
 use crate::{
     AboutPage, AccountDeletePage, AccountEmailPage, AccountExportPage, AccountPage,
@@ -259,7 +260,16 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
             )),
         )
         .fallback(not_found)
+        .layer(middleware::from_fn_with_state(
+            SecurityHeaders::from_env(),
+            crate::security::security_headers,
+        ))
         .layer(middleware::from_fn_with_state(state.clone(), crate::auth::auth_middleware))
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http()
+                .make_span_with(crate::observability::RequestSpan)
+                .on_response(crate::observability::RequestLog),
+        )
         .with_state(state)
 }
 
@@ -918,7 +928,10 @@ async fn report_submit(
         .submit_report(user, &ip, target_type, form.target_id, &form.reason, description)
         .await
     {
-        Ok(_) => report_result(tr, "success", tr.t("report.submitted"), StatusCode::OK),
+        Ok(_) => {
+            tracing::info!("report submitted"); // §86 (no PII)
+            report_result(tr, "success", tr.t("report.submitted"), StatusCode::OK)
+        }
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
             report_result(tr, "error", &message, status)
@@ -1065,7 +1078,10 @@ async fn moderation_report_resolve(
         Err(resp) => return resp,
     };
     match state.moderation.resolve_report(user, id, ReportOutcome::Resolved, &form.note).await {
-        Ok(()) => moderation_result(tr, "success", tr.t("report.resolved_msg"), StatusCode::OK),
+        Ok(()) => {
+            tracing::info!("report resolved"); // §86 (no PII)
+            moderation_result(tr, "success", tr.t("report.resolved_msg"), StatusCode::OK)
+        }
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
             moderation_result(tr, "error", &message, status)
@@ -1766,6 +1782,7 @@ async fn login_post(
         // byte-identical whether or not the account exists — and it still
         // carries a fresh double-submit CSRF token for the next attempt.
         Err(_) => {
+            tracing::warn!("login failed"); // §86: no email/IP/PII in the log field
             let token = anon_csrf_token();
             render_anon(
                 LoginPage {
@@ -2393,7 +2410,10 @@ async fn account_privacy_request_post(
         json!({ "note": form.details.trim() })
     };
     match state.privacy.submit_request(user, kind, details).await {
-        Ok(_) => Redirect::to("/account/privacy?requested=1").into_response(),
+        Ok(_) => {
+            tracing::info!("privacy request submitted"); // §86 (no PII)
+            Redirect::to("/account/privacy?requested=1").into_response()
+        }
         Err(_) => Redirect::to("/account/privacy?request_error=1").into_response(),
     }
 }

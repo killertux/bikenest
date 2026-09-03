@@ -7,9 +7,20 @@ async fn main() {
     // Load .env from the workspace root if present (dev convenience; §10).
     dotenvy::dotenv().ok();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .init();
+    // Logging (§86): JSON structured in production (machine-parseable, forwarded to
+    // a log driver/aggregator), human-readable in dev. `RUST_LOG` overrides the level.
+    let app_env = std::env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    if app_env == "production" {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .json()
+            .with_current_span(true)
+            .with_span_list(true)
+            .init();
+    } else {
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+    }
 
     let config = Config::from_env().unwrap_or_else(|err| {
         eprintln!("configuration error: {err}");

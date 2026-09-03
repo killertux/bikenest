@@ -4,9 +4,10 @@
   "scripts": {
     "build:css": "tailwindcss -i web/static/css/input.css -o web/static/css/app.css --minify",
     "watch:css": "tailwindcss -i web/static/css/input.css -o web/static/css/app.css --watch",
-    "build:assets": "mkdir -p web/static/vendor web/static/js && cp node_modules/htmx.org/dist/htmx.js web/static/vendor/htmx.js && cp node_modules/htmx.org/dist/ext/hx-alpine-compat.js web/static/vendor/hx-alpine-compat.js && cp node_modules/alpinejs/dist/cdn.min.js web/static/vendor/alpine.min.js && cp node_modules/maplibre-gl/dist/maplibre-gl.js web/static/vendor/maplibre-gl.js && cp node_modules/maplibre-gl/dist/maplibre-gl.css web/static/vendor/maplibre-gl.css"
+    "build:assets": "mkdir -p web/static/vendor web/static/js && cp node_modules/htmx.org/dist/htmx.js web/static/vendor/htmx.js && cp node_modules/htmx.org/dist/ext/hx-alpine-compat.js web/static/vendor/hx-alpine-compat.js && cp node_modules/@alpinejs/csp/dist/cdn.min.js web/static/vendor/alpine.min.js && cp node_modules/maplibre-gl/dist/maplibre-gl.js web/static/vendor/maplibre-gl.js && cp node_modules/maplibre-gl/dist/maplibre-gl.css web/static/vendor/maplibre-gl.css"
   },
   "dependencies": {
+    "@alpinejs/csp": "^3.17.1",
     "@tailwindcss/cli": "^4.3.0",
     "alpinejs": "3.17.1",
     "htmx.org": "4.0.0",

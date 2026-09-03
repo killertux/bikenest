@@ -3,6 +3,8 @@
 pub mod auth;
 pub mod http;
 pub mod i18n;
+pub mod observability;
+pub mod security;
 pub mod view;
 
 use askama::Template;

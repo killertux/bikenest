@@ -23,7 +23,7 @@
     </div>
 
     <!-- Search card -->
-    <div class="mt-10 max-w-2xl" x-data="{ locating: false, denied: false }">
+    <div class="mt-10 max-w-2xl" x-data="homeHero">
       <form action="/search" method="get" role="search" class="flex flex-col gap-2 rounded-2xl bg-surface p-2 shadow-pop sm:flex-row sm:items-center">
         <div class="flex flex-1 items-center gap-3 px-3 py-1.5">
           <svg aria-hidden="true" class="h-5 w-5 shrink-0 text-muted" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
@@ -42,14 +42,7 @@
       <div class="mt-3 flex flex-wrap items-center gap-3">
         <button
           type="button"
-          @click="
-            if (!navigator.geolocation) { denied = true; return; }
-            locating = true;
-            navigator.geolocation.getCurrentPosition(
-              (pos) => { window.location = '/search?lat=' + pos.coords.latitude.toFixed(6) + '&lon=' + pos.coords.longitude.toFixed(6); },
-              () => { locating = false; denied = true; }
-            );
-          "
+          @click="locate"
           class="inline-flex items-center gap-2 rounded-full border border-white/30 bg-white/10 px-4 py-2 text-sm font-medium text-white backdrop-blur transition-colors hover:bg-white/20"
         >
           <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>

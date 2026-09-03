@@ -58,11 +58,11 @@
             <option value="unknown" {% if cost_kind == "unknown" %}selected{% endif %}>{{ tr.t("cost.unknown") }}</option>
           </select>
         </div>
-        <div class="sm:col-span-2" x-data="{ cur:'{{ price_currency }}', syms:{BRL:'R$',EUR:'€',USD:'$',GBP:'£',JPY:'¥'}, sym:(syms['{{ price_currency }}'] || '{{ price_currency }}') }">
+        <div class="sm:col-span-2" x-data="parkingForm" data-currency="{{ price_currency }}">
           <div class="grid gap-4 sm:grid-cols-3 items-end">
             <div>
               <label for="price_currency" class="mb-1 block text-sm font-medium">{{ tr.t("new.field.currency") }}</label>
-              <input id="price_currency" name="price_currency" list="currency-suggestions" x-model="cur" @input="sym = syms[cur.toUpperCase()] || cur" value="{{ price_currency }}" maxlength="3" placeholder="BRL" class="w-full rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-accent" />
+              <input id="price_currency" name="price_currency" list="currency-suggestions" x-model="cur" value="{{ price_currency }}" maxlength="3" placeholder="BRL" class="w-full rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-accent" />
               <datalist id="currency-suggestions">
                 <option value="BRL">R$</option>
                 <option value="EUR">€</option>
@@ -113,7 +113,7 @@
 
       <fieldset class="mt-4">
         <legend class="text-sm font-medium">{{ tr.t("new.field.security") }}</legend>
-        <div class="mt-2" x-data="{ picked:'{{ security }}' }" @change="picked = Array.from($el.querySelectorAll('input[type=checkbox]:checked')).map(i => i.value).join(',')">
+        <div class="mt-2" x-data="parkingForm" data-picked="{{ security }}" @change="updatePicked">
           <div class="grid gap-2 sm:grid-cols-2">
             {% for o in security_options %}
               <label class="flex items-center gap-2 text-sm">

@@ -15,6 +15,21 @@ use std::time::Duration;
 /// TTL for presigned photo GET URLs rendered into a page (S3-presign parity).
 pub const PHOTO_URL_TTL: Duration = Duration::from_secs(3600);
 
+/// JSON escaped so it can be embedded verbatim in a `<script type="application/json">`
+/// (or an HTML attribute) without breaking out — the stored-XSS fix, §103.
+///
+/// `serde_json` does not escape `<`, `>`, `&`, U+2028 or U+2029, all of which can
+/// terminate a `<script>` block or an attribute. Escaping them to `\uXXXX` keeps
+/// `JSON.parse` (or the browser's JSON handling) decoding back the original value,
+/// but a literal `</script><img …>` can no longer appear in the output.
+pub fn escape_script_json(s: String) -> String {
+    s.replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+}
+
 /// Resolve a location's stored photo key to a presigned URL, if present.
 pub fn resolve_photo(storage: &dyn ObjectStorage, key: Option<&str>) -> Option<String> {
     key.and_then(|k| storage.presigned_get(k, PHOTO_URL_TTL).ok())
@@ -278,11 +293,13 @@ pub fn build_results(
         })
         .collect();
 
-    let map_json = serde_json::json!({
-        "origin": hit.map(|h| serde_json::json!({"lat": h.point.lat(), "lon": h.point.lon(), "label": h.label})),
-        "items": items,
-    })
-    .to_string();
+    let map_json = escape_script_json(
+        serde_json::json!({
+            "origin": hit.map(|h| serde_json::json!({"lat": h.point.lat(), "lon": h.point.lon(), "label": h.label})),
+            "items": items,
+        })
+        .to_string(),
+    );
 
     let cursor_url = page.next_cursor.as_ref().map(|c| {
         let sep = if query_string.is_empty() { "?" } else { "&" };

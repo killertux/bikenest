@@ -5,7 +5,7 @@
 //! fixture pattern (see crates/infrastructure/tests/parking_test.rs).
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use bikenest_infrastructure::Db;
 use bikenest_test_support::{ParkingBuilder, db_test, pool};
 use bikenest_web::app_router;
@@ -15,6 +15,16 @@ use tower::ServiceExt;
 async fn test_app() -> axum::Router {
     let db = Db::from_pool(pool().await);
     app_router(db, std::time::Duration::from_secs(2))
+}
+
+/// GET and return only the response headers (for security-header asserts).
+async fn get_headers(uri: &str) -> HeaderMap {
+    let app = test_app().await;
+    let res = app
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    res.headers().clone()
 }
 
 async fn get(uri: &str) -> (StatusCode, String) {
@@ -53,6 +63,46 @@ async fn readyz_returns_ready_with_real_database(_tx: &mut TestTx) {
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["status"], "ready");
     assert_eq!(json["database"], "up");
+}
+
+// ---------------------------------------------------------------------------
+// Security headers (§64/§65)
+// ---------------------------------------------------------------------------
+
+#[db_test]
+async fn security_headers_present_on_public_page(_tx: &mut TestTx) {
+    let headers = get_headers("/").await;
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(headers["referrer-policy"], "strict-origin-when-cross-origin");
+    assert_eq!(headers["x-frame-options"], "DENY");
+    assert!(headers.contains_key("content-security-policy"));
+    assert!(headers.contains_key("permissions-policy"));
+}
+
+#[db_test]
+async fn security_headers_present_on_private_page(_tx: &mut TestTx) {
+    // Account page redirects anonymous users, but the header set rides every response.
+    let headers = get_headers("/login").await;
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert!(headers.contains_key("content-security-policy"));
+}
+
+#[db_test]
+async fn csp_is_strict_no_unsafe_eval(_tx: &mut TestTx) {
+    let headers = get_headers("/").await;
+    let csp = headers["content-security-policy"].to_str().unwrap().to_string();
+    assert!(csp.starts_with("default-src 'self'"), "csp: {csp}");
+    assert!(csp.contains("script-src 'self'"), "csp: {csp}");
+    assert!(!csp.contains("unsafe-eval"), "csp must forbid eval: {csp}");
+    assert!(csp.contains("object-src 'none'"), "csp: {csp}");
+    assert!(csp.contains("frame-ancestors 'none'"), "csp: {csp}");
+}
+
+#[db_test]
+async fn hsts_absent_in_dev_without_tls(_tx: &mut TestTx) {
+    // `TLS_ON` is unset in the test environment → no HSTS header.
+    let headers = get_headers("/").await;
+    assert!(!headers.contains_key("strict-transport-security"));
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +210,63 @@ async fn search_renders_committed_fixture_rows_with_filters(tx: &mut TestTx) {
     assert!(body.contains("2 parking spots"));
     assert!(body.contains("HTTP Fixture Free B"));
     assert!(!body.contains("HTTP Fixture Paid"));
+
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+/// Stored-XSS regression (§103): a user-controlled `name`/`address` containing
+/// `</script>` must not break out of the `<script type="application/json"
+/// id="search-data">` embed. The map payload escapes `<`/`>`/`&`/U+2028/U+2029
+/// so `JSON.parse` round-trips the original value but no literal `</script>`
+/// survives.
+#[db_test]
+async fn search_map_payload_is_html_safe_for_ugc_names(tx: &mut TestTx) {
+    const MARK: &str = "fix-http-xss";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let conn = tx.executor();
+    let payload_attack = "</script><img src=x onerror=alert(1)>";
+    ParkingBuilder::new()
+        .with_fixture_tag(MARK)
+        .with_name(payload_attack)
+        .at(-33.910_000, -70.610_000)
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    let (_, body) = get("/search?lat=-33.910000&lon=-70.610000&radius=1000&sort=distance").await;
+
+    // The escaped JSON must be present, so the browser's JSON.parse gets `<` back.
+    assert!(
+        body.contains(r"\u003c/script\u003e"),
+        "map payload must escape the closing script tag"
+    );
+    // The raw contiguous attack sequence must be gone from the whole response.
+    assert!(
+        !body.contains(payload_attack),
+        "raw attack sequence must not appear"
+    );
+    // Grab the search-data block and parse it back — the original value survives.
+    let marker = "<script type=\"application/json\" id=\"search-data\">";
+    let start = body.find(marker).expect("search-data block present");
+    let rest = &body[start + marker.len()..];
+    let end = rest.find("</script>").unwrap_or(rest.len());
+    let json_block = &rest[..end];
+    assert!(json_block.contains(r"\u003cimg src=x onerror=alert(1)\u003e"));
+    let parsed: serde_json::Value = serde_json::from_str(json_block).expect("valid JSON block");
+    let round_trip = serde_json::to_string(&parsed).unwrap();
+    assert!(
+        round_trip.contains(payload_attack),
+        "JSON.parse must round-trip to the original value"
+    );
 
     sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
         .bind(MARK)

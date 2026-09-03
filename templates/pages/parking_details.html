@@ -1,6 +1,6 @@
 {% extends "layouts/base.html" %}
 {% block content %}
-<div class="mx-auto max-w-shell px-4 py-8 lg:px-8">
+<div class="mx-auto max-w-shell px-4 py-8 lg:px-8" x-data="detailsPanel">
 
   <!-- Breadcrumb -->
   <nav class="mb-5 flex items-center gap-1.5 text-sm text-muted" aria-label="Breadcrumb">
@@ -50,7 +50,7 @@
             {{ tr.t("details.navigate.google") }}
           </a>
           {% if is_authenticated %}
-          <button type="button" @click="$dispatch('bikenest:report', { type: 'parking', id: {{ id }} })"
+          <button type="button" @click="report('parking', {{ id }})"
                   class="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-medium text-muted hover:text-fg">
             <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4" /><path d="M12 17h.01" /><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0Z" /></svg>
             {{ tr.t("report.action") }}
@@ -64,7 +64,7 @@
       {% endif %}
 
       <!-- Photo gallery (P3) -->
-      <section class="mt-8" x-data="{ open: false, src: '', alt: '' }">
+      <section class="mt-8">
         {% if gallery.is_empty() %}
           <div class="rounded-2xl border border-dashed border-border bg-surface px-6 py-12 text-center">
             <p class="font-display text-base font-semibold">{{ tr.t("details.gallery.empty") }}</p>
@@ -75,7 +75,7 @@
             {% for photo in gallery %}
               <button
                 type="button"
-                @click="open = true; src = $el.dataset.src; alt = $el.dataset.alt"
+                @click="openLightbox"
                 data-src="{{ photo.url }}"
                 data-alt="{{ photo.alt }}"
                 class="{% if loop.first %}sm:col-span-4 aspect-[16/9]{% else %}aspect-square{% endif %} overflow-hidden rounded-2xl border border-border"
@@ -85,9 +85,9 @@
             {% endfor %}
           </div>
           <!-- Lightbox -->
-          <div x-show="open" x-cloak @keydown.escape.window="open = false" class="fixed inset-0 z-50 flex items-center justify-center bg-[oklch(18%_0.015_240_/_0.85)] p-4" @click="open = false">
-            <img :src="src" :alt="alt" class="max-h-[90vh] max-w-full rounded-xl" @click.stop />
-            <button @click="open = false" aria-label="Close" class="absolute right-5 top-5 grid h-10 w-10 place-items-center rounded-full bg-white/90 text-fg">✕</button>
+          <div x-show="galleryOpen" x-cloak @keydown.escape.window="closeLightbox" class="fixed inset-0 z-50 flex items-center justify-center bg-[oklch(18%_0.015_240_/_0.85)] p-4" @click="closeLightbox">
+            <img :src="gallerySrc" :alt="galleryAlt" class="max-h-[90vh] max-w-full rounded-xl" @click.stop />
+            <button @click="closeLightbox" aria-label="Close" class="absolute right-5 top-5 grid h-10 w-10 place-items-center rounded-full bg-white/90 text-fg">✕</button>
           </div>
         {% endif %}
       </section>
@@ -205,7 +205,7 @@
                   <span class="text-accent">{{ r.stars }}</span>
                   <div class="flex items-center gap-3">
                     {% if is_authenticated %}
-                    <button type="button" @click="$dispatch('bikenest:report', { type: 'review', id: {{ r.id }} })"
+                    <button type="button" @click="report('review', {{ r.id }})"
                             class="text-xs text-muted hover:text-error">{{ tr.t("report.action") }}</button>
                     {% endif %}
                     <span class="text-xs text-muted">{{ r.created_label }}</span>
@@ -338,14 +338,14 @@
 {% if is_authenticated %}
 <!-- Report modal (M5 §43). Any `bikenest:report` event sets the target; the
      modal posts to /reports with the resolved target_type + target_id. -->
-<div x-data="{ open: false, type: 'parking', tid: {{ id }} }"
-     @window:bikenest:report.window="type = $event.detail.type; tid = $event.detail.id; open = true">
+<div x-data="reportModal" data-report-id="{{ id }}"
+     @window:bikenest:report.window="openReport">
   <div x-show="open" x-cloak
        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-       @click.self="open = false">
+       @click.self="close">
     <form action="/reports" method="post" hx-post="/reports" hx-target="#report-feedback" hx-swap="innerHTML"
           class="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-xl"
-          @submit="setTimeout(() => open = false, 600)">
+          @submit="submitClose">
       <input type="hidden" name="csrf" value="{{ layout.csrf }}">
       <input type="hidden" name="target_type" :value="type">
       <input type="hidden" name="target_id" :value="tid">
@@ -360,7 +360,7 @@
                   class="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm"></textarea>
       </label>
       <div class="mt-4 flex justify-end gap-2">
-        <button type="button" @click="open = false"
+        <button type="button" @click="close"
                 class="rounded-lg border border-border px-4 py-2 text-sm text-muted hover:text-fg">{{ tr.t("report.cancel") }}</button>
         <button type="submit" class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white">{{ tr.t("report.submit") }}</button>
       </div>
