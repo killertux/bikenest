@@ -24,7 +24,8 @@
 
     {% if let Some(url) = results.cursor_url %}
       <nav class="mt-7 flex items-center justify-end" aria-label="{{ tr.t("a11y.results_pages") }}">
-        <button
+        <a
+          href="{{ url }}"
           hx-get="{{ url }}"
           hx-target="#results"
           hx-swap="innerHTML"
@@ -33,7 +34,7 @@
         >
           {{ tr.t("search.next") }}
           <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
-        </button>
+        </a>
       </nav>
     {% endif %}
   {% endif %}

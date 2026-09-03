@@ -8,8 +8,8 @@
 //! Everything else in the suite still uses transaction-per-test rollback.
 
 use bikenest_application::{
-    CostFilter, Cursor, ParkingDetailsReader, ParkingSearchReader, ReaderError, SearchPage,
-    SearchRequest, Sort,
+    CostFilter, Cursor, ParkingDetailsReader, ParkingSearchReader, ReaderError, SearchInput,
+    SearchPage, SearchParking, SearchRequest, Sort,
 };
 use bikenest_domain::{Cost, CurrencyCode, Money, ParkingType, PricingUnit};
 use bikenest_test_support::{ParkingBuilder, db_test, pool};
@@ -439,5 +439,268 @@ async fn invalid_type_code_is_reported_not_silently_mapped(tx: &mut TestTx) {
 
     let err = real_details(id.0).await.unwrap_err();
     assert!(matches!(err, ReaderError::Unexpected(msg) if msg.contains("flying_carpet")));
+    cleanup_fixture(MARK).await;
+}
+
+// ---------------------------------------------------------------------------
+// "Open now": the SQL flag must agree with the domain's opening-hours rule
+// ---------------------------------------------------------------------------
+
+/// The search evaluated at a pinned instant, so the SQL wall-clock arithmetic
+/// and `OpeningHours::status_at` can be compared on the same input.
+async fn search_at(
+    request: &SearchRequest,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<SearchPage, ReaderError> {
+    let db = bikenest_infrastructure::Db::from_pool(pool().await);
+    bikenest_infrastructure::SqlxParkingSearchReader::new(db)
+        .search_at(request, 20, false, now)
+        .await
+}
+
+/// `is_open_now` for the single fixture living in test patch `k`.
+async fn sql_open_now(k: f64, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let page = search_at(&request_at(k, Sort::Distance), now)
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1, "patch {k} holds exactly one fixture");
+    page.items[0].is_open_now
+}
+
+fn domain_open_now(
+    location: &bikenest_domain::ParkingLocation,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    location.hours().status_at(now, location.timezone()) == bikenest_domain::OpenStatus::Open
+}
+
+/// A UTC instant from a wall-clock reading in `tz`.
+fn instant_at(tz: &str, y: i32, mo: u32, d: u32, h: u32, mi: u32) -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+    let tz: chrono_tz::Tz = tz.parse().expect("valid timezone");
+    tz.with_ymd_and_hms(y, mo, d, h, mi, 0)
+        .single()
+        .expect("unambiguous local time")
+        .with_timezone(&chrono::Utc)
+}
+
+fn utc_at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+    chrono::Utc
+        .with_ymd_and_hms(y, mo, d, h, mi, 0)
+        .single()
+        .expect("valid instant")
+}
+
+#[db_test]
+async fn open_now_flag_matches_the_domain_on_a_same_day_range(tx: &mut TestTx) {
+    const MARK: &str = "fix-open-same-day";
+    cleanup_fixture(MARK).await;
+    let conn = tx.executor();
+    let spot = at(11.0, 30.0)
+        .with_fixture_tag(MARK)
+        .with_hours(1..=7, (8, 0), (18, 0))
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    // Tue 2026-03-10, São Paulo (UTC-3). Both edges of the range, both sides.
+    for (h, min, expected) in [(7, 59, false), (8, 0, true), (17, 59, true), (18, 0, false)] {
+        let now = instant_at("America/Sao_Paulo", 2026, 3, 10, h, min);
+        assert_eq!(
+            sql_open_now(11.0, now).await,
+            expected,
+            "SQL at {h:02}:{min:02} local"
+        );
+        assert_eq!(
+            domain_open_now(&spot, now),
+            expected,
+            "domain at {h:02}:{min:02} local"
+        );
+    }
+    cleanup_fixture(MARK).await;
+}
+
+#[db_test]
+async fn open_now_flag_matches_the_domain_across_an_overnight_range(tx: &mut TestTx) {
+    const MARK: &str = "fix-open-overnight";
+    cleanup_fixture(MARK).await;
+    let conn = tx.executor();
+    // 22:00 → 02:00: the row belongs to one day but runs into the next.
+    let spot = at(12.0, 30.0)
+        .with_fixture_tag(MARK)
+        .with_hours(1..=7, (22, 0), (2, 0))
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    for (h, expected) in [(21, false), (23, true), (1, true), (3, false)] {
+        let now = instant_at("America/Sao_Paulo", 2026, 3, 10, h, 0);
+        assert_eq!(sql_open_now(12.0, now).await, expected, "SQL at {h:02}:00");
+        assert_eq!(domain_open_now(&spot, now), expected, "domain at {h:02}:00");
+    }
+    cleanup_fixture(MARK).await;
+}
+
+#[db_test]
+async fn open_now_flag_matches_the_domain_across_a_dst_transition(tx: &mut TestTx) {
+    const MARK: &str = "fix-open-dst";
+    cleanup_fixture(MARK).await;
+    let conn = tx.executor();
+    // New York springs forward 2026-03-08 at 02:00 local (07:00 UTC).
+    let spot = at(13.0, 30.0)
+        .with_fixture_tag(MARK)
+        .with_timezone("America/New_York")
+        .with_hours(1..=7, (3, 0), (6, 0))
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    // 06:30 UTC is still EST → 01:30 local, before opening.
+    let before = utc_at(2026, 3, 8, 6, 30);
+    assert!(
+        !sql_open_now(13.0, before).await,
+        "SQL before the transition"
+    );
+    assert!(
+        !domain_open_now(&spot, before),
+        "domain before the transition"
+    );
+
+    // 07:30 UTC is EDT → 03:30 local, inside the range.
+    let after = utc_at(2026, 3, 8, 7, 30);
+    assert!(sql_open_now(13.0, after).await, "SQL after the transition");
+    assert!(domain_open_now(&spot, after), "domain after the transition");
+    cleanup_fixture(MARK).await;
+}
+
+#[db_test]
+async fn open_now_filter_uses_the_same_rule_as_the_flag(tx: &mut TestTx) {
+    const MARK: &str = "fix-open-filter";
+    cleanup_fixture(MARK).await;
+    let conn = tx.executor();
+    at(14.0, 30.0)
+        .with_fixture_tag(MARK)
+        .with_name("Overnight")
+        .with_hours(1..=7, (22, 0), (2, 0))
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    at(14.0, 60.0)
+        .with_fixture_tag(MARK)
+        .with_name("Daytime")
+        .with_hours(1..=7, (8, 0), (18, 0))
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    let mut req = request_at(14.0, Sort::Distance);
+    req.filters.open_now = true;
+    // 23:00 in São Paulo: only the overnight location is open.
+    let now = instant_at("America/Sao_Paulo", 2026, 3, 10, 23, 0);
+    let page = search_at(&req, now).await.unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].name, "Overnight");
+    assert!(page.items[0].is_open_now);
+    cleanup_fixture(MARK).await;
+}
+
+// ---------------------------------------------------------------------------
+// Keyset pagination through the use case (cursor built from the SQL sort key)
+// ---------------------------------------------------------------------------
+
+/// The real use case over the real reader: it is the use case that turns a
+/// row's sort key into the next cursor, so the round trip is what matters.
+async fn search_use_case() -> SearchParking {
+    let db = bikenest_infrastructure::Db::from_pool(pool().await);
+    SearchParking::new(
+        Box::new(bikenest_infrastructure::FakeGeocoder),
+        Box::new(bikenest_infrastructure::SqlxParkingSearchReader::new(db)),
+        bikenest_application::DEFAULT_RECOMMENDATION_CONFIG,
+        Default::default(),
+    )
+}
+
+async fn page_of(k: f64, sort: &str, cursor: Option<String>) -> SearchPage {
+    let origin = test_origin(k);
+    let (page, _) = search_use_case()
+        .await
+        .execute(SearchInput {
+            lat: Some(origin.lat()),
+            lon: Some(origin.lon()),
+            radius_m: Some(1000),
+            sort: Some(sort.to_string()),
+            page_size: Some(20),
+            cursor,
+            ..Default::default()
+        })
+        .await
+        .expect("search succeeds");
+    page
+}
+
+/// Walks both pages of a 25-row patch and returns the rows in page order,
+/// asserting the page shapes and that the two pages are disjoint.
+async fn both_pages(k: f64, sort: &str) -> Vec<bikenest_application::ParkingSummary> {
+    let mut first = page_of(k, sort, None).await;
+    assert_eq!(first.items.len(), 20, "{sort}: full first page");
+    assert_eq!(first.total, 25, "{sort}: total counts every match");
+    let cursor = first
+        .next_cursor
+        .unwrap_or_else(|| panic!("{sort}: a second page exists"));
+
+    let second = page_of(k, sort, Some(cursor.encode())).await;
+    assert_eq!(
+        second.items.len(),
+        5,
+        "{sort}: remainder on the second page"
+    );
+    assert!(
+        second.next_cursor.is_none(),
+        "{sort}: nothing left after the second page"
+    );
+
+    first.items.extend(second.items);
+    let mut unique: Vec<i64> = first.items.iter().map(|i| i.id).collect();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), 25, "{sort}: no row appears on both pages");
+    first.items
+}
+
+#[db_test]
+async fn recently_verified_pages_advance_instead_of_repeating(tx: &mut TestTx) {
+    const MARK: &str = "fix-verified-paging";
+    cleanup_fixture(MARK).await;
+    let conn = tx.executor();
+    for m in 1..=25 {
+        at(15.0, f64::from(m) * 10.0)
+            .with_fixture_tag(MARK)
+            .verified_days_ago(i64::from(m))
+            .create(&mut *conn)
+            .await
+            .unwrap();
+    }
+    tx.commit_fixture().await;
+
+    let by_verification = both_pages(15.0, "recently_verified").await;
+    let verified: Vec<_> = by_verification.iter().map(|i| i.last_verified_at).collect();
+    assert!(
+        verified.windows(2).all(|w| w[0] >= w[1]),
+        "verification timestamps descend across the page boundary"
+    );
+
+    // The distance sort paginates over the same fixture.
+    let by_distance = both_pages(15.0, "distance").await;
+    assert!(
+        by_distance
+            .windows(2)
+            .all(|w| w[0].distance_m <= w[1].distance_m),
+        "distances ascend across the page boundary"
+    );
     cleanup_fixture(MARK).await;
 }

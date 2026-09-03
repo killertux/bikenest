@@ -308,9 +308,15 @@ pub async fn build_results(
         .to_string(),
     );
 
+    // `query_string` carries no leading "?" — it is the joined parameters, so
+    // the cursor is appended to a query string this function opens itself.
     let cursor_url = page.next_cursor.as_ref().map(|c| {
-        let sep = if query_string.is_empty() { "?" } else { "&" };
-        format!("/search{query_string}{sep}cursor={}", c.encode())
+        let cursor = c.encode();
+        if query_string.is_empty() {
+            format!("/search?cursor={cursor}")
+        } else {
+            format!("/search?{query_string}&cursor={cursor}")
+        }
     });
 
     ResultsData {
@@ -1035,5 +1041,84 @@ pub fn contribution_vm(
         target: i.target.clone(),
         state_label: state,
         at_label: time_ago_label(t, i.at),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n::Locale;
+    use bikenest_application::{Cursor, SearchPage, Sort};
+    use bikenest_test_support::TestObjectStorage;
+
+    fn page_with_next() -> SearchPage {
+        SearchPage {
+            items: Vec::new(),
+            total: 42,
+            next_cursor: Some(Cursor {
+                sort: Sort::Distance,
+                v: 250.0,
+                id: 7,
+            }),
+        }
+    }
+
+    async fn cursor_url_for(query_string: &str) -> Option<String> {
+        let storage = TestObjectStorage::new();
+        build_results(
+            Translator::new(Locale::En),
+            &page_with_next(),
+            None,
+            None,
+            query_string.to_string(),
+            chrono::Utc::now(),
+            &bikenest_domain::DEFAULT_THRESHOLDS,
+            &storage,
+        )
+        .await
+        .cursor_url
+    }
+
+    /// The query string arrives without a leading "?" — the next-page link has
+    /// to open the query itself, or the first parameter fuses onto the path.
+    #[tokio::test]
+    async fn next_page_url_keeps_the_current_query() {
+        let url = cursor_url_for("q=rua&radius=1000")
+            .await
+            .expect("a next page exists");
+        assert!(
+            url.starts_with("/search?q=rua"),
+            "query must open with '?': {url}"
+        );
+        assert!(url.contains("&radius=1000"), "filters are kept: {url}");
+        assert!(url.contains("&cursor="), "cursor is appended: {url}");
+    }
+
+    #[tokio::test]
+    async fn next_page_url_without_a_query_still_opens_the_query_string() {
+        let url = cursor_url_for("").await.expect("a next page exists");
+        assert!(url.starts_with("/search?cursor="), "{url}");
+    }
+
+    #[tokio::test]
+    async fn no_next_cursor_means_no_next_page_link() {
+        let storage = TestObjectStorage::new();
+        let page = SearchPage {
+            items: Vec::new(),
+            total: 3,
+            next_cursor: None,
+        };
+        let results = build_results(
+            Translator::new(Locale::En),
+            &page,
+            None,
+            None,
+            "q=rua".to_string(),
+            chrono::Utc::now(),
+            &bikenest_domain::DEFAULT_THRESHOLDS,
+            &storage,
+        )
+        .await;
+        assert!(results.cursor_url.is_none());
     }
 }

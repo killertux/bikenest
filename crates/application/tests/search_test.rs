@@ -40,6 +40,9 @@ fn summary(
         timezone: sp_tz(),
         is_open_now: true,
         photo_key: None,
+        // Stands in for the reader's key: these fakes are read with the
+        // distance sort, whose key is the distance itself.
+        sort_key: Some(distance_m),
     }
 }
 

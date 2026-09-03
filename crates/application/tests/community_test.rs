@@ -566,6 +566,7 @@ async fn recommendation_reasons_only_surface_positive_factors() {
         timezone: tz(),
         is_open_now: false,
         photo_key: None,
+        sort_key: None,
     };
     let reasons = recommendation_reasons(
         &summary,

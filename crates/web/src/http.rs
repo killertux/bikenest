@@ -4149,6 +4149,8 @@ async fn account_favorites(State(state): State<AppState>, locale: Locale, auth: 
                 is_open_now: loc.hours().status_at(now, loc.timezone())
                     == bikenest_domain::OpenStatus::Open,
                 photo_key: None,
+                // Favorites are listed whole, not paginated by keyset.
+                sort_key: None,
             };
             let freshness = bikenest_domain::categorize(
                 loc.last_verified_at(),

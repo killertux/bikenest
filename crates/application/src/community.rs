@@ -902,5 +902,7 @@ fn summary_of(location: &ParkingLocation, reviews: &[Review]) -> crate::ports::P
         timezone: location.timezone(),
         is_open_now: false,
         photo_key: None,
+        // Not a search result: nothing paginates over this summary.
+        sort_key: None,
     }
 }

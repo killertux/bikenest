@@ -274,27 +274,14 @@ pub struct ParkingSummary {
     /// The web layer resolves this to a presigned URL for the card; `None`
     /// falls back to a positional illustrative image.
     pub photo_key: Option<String>,
-}
-
-impl ParkingSummary {
-    /// Normalized ascending sort key for SQL keyset pagination (§32).
-    /// distance → itself; the other sorts negate so ascending works for all.
-    /// The `Recommended` sort paginates on its own score, computed by the
-    /// application layer, so it has no SQL-side key.
-    pub fn sort_key(&self, sort: Sort) -> Option<f64> {
-        match sort {
-            Sort::Recommended => None,
-            Sort::Distance => Some(self.distance_m),
-            Sort::Security => Some(-(self.security_yes.len() as f64)),
-            Sort::Rating => Some(-self.rating.avg().unwrap_or(2.5)),
-            Sort::RecentlyVerified => Some(
-                -self
-                    .last_verified_at
-                    .map(|t| t.timestamp_millis() as f64)
-                    .unwrap_or(0.0),
-            ),
-        }
-    }
+    /// Normalized ascending keyset sort key, exactly as the search reader
+    /// computed it for this request's sort — distance keeps its value, the
+    /// other sorts negate. The next-page cursor is built from this value,
+    /// so it must never be recomputed in Rust: any rounding or unit mismatch
+    /// with the SQL expression would make the keyset predicate skip or repeat
+    /// rows. `None` for summaries not produced by the search reader (the
+    /// `Recommended` sort paginates on its in-memory score instead).
+    pub sort_key: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

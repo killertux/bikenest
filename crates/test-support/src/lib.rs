@@ -253,6 +253,8 @@ pub struct ParkingBuilder {
     lon: f64,
     hours_rows: Vec<(u8, chrono::NaiveTime, chrono::NaiveTime, bool)>,
     hours_unknown: bool,
+    /// IANA identifier the wall-clock hours are read in.
+    timezone: &'static str,
     /// (feature_code, state 0/1/2)
     security: Vec<(String, i16)>,
     rating_avg: Option<f64>,
@@ -279,6 +281,7 @@ impl Default for ParkingBuilder {
             lon: -46.655_881,
             hours_rows: Vec::new(),
             hours_unknown: false,
+            timezone: "America/Sao_Paulo",
             security: Vec::new(),
             rating_avg: None,
             rating_count: 0,
@@ -359,6 +362,14 @@ impl ParkingBuilder {
         self
     }
 
+    /// IANA timezone the hours are read in (default `America/Sao_Paulo`).
+    /// Coordinates are independent of it, so a fixture can sit in a test patch
+    /// and still keep a DST-observing clock.
+    pub fn with_timezone(mut self, tz: &'static str) -> Self {
+        self.timezone = tz;
+        self
+    }
+
     pub fn with_unknown_hours(mut self) -> Self {
         self.hours_unknown = true;
         self.hours_rows.clear();
@@ -427,7 +438,7 @@ impl ParkingBuilder {
                  created_at, updated_at, last_verified_at, moderation_state, seed_key, version)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                     ST_SetSRID(ST_MakePoint($10, $9), 4326)::geography,
-                    'America/Sao_Paulo', $11, $12, $13,
+                    $18, $11, $12, $13,
                     now(), now(), $14, $15, $16, $17)
             RETURNING id
             "#,
@@ -449,6 +460,7 @@ impl ParkingBuilder {
         .bind(self.moderation_state)
         .bind(self.fixture_tag.as_deref())
         .bind(self.version)
+        .bind(self.timezone)
         .fetch_one(&mut *conn)
         .await?;
         let id = row.0;
@@ -503,7 +515,7 @@ impl ParkingBuilder {
             self.parking_type,
             self.cost.clone(),
             bikenest_domain::GeoPoint::new(self.lat, self.lon).expect("builder coords"),
-            "America/Sao_Paulo".parse().expect("fixed tz"),
+            self.timezone.parse().expect("builder timezone"),
             if self.hours_unknown {
                 bikenest_domain::OpeningHours::Unknown
             } else {

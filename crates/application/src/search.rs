@@ -181,11 +181,12 @@ impl SearchParking {
         let next_cursor = if page.items.len() > request.page_size {
             page.items.truncate(request.page_size);
             let last = page.items.last().expect("non-empty");
+            // The anchor is the key the reader itself computed for this row;
+            // recomputing it here would risk disagreeing with the SQL keyset
+            // predicate and paginating in circles.
             Some(crate::ports::Cursor {
                 sort: request.sort,
-                v: last
-                    .sort_key(request.sort)
-                    .expect("SQL sorts always have a key"),
+                v: last.sort_key.expect("SQL sorts always carry a key"),
                 id: last.id,
             })
         } else {
