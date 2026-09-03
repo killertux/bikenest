@@ -1,6 +1,6 @@
 /* P2: map rendering + card↔marker sync (plain JS over the server-rendered
  * results). The server stays the source of truth: results arrive as HTML; this
- * file only mirrors them into markers (UI_DESIGN P2, §14, §23).
+ * file only mirrors them into markers (P2).
  *
  * Written to be idempotent so it is safe under hx-boost (whole-body swaps) and
  * HTMX result-fragment swaps: the map is created once and reused; markers are

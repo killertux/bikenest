@@ -446,7 +446,7 @@ async fn sitemap_xml(State(state): State<AppState>) -> Response {
 async fn home(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
     let tr = Translator::new(locale);
     // A few example locations near the featured landmark, when data exists
-    // (UI_DESIGN P1: optional section). Failure → render without them.
+    // (P1: optional section). Failure → render without them.
     let mut featured = Vec::new();
     if let Ok((page, _)) = state
         .search

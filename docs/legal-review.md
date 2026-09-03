@@ -73,6 +73,6 @@
 - Accept DPAs + record regions per `docs/provider-transfer-inventory.md`.
 - Proxy access-log retention = 6 months; diagnostic logs ≈ 30 days.
 - `DELETED_ACCOUNT_PURGE_AFTER_DAYS=30`; keep `INACTIVE_ACCOUNT_ANONYMIZE_AFTER_DAYS=0`.
-- Hide/disable the fake Google login in production (see `PENDING_FOR_PRODUCTION.md` A-3).
+- Hide/disable the fake Google login in production.
 - When policy text changes: bump `POLICY_VERSION`, reseed, and notify users
   before `POLICY_EFFECTIVE_AT` (the policies promise it).

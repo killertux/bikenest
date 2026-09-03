@@ -1,0 +1,143 @@
+/* ============================================================
+   BikeNest — colors_and_type.css
+   Extracted verbatim from the source prototype token block
+   (direction: human-approachable). Paste into the first
+   <style> of any new screen, or load it before Tailwind.
+   ============================================================ */
+
+:root {
+  /* Color — all OKLch, hue 240 cool-neutral base, hue 170 accent.
+     Hex fallbacks in comments are sRGB equivalents for reference only;
+     the OKLch value is canonical. */
+  --bg:            oklch(98% 0.004 240);   /* #f6f9fb — page background */
+  --surface:       oklch(100% 0 0);        /* #ffffff — cards, panels */
+  --fg:            oklch(20% 0.02 240);    /* #0e171e — primary text */
+  --muted:         oklch(50% 0.018 240);   /* #5a656d — secondary text */
+  --border:        oklch(90% 0.006 240);   /* #dbdfe2 — hairline borders (source token: line) */
+  --accent:        oklch(56% 0.12 170);    /* #008a6a — brand green-teal */
+  --accent-strong: oklch(45% 0.11 170);    /* #00684c — accent text on tints */
+  --accent-dark:   oklch(40% 0.10 170);    /* #00583f — primary button hover */
+  --accent-soft:   oklch(56% 0.12 170 / 0.12);
+  --scrim:         oklch(18% 0.015 240);   /* #0c1318 — overlays, photo badges */
+  --fresh:         oklch(58% 0.13 155);    /* #249057 — data healthy / approved */
+  --aging:         oklch(68% 0.12 75);     /* #c38c37 — open / needs re-check */
+  --stale:         oklch(55% 0.16 35);     /* #bc4527 — unverified / stale data */
+  --danger:        oklch(47% 0.17 30);     /* #a52014 — destructive, rejected */
+  --danger-soft:   oklch(47% 0.17 30 / 0.08);
+
+  /* Hover washes (neutral, on --bg or --surface) */
+  --hover-wash:        oklch(20% 0.02 240 / 0.04);
+  --hover-wash-strong: oklch(20% 0.02 240 / 0.06);
+  --danger-hover:      oklch(40% 0.15 30);
+
+  /* Typography */
+  --font-display: "Avenir Next", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-body:    -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-mono:    ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Elevation */
+  --shadow-card: 0 1px 2px oklch(20% 0.02 240 / 0.06), 0 8px 24px oklch(20% 0.02 240 / 0.08);
+  --shadow-pop:  0 2px 6px oklch(20% 0.02 240 / 0.10), 0 16px 40px oklch(20% 0.02 240 / 0.16);
+
+  /* Layout */
+  --shell-max: 72rem;      /* 1152px content shell */
+  --radius-sm: 6px;        /* inputs */
+  --radius-md: 8px;        /* buttons, nav items */
+  --radius-lg: 12px;       /* cards, tiles */
+  --radius-xl: 16px;       /* modals, hero panels */
+}
+
+/* ------------------------------------------------------------
+   Base
+   ------------------------------------------------------------ */
+html { -webkit-text-size-adjust: 100%; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+p  { text-wrap: pretty; }
+h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing: -0.01em; text-wrap: balance; }
+h1 { font-size: 36px; line-height: 1.1; }
+h2 { font-size: 24px; line-height: 1.2; }
+h3 { font-size: 18px; line-height: 1.3; }
+code, kbd, .mono { font-family: var(--font-mono); }
+
+/* Focus — never remove, never dim */
+:focus-visible {
+  outline: 2px solid oklch(45% 0.11 170);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ------------------------------------------------------------
+   Type scale helpers (match source screen usage)
+   ------------------------------------------------------------ */
+.type-hero    { font-family: var(--font-display); font-size: 48px; line-height: 1.08; font-weight: 700; letter-spacing: -0.02em; }
+.type-title   { font-family: var(--font-display); font-size: 30px; line-height: 1.15; font-weight: 700; }
+.type-section { font-family: var(--font-display); font-size: 20px; line-height: 1.25; font-weight: 700; }
+.type-card    { font-family: var(--font-display); font-size: 18px; line-height: 1.3; font-weight: 700; }
+.type-body    { font-size: 15px; line-height: 1.6; }
+.type-meta    { font-size: 13px; line-height: 1.5; color: var(--muted); }
+.type-badge   { font-size: 11px; font-weight: 600; letter-spacing: 0.01em; }
+.type-mono    { font-family: var(--font-mono); font-size: 12px; font-weight: 500; }
+
+/* ------------------------------------------------------------
+   Core component recipes
+   ------------------------------------------------------------ */
+.btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 40px; padding: 0 16px; border-radius: 8px;
+  background: var(--accent); color: #fff;
+  font-size: 14px; font-weight: 600; border: none; cursor: pointer;
+  transition: background 150ms;
+}
+.btn-primary:hover  { background: var(--accent-dark); }
+.btn-secondary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 40px; padding: 0 16px; border-radius: 8px;
+  background: var(--surface); color: var(--fg);
+  border: 1px solid var(--border); font-size: 14px; font-weight: 500; cursor: pointer;
+  transition: background 150ms;
+}
+.btn-secondary:hover { background: var(--hover-wash-strong); }
+.btn-danger {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 40px; padding: 0 16px; border-radius: 8px;
+  background: var(--danger); color: #fff;
+  font-size: 14px; font-weight: 600; border: none; cursor: pointer;
+  transition: background 150ms;
+}
+.btn-danger:hover { background: var(--danger-hover); }
+
+.field {
+  height: 42px; width: 100%; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--fg); font-size: 15px; font-family: var(--font-body);
+}
+.field:focus { outline: 2px solid var(--accent-strong); outline-offset: 0; border-color: var(--accent-strong); }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 10px; border-radius: 9999px;
+  font-size: 11px; font-weight: 600;
+}
+.badge-accent { background: var(--accent-soft); color: var(--accent-strong); }
+.badge-fresh  { background: oklch(58% 0.13 155 / 0.12); color: var(--fresh); }
+.badge-aging  { background: oklch(68% 0.12 75 / 0.12);  color: var(--aging); }
+.badge-danger { background: var(--danger-soft);         color: var(--danger); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}

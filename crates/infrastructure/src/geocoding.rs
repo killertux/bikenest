@@ -10,7 +10,7 @@
 //! **§83 — what is documented:** Mapbox Geocoding API (`mapbox.places` forward).
 //! Usage is rate/billing-limited by the Mapbox account (`MAPBOX_ACCESS_TOKEN`;
 //! the free tier is ~100k requests/month). Terms of service + attribution apply
-//! (see docs/provider-transfer-inventory.md and PENDING_FOR_PRODUCTION.md §C —
+//! (see docs/provider-transfer-inventory.md —
 //! provider contract / DPA / international-transfer review).
 //!
 //! **Failure mode:** a geocoder error is surfaced to the web layer, which

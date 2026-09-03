@@ -1,4 +1,4 @@
-# Provider & international-transfer inventory (§76/§77)
+# Provider & international-transfer inventory
 
 > **Decision 2026-09-03:** production hosting and **every** processor sit
 > **outside Brazil** (EU and/or US). Every row is therefore an international

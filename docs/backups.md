@@ -1,4 +1,4 @@
-# Backups & disaster recovery (§58–§61, §98)
+# Backups & disaster recovery
 
 > **Goal:** survive a database/media failure or a bad deployment, and restore
 > without resurrecting data the user legally asked to delete (§98).

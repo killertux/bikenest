@@ -174,7 +174,7 @@ pub fn open_label(t: Translator, s: OpenStatus) -> &'static str {
     }
 }
 
-/// One parking card in the results list (UI_DESIGN P2) and the map JSON.
+/// One parking card in the results list (P2 search results) and the map JSON.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CardVm {
     pub id: i64,

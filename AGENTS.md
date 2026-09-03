@@ -1,0 +1,103 @@
+# AGENTS.md
+
+Orientation for AI coding agents (and anyone new to the codebase). Read
+[`ARCHITECTURE.md`](ARCHITECTURE.md) before structural changes and
+[`TESTING.md`](TESTING.md) before writing tests.
+
+## What this is
+
+**BikeNest** is a community-maintained bicycle parking finder. A Rust web app
+(axum + Askama server-rendered templates + htmx/Alpine) backed by
+PostgreSQL/PostGIS. Users search a destination, browse parking spots on a map,
+and the community adds, edits, reviews, verifies, photographs and moderates
+that data. Bilingual (en + pt-BR). Works on mobile and desktop browsers.
+
+## Golden rules
+
+- **Dependencies point inward:** `domain ← application ← {infrastructure, web}`.
+  `domain` must not import axum/sqlx/askama; `application` must not import web
+  or infrastructure. Enforce this on every change.
+- **SQL is runtime-checked** (`sqlx::query`/`query_as` with `bind`). There are
+  **no** compile-time `sqlx::query!` macros — `cargo build` needs no database.
+- **Migrations are forward-only** and applied automatically on startup
+  (`serve`). Add a new `migrations/NNNN_*.sql` file; never edit an applied one.
+- **Every external dependency is behind a port** (a `trait` in
+  `crates/application`). Replacing a provider = new impl + wiring change, never
+  a domain change.
+- **User-facing strings** live only in `crates/web/src/i18n.rs` (en + pt-BR
+  catalogs), never hard-coded in domain/application/web logic.
+
+## Index — where to find things
+
+| What | Where |
+|---|---|
+| Cargo workspace definition | `Cargo.toml` (workspace members + shared deps + lints) |
+| Pure domain rules & value objects | `crates/domain/src/` (`parking.rs`, `community.rs`, `auth.rs`, `moderation.rs`, `photo.rs`, `privacy.rs`, `hours.rs`, `freshness.rs`, `lib.rs`) |
+| Use cases + ports (traits) | `crates/application/src/` (`search.rs`, `community.rs`, `auth.rs`, `moderation.rs`, `photo.rs`, `privacy.rs`, `jobs.rs`, `ports.rs`, …) |
+| SQLx persistence & providers | `crates/infrastructure/src/` (`db.rs`, `config.rs`, `storage.rs`, `geocoding.rs`, `devdata.rs`, `probe.rs`, plus `auth/`, `community/`, `email/`, `job/`, `moderation/`, `parking/`, `photo/`, `privacy/`, `timezone/`) |
+| HTTP server, routes, handlers, view models | `crates/web/src/` (`main.rs` entry point, `http.rs` router, `lib.rs` templates/view models, `i18n.rs`, `auth.rs`, `security.rs`, `observability.rs`, `markdown.rs`, `view.rs`) |
+| Database schema | `migrations/` (numbered `NNNN_*.sql`, forward-only) |
+| Templates | `templates/` (`layouts/`, `pages/`, `components/`, `partials/`) |
+| Frontend assets | `web/static/` (`css/`, `js/`, `vendor/`, `img/`) |
+| Tailwind entry / build | `web/static/css/input.css`, `package.json` scripts (`build:css`, `watch:css`, `build:assets`) |
+| Legal page text | `policies/{privacy,terms,cookies}.{pt-BR,en}.md` |
+| Test harness & builders | `crates/test-support/src/`, `crates/test-macros/src/` |
+| Integration/HTTP tests | `crates/*/tests/` (e.g. `infrastructure/tests/parking_test.rs`, `web/tests/http_test.rs`) |
+| Domain unit tests | inline `#[cfg(test)] mod tests` in `crates/domain/src/*.rs` |
+| Environment config | `.env.example` (single source of truth), parsed in `crates/infrastructure/src/config.rs` |
+| Operations docs | `docs/` (`deployment.md`, `backups.md`, `incident-response.md`, `retention-policy.md`) |
+| Legal/privacy docs | `docs/` (`legal-review.md`, `data-processing-inventory.md`, `provider-transfer-inventory.md`) |
+| Visual design | `design-system/` (tokens, kit, imagery) |
+
+## Commands
+
+```bash
+cargo build                              # self-contained; no DB needed
+cargo run                                # serve (default subcommand), BIND_ADDR (:8080)
+cargo run -p bikenest-web -- seed-mock   # dev: 24 sample Curitiba locations + photos
+cargo run -p bikenest-web -- seed-admin  # create admin (ADMIN_EMAIL/ADMIN_PASSWORD)
+cargo run -p bikenest-web -- seed-policies  # version legal pages (POLICY_* env)
+cargo run -p bikenest-web -- retention   # run the retention purge job
+
+cargo test                               # domain + application (no DB)
+docker compose up -d db                  # needed before DB-backed tests
+cargo test --workspace                   # everything incl. #[db_test]
+
+npm run build:assets                     # vendor htmx/alpine/maplibre into web/static/vendor
+npm run build:css                        # Tailwind → web/static/css/app.css
+```
+
+## Conventions & gotchas
+
+- **Lint:** `unsafe_code = "forbid"` (workspace lint). Keep it clean.
+- **`#[db_test]`** runs against real Postgres; requires `docker compose up -d db`.
+  Transaction-per-test with automatic rollback. See `TESTING.md`.
+- **Read-model tests** whose queries run on *other* pool connections use the
+  committed-fixture pattern (`with_fixture_tag` + `tx.commit_fixture()` + tag
+  cleanup) — see `crates/infrastructure/tests/parking_test.rs`.
+- **Subcommands** dispatch in `crates/web/src/main.rs`; default is `serve`.
+  Add a new `Some("…")` arm there for a new CLI command.
+- **Providers are wired in one place:** `crates/web/src/http.rs`
+  (`app_router` / `app_router_with`). New ports get wired there, selected from
+  env (see `crates/infrastructure/src/config.rs` + `.env.example`).
+- **Background jobs** (M9) are a Postgres-backed queue (`background_job` table)
+  with an in-process worker; handlers live in `crates/infrastructure/src/job/`
+  and implement `bikenest_application::JobHandler`. Set `JOBS_ENABLED=false` for
+  web-only instances.
+- **Legacy references (`§N` / `Ledger #N`):** some `docs/`, `.env.example`,
+  code comments and templates still carry `§N` (section numbers from the
+  now-removed spec) and `Ledger #N` (the old milestone plan's bookkeeping) as
+  historical annotations. There is no such document anymore. **Whenever you edit
+  a file that contains one of these, delete it** (rephrase the surrounding text
+  if needed so it still reads naturally). This is a slow, file-by-file cleanup —
+  do not do a bulk sweep, just clean whatever you happen to touch.
+
+## If you're asked to change behavior
+
+1. Find the relevant use case in `crates/application`.
+2. Check the port it uses; implement any new persistence/provider in
+   `crates/infrastructure`, wire it in `crates/web/src/http.rs`.
+3. Add a migration if the schema changes.
+4. Add/extend tests per `TESTING.md`.
+5. Update `ARCHITECTURE.md`/`AGENTS.md` if you add a module or concept, and
+   `.env.example` if you add a config knob.

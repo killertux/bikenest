@@ -1,4 +1,4 @@
-# Data-processing inventory (§67/§68) + legal basis (§69)
+# Data-processing inventory + legal basis
 
 > **Living document.** Legal bases below were **decided by product on 2026-09-03**
 > (see `docs/legal-review.md` for the decision record and what still needs

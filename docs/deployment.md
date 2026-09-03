@@ -1,4 +1,4 @@
-# Deployment (§58–§63, §116.1)
+# Deployment
 
 > **What this covers:** getting the `bikenest-web` server into production. The
 > runtime queries are **not** compile-time checked (M8), so the Docker image
@@ -92,7 +92,8 @@ Migrations are **forward-only** (`sqlx` records applied versions). This means:
 ## 5. Providers
 
 The map/tile, geocoder, email, OAuth and object-storage integrations
-(Ledger #2/#3/#4/#5/#7) are replaced via `PENDING_FOR_PRODUCTION.md` §A–§B.
+are selected at wiring time from environment variables; the dev fakes that
+remain (Google OAuth) are documented below and must be replaced before launch.
 
 **Geocoder (Ledger #2).** Selectable at wiring time with `GEOCODER`
 (`mapbox` | `fake`, default `fake`):
@@ -107,7 +108,7 @@ The map/tile, geocoder, email, OAuth and object-storage integrations
   (see `docs/provider-transfer-inventory.md`). A Mapbox error is **graceful**: the
   search page shows a "location service unavailable" message rather than a 500.
   Terms of service, attribution, rate limits and the **provider contract / DPA /
-  international-transfer review** (§C of `PENDING_FOR_PRODUCTION.md`) apply —
+  international-transfer review** apply —
   Mapbox is a paid hosted SaaS (free tier ≈100k geocode/mo); self-hosted Photon
   (OSM) is the no-cost, no-external-transfer alternative if preferred.
 
@@ -135,7 +136,7 @@ production set `EMAIL_PROVIDER=resend` + `RESEND_API_KEY`/`RESEND_FROM`, or
   attribution / usage limits + DPA (§C) still apply.
 
 
-## 5b. Rate limiter (ValKey, Ledger #6)
+## 5b. Rate limiter (ValKey)
 
 The rate limiter is a sliding-window counter shared by auth, photo, contribution
 and moderation. Dev uses an in-memory limiter; production should run ValKey
@@ -167,7 +168,7 @@ all slots — portable on Docker Desktop for Mac; see the file header for a
 multi-node variant).
 
 
-## 5c. Background jobs (M9, plans/m9-background-jobs.md)
+## 5c. Background jobs (M9)
 
 The app ships a **pure-PostgreSQL job queue** — no broker. A `background_job`
 table stores durable one-shot + recurring work; an **in-process worker task**

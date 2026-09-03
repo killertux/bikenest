@@ -1,0 +1,244 @@
+# Architecture
+
+How BikeNest is put together. Written for both humans and coding agents — the
+"why" is here; the "where" index is in [`AGENTS.md`](AGENTS.md).
+
+## Overview
+
+BikeNest is a server-rendered Rust web application: axum serves HTML rendered
+from Askama templates, with htmx swapping fragments and Alpine/MapLibre
+handling client-side behavior. All business logic lives in a framework-free
+core (`domain` + `application`); PostgreSQL/PostGIS is the source of truth.
+Everything external (geocoding, email, object storage, OAuth, rate limiting) is
+hidden behind a port so it can be replaced by a different implementation
+without touching the domain.
+
+```
+browser ──> reverse proxy / TLS ──> axum (web) ──> application services ──> ports
+                                          │                                  │
+                                          v                                  v
+                                    Askama templates                infrastructure impls
+                                                                   (sqlx, S3, SMTP, ValKey,
+                                                                    Mapbox, image processor)
+                                                                             │
+                                                                             v
+                                                                  PostgreSQL/PostGIS + object storage
+```
+
+## Principles
+
+1. **Clean architecture.** Dependencies point inward, toward the core:
+   `domain ← application ← {infrastructure, web}`.
+2. **Framework-free core.** `domain` has no axum/sqlx/askama imports; business
+   rules are pure and unit-testable.
+3. **Ports & adapters.** The application layer defines `trait`s ("ports") for
+   everything it needs from the outside world; `infrastructure` implements
+   them. Replacing a provider is a wiring change, not a domain change.
+4. **Runtime-checked SQL.** SQL is written with `sqlx::query`/`query_as` + `bind`
+   (no compile-time macros), so the workspace builds with no database and no
+   offline cache.
+5. **Vertical slices.** The code is organized by feature (search, community,
+   moderation, photos, privacy) across layers, not by a single horizontal
+   "repository" or "model" module.
+
+## The crates
+
+| Crate | Responsibility | May depend on |
+|---|---|---|
+| `bikenest-domain` (`crates/domain`) | pure business concepts: value objects, enums, rules (hours, freshness, confidence, cost, security) | nothing (chrono/thiserror only) |
+| `bikenest-application` (`crates/application`) | use cases (services) + ports (`trait`s). Orchestrates domain objects; no I/O of its own | `domain` |
+| `bikenest-infrastructure` (`crates/infrastructure`) | SQLx repositories, config loading, providers (S3, SMTP, Mapbox, ValKey, image, timezone), seeders, job worker | `domain`, `application` |
+| `bikenest-web` (`crates/web`) | axum router, handlers, middleware, view models, i18n catalog, Askama templates. **The binary** (`bikenest-web`) | `domain`, `application`, `infrastructure` |
+| `bikenest-test-support` (`crates/test-support`) | shared `#[db_test]` harness, pool fixture, domain-rich builders, fast test doubles | `domain`, `application`, `infrastructure`, `test-macros` |
+| `bikenest-test-macros` (`crates/test-macros`) | the `#[db_test]` proc macro | (proc-macro deps) |
+
+Crate boundaries are enforced by what each crate is allowed to import; there is
+no build-time cycle (Cargo would reject it anyway). `application` never
+references `infrastructure` or `web` types — it only knows the `trait`s it
+declares.
+
+## The layers
+
+### Domain (`crates/domain`)
+
+Value objects and rules, no I/O. Notable concepts:
+
+- **`ParkingLocation`** — the aggregate: name, address, description,
+  `ParkingType`, `Cost`, `GeoPoint` (lat/lon), IANA timezone, `OpeningHours`,
+  security features, `ModerationState`, `Rating`, last-verified timestamp, and
+  an optimistic-concurrency `version`.
+- **`Cost`** — `Free` | `Paid { price: Option<Money> }` | `Unknown`. `Money` =
+  cents + `CurrencyCode` + `PricingUnit`.
+- **`ParkingType`** — `Rack | ParkingFacility | Indoor | Secured | Locker | Other`.
+- **`SecurityState`** — `Yes | No | Unknown` (unknown is explicitly *not* "no").
+  Each location carries a set of security *features* (locking point, indoor,
+  CCTV, staffed, guard, controlled access, lighting, restricted access), each
+  with one tri-state value.
+- **`OpeningHours`** — wall-clock ranges per day-of-week stored in the
+  location's IANA timezone (never converted to UTC), with an "open now" check
+  that is DST-correct.
+- **`ModerationState`** (parking) — `Active | PendingReview | Flagged | Invalid | Removed`.
+- **`FreshnessCategory`** — `Never | Fresh | RecentlyVerified | Aging | Stale | VeryStale`,
+  derived from the last-verified timestamp against configurable thresholds.
+- **`Confidence`** — `Reported | Verified | RecentlyVerified | Stale | Conflicting`;
+  a pure resolution rule combining existence/attribute verification and review
+  agreement (a conflict is never silently averaged).
+- **`VerificationKind`** — `Existence | Attribute | ParkedHere` (parked-here is
+  a private, short-lived usage signal).
+- **`Proposal`** — `ProposalKind` (`MoveLocation | ChangeExistence`) +
+  `ProposalStatus` (`Pending | Approved | Rejected | Superseded`); sensitive
+  changes require a proposal rather than a direct edit.
+- **`StarRating`** (1–5) and **`ReviewBody`** for reviews.
+- **Accounts/auth** — `AccountState` (`PendingEmailVerification | Active |
+  Suspended | Deleted`), `Role` (`User | Moderator | Admin`), `Password` (with
+  policy).
+- **`PhotoModerationState`** — `PendingReview | Approved | Rejected | Hidden`;
+  upload constants (10 MiB, 20 MP, JPEG q85, 400 px thumbnail, jpeg/png/webp).
+- **`ReportState`** — `Open | UnderReview | Resolved | Dismissed`, plus the
+  report-reason code list and per-target validity.
+
+### Application (`crates/application`)
+
+Use cases + ports. Each feature is a service that receives its dependencies as
+ports and returns domain results; it never touches HTTP, SQL, or filesystem
+directly. Examples: `SearchParking`, `ContributionService`, `AuthService`,
+`ModerationService`, `PhotoService`, `RetentionJob`, the job `Worker`.
+
+**Ports** (the full list of `trait`s the application declares):
+
+| Port | Purpose |
+|---|---|
+| `Geocoder` | address/place → coordinates |
+| `ParkingSearchReader` / `ParkingDetailsReader` | proximity search + detail reads |
+| `ParkingPhotoReader` / `ReviewPhotosReader` | photo gallery reads |
+| `ParkingContributionRepository` | add/edit/propose, optimistic apply, revisions |
+| `ReviewRepository` | reviews + aggregate recompute |
+| `VerificationRepository` | existence/attribute/parked-here signals |
+| `FavoriteRepository` | favorites |
+| `ContributionHistoryReader` | per-user contribution history |
+| `AccountRepository` / `SessionStore` / `TokenStore` | accounts, sessions, tokens |
+| `PasswordHasher` / `TokenGenerator` / `Clock` | crypto + time seams |
+| `OAuthProvider` | federated login (Google; currently a fake) |
+| `EmailProvider` | send verification/reset mail (`fake`/`smtp`/`resend`) |
+| `RateLimiter` | sliding-window abuse limits |
+| `AuditLog` / `AuditLogReader` | write/read the audit trail |
+| `ObjectStorage` | put/get + presigned media URLs |
+| `ImageProcessor` | decode → EXIF-strip → re-encode → thumbnail |
+| `PhotoRepository` | photo lifecycle + moderation queue |
+| `ReportRepository` / `ModerationRepository` | reports + moderation actions |
+| `ExportRepository` / `PrivacyRequestRepository` / `AnonymizationRepository` / `RetentionRepository` / `PolicyReader` | privacy & retention |
+| `TimezoneResolver` | coordinate → IANA timezone |
+| `DatabaseProbe` | readiness DB check |
+| `JobHandler` | background job execution |
+
+### Infrastructure (`crates/infrastructure`)
+
+The adapters: `Sqlx*` repositories for every persistence port, `Config::from_env`
+(reads `.env`), `MapboxGeocoder`/`FakeGeocoder`, `S3ObjectStorage`,
+`LocalImageProcessor`, `FakeOAuthProvider`, email impls
+(`fake`/`smtp`/`resend`), `ValKeyRateLimiter`/`InMemoryRateLimiter`,
+`OfflineTimezoneResolver`, `SystemClock`, `OsRngTokenGenerator`,
+`Argon2PasswordHasher`, `SqlxJobRepository` + `Worker`, the `devdata`/seeders
+(`seed-mock`, `seed-admin`, `seed-policies`), and `Db`/`probe`.
+
+Providers are selected from environment variables in `config.rs` and wired into
+the router in `crates/web/src/http.rs`.
+
+### Web (`crates/web`)
+
+`main.rs` loads env, connects the DB, runs migrations, optionally starts the
+job worker, then serves the router. Subcommands dispatch before `serve`:
+`seed-mock`, `seed-admin`, `seed-policies`, `retention`.
+
+`http.rs` builds the axum router: middleware (request tracing, security
+headers + strict nonce-free CSP, session/CSRF, auth extraction), public pages
+(P1 home, P2 search, P3 details, P7 about, legal pages), authenticated pages
+(account, contributions, favorites, add/edit/review/verify), moderation and
+admin pages, and htmx fragment endpoints. `lib.rs` holds the Askama view-model
+structs; `i18n.rs` holds the en + pt-BR catalogs; `security.rs` the headers/CSP;
+`observability.rs` the JSON structured logging; `markdown.rs` the sanitizing
+renderer for the legal pages.
+
+## Tech stack
+
+- **Language:** Rust (edition 2024), Cargo workspace, toolchain pinned via
+  `rust:1.95` in Docker.
+- **HTTP:** axum 0.8 + tower/tower-http.
+- **Templates:** Askama 0.14 (compiled at build time, embedded in the binary).
+- **Frontend:** htmx 4 (`hx-boost` + `hx-alpine-compat`), Alpine.js **CSP build**
+  (no inline `x-data`, no `unsafe-eval`), MapLibre GL JS — all vendored locally,
+  no CDN.
+- **CSS:** Tailwind CSS 4.3, design tokens from `design-system/colors_and_type.css`.
+- **Data:** PostgreSQL 17 + PostGIS, SQLx 0.8 (runtime-checked queries,
+  forward-only migrations applied on startup).
+- **Caching/limits:** ValKey (Redis-compatible) for the shared rate limiter.
+- **Media:** S3-compatible object storage (aws-sdk-s3) with presigned GET URLs.
+- **Crypto:** argon2id (passwords), HMAC signing, SHA-256-hashed sessions at rest.
+- **Email:** lettre (SMTP) or the Resend API.
+- **Maps/geocoding:** Mapbox Geocoding API (or a deterministic fake), MapLibre
+  for the browser map.
+
+## Data model
+
+Versioned, forward-only migrations in `migrations/`:
+
+| Migration | Covers |
+|---|---|
+| `0001_init.sql` | base `users`, schema |
+| `0002_parking.sql` | `parking_location` + PostGIS geography, `opening_hours`, `parking_security` |
+| `0003_photos.sql` | initial photo storage |
+| `0004_security_codes.sql` | security-attribute code list |
+| `0005_accounts.sql` | `authentication_identities`, `sessions`, tokens, `user_roles`, account lifecycle |
+| `0006_audit_events.sql` | the audit trail |
+| `0007_contributions.sql` | `parking_revision`, `parking_proposal`, optimistic `version` |
+| `0008_community.sql` | `review`, `review_revision`, `verification`, `favorite` |
+| `0009_photos.sql` | photo moderation pipeline (`parking_photo` moderation fields) |
+| `0010_moderation.sql` | `report` (polymorphic target), moderation CHECK widening |
+| `0011_review_photos.sql` | `review_photo` (D3 review photo attach) |
+| `0012_privacy.sql` | privacy requests, exports, anonymization |
+| `0013_policies.sql` + `0014_policy_locale.sql` | versioned legal pages |
+| `0015_background_jobs.sql` | `background_job` queue |
+
+Key modeling notes:
+
+- **Timestamps are UTC**; opening hours are wall-clock ranges in the location's
+  timezone; "open now" is computed in that timezone.
+- **`parking_revision`** is an immutable field-level history (JSONB after-state
+  snapshots); **`parking_proposal`** holds sensitive changes pending moderation.
+- **Optimistic concurrency** via `version` on `parking_location`; conflicting
+  edits are rejected and the client re-fetches.
+- **`review`** is one-per-user-per-location with an aggregate rating recomputed
+  in-transaction; `review_revision` preserves history.
+- **Photos** are held `PENDING_REVIEW` until a moderator approves; only the
+  processed derivatives are stored (the original is discarded); EXIF is
+  stripped at processing time.
+- **`background_job`** stores durable one-shot + recurring jobs; an in-process
+  worker claims with `FOR UPDATE SKIP LOCKED`, retries with exponential
+  backoff, and dead-letters after `JOBS_MAX_ATTEMPTS`.
+
+## Request lifecycle (happy path)
+
+1. TLS terminates at a reverse proxy; the proxy forwards to `BIND_ADDR`.
+2. axum middleware runs: request tracing (method/path/status/latency — headers
+   never logged), security headers + CSP, session/cookie + CSRF check, locale
+   resolution (`Accept-Language`, fallback pt-BR, `lang` cookie override).
+3. The handler extracts inputs, calls an application service (e.g. `SearchParking`).
+4. The service applies domain rules and calls its ports; infrastructure impls
+   run the SQL (e.g. `ST_DWithin` proximity) or call providers.
+5. The handler builds a view model and renders an Askama template (full page)
+   or an htmx fragment; media URLs are presigned by `ObjectStorage`.
+
+## Cross-cutting concerns
+
+- **Security:** strict CSP (nonce-free, Alpine CSP build), security headers,
+  CSRF synchronizer token, HttpOnly/Secure/SameSite=Lax sessions hashed at
+  rest, argon2id passwords, deny-by-default authorization, server-side
+  self-resolve guard on reports. See `crates/web/src/security.rs`.
+- **Observability:** `APP_ENV=production` → JSON structured logs; PII-free.
+- **Rate limiting:** sliding-window via ValKey (Lua atomic, fail-open by
+  default), shared across auth/photo/contribution/moderation.
+- **i18n:** all user-facing strings in the catalog; the domain exposes codes
+  (e.g. security feature codes), the web layer maps them to localized labels.
+- **Background jobs:** Postgres queue + in-process worker (`JOBS_ENABLED`).
+- **SEO:** `robots.txt`, `sitemap.xml`, canonical/meta/OG, `hreflang`,
+  `noindex` support.

@@ -1,4 +1,4 @@
-/* P3: single-location map (UI_DESIGN P3). */
+/* P3: single-location map. */
 (function () {
   "use strict";
   /* Ledger #3: style URL + (Mapbox) access token from <body data-*>; default demo tiles. */

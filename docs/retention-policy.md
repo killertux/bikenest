@@ -1,4 +1,4 @@
-# Retention policy (§75)
+# Retention policy
 
 > Periods marked **decided 2026-09-03** were set by product (see
 > `docs/legal-review.md`); the technical defaults are encoded in

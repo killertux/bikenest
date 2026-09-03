@@ -1,6 +1,6 @@
 /* BikeNest — Tailwind CSS 4.3 entry.
-   Design tokens ported from design-project/colors_and_type.css (canonical
-   OKLch values, see design-project/DESIGN.md). Load via @theme so utilities
+   Design tokens ported from design-system/colors_and_type.css (canonical
+   OKLch values, see design-system/DESIGN.md). Load via @theme so utilities
    like bg-bg, text-fg, border-border, bg-accent, rounded-lg, shadow-card,
    max-w-shell are generated. */
 @import "tailwindcss";

@@ -1,4 +1,4 @@
-# Incident response (§81)
+# Incident response
 
 > **What this covers:** how to investigate and react to a **security incident
 > involving personal data**. The flow is §81's nine steps. Alongside the audit

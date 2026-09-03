@@ -66,7 +66,7 @@ impl ReportOutcome {
 // Report target type (§43)
 // ---------------------------------------------------------------------------
 
-/// The four UI_DESIGN "target content" kinds a report may address. A single
+/// The four "target content" kinds a report may address. A single
 /// `photo` type would collide across `parking_photo`/`review_photo`, so the
 /// four-way type keeps resolution unambiguous.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

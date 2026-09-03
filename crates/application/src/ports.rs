@@ -252,7 +252,7 @@ impl SearchRequest {
     }
 }
 
-/// One row of search results — everything a P2 card needs (UI_DESIGN P2).
+/// One row of search results — everything a P2 card needs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParkingSummary {
     pub id: i64,
