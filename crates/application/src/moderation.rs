@@ -81,10 +81,11 @@ pub struct NewReport {
 }
 
 /// A report as read from the store (for the queue + detail + resolution).
+/// `reporter_id` is `None` once the reporter's account is anonymized (M6).
 #[derive(Debug, Clone)]
 pub struct Report {
     pub id: i64,
-    pub reporter_id: UserId,
+    pub reporter_id: Option<UserId>,
     pub target_type: ReportTargetType,
     pub target_id: i64,
     pub reason: String,
@@ -104,7 +105,8 @@ pub struct Proposal {
     pub id: i64,
     pub location_id: i64,
     pub location_name: String,
-    pub proposer_id: UserId,
+    /// `None` once the proposer's account is anonymized (M6).
+    pub proposer_id: Option<UserId>,
     pub base_version: i64,
     pub kind: ProposalKind,
     pub proposed: serde_json::Value,
@@ -413,7 +415,7 @@ impl ModerationService {
             .get(id)
             .await?
             .ok_or(ModerationError::NotFound)?;
-        if report.reporter_id == moderator.id {
+        if report.reporter_id == Some(moderator.id) {
             return Err(ModerationError::SelfResolve);
         }
         self.deps

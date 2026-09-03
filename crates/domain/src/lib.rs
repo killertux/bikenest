@@ -12,6 +12,7 @@ pub mod hours;
 pub mod moderation;
 pub mod parking;
 pub mod photo;
+pub mod privacy;
 
 pub use auth::{
     AccountState, AuthenticationProvider, CsrfToken, Password, PasswordPolicy, ProviderIdentity,
@@ -35,6 +36,10 @@ pub use parking::{
 pub use photo::{
     ALLOWED_INPUT_FORMATS, DERIVATIVE_QUALITY, MAX_PHOTO_BYTES, MAX_PHOTO_MEGAPIXELS,
     PhotoDimensions, PhotoModerationState, THUMBNAIL_MAX_SIDE, bytes_within_limit, format_allowed,
+};
+pub use privacy::{
+    ExportState, PolicyKind, PrivacyRequestKind, PrivacyRequestState, RetentionPolicy,
+    anonymized_email,
 };
 
 /// Database identifier of a user.

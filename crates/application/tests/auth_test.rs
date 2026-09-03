@@ -227,6 +227,15 @@ impl SessionStore for FakeRepo {
         }
         Ok(())
     }
+    async fn revoke_all_for_user(&self, user_id: UserId) -> Result<(), AuthError> {
+        let mut db = self.db.lock().unwrap();
+        for (_, s) in db.sessions.iter_mut() {
+            if s.user_id == user_id {
+                s.revoked_at = Some(Utc::now());
+            }
+        }
+        Ok(())
+    }
 }
 
 // --- TokenStore ---

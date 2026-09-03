@@ -10,6 +10,7 @@ pub mod geocoding;
 pub mod moderation;
 pub mod parking;
 pub mod photo;
+pub mod privacy;
 pub mod probe;
 pub mod storage;
 pub mod timezone;
@@ -30,6 +31,10 @@ pub use db::Db;
 pub use geocoding::FakeGeocoder;
 pub use moderation::{SqlxAuditLogReader, SqlxModerationRepository, SqlxReportRepository};
 pub use parking::{SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader};
+pub use privacy::{
+    SqlxAnonymizationRepository, SqlxExportRepository, SqlxPolicyReader,
+    SqlxPrivacyRequestRepository, SqlxRetentionRepository, seed_policy,
+};
 pub use photo::{LocalImageProcessor, SqlxPhotoRepository, SqlxReviewPhotosReader};
 pub use storage::{LocalDiskStorage, MEDIA_BASE_PATH};
 pub use timezone::OfflineTimezoneResolver;

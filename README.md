@@ -148,6 +148,15 @@ cargo run -- seed-mock         # mock data (dev only)
 # Seed an admin user (Ledger #10): set ADMIN_EMAIL/ADMIN_PASSWORD in .env first.
 cargo run -- seed-admin
 
+# Versioned legal pages (Ledger #21): upsert the current policies/*.md as new
+# policy_version rows (placeholder legal text — requires review, §71).
+cargo run -- seed-policies
+
+# Retention job (§75): purge expired sessions/tokens/parked-here/exports +
+# orphan media sweep. The two config-gated steps (inactive-anonymize,
+# deleted-shell-purge) default off (0) until approved.
+cargo run -- retention
+
 cargo run                      # default command; serves on BIND_ADDR (:8080)
 
 curl localhost:8080/healthz    # → 200 ok

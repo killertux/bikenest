@@ -3,7 +3,7 @@
 use askama::Template;
 use axum::extract::{Form, Multipart};
 use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Json, Response};
+use axum::response::{Html, IntoResponse, Json, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{
     Router,
@@ -15,23 +15,26 @@ use bikenest_application::{
     ContributionService, EmailProvider, GetParkingDetails, ModerationDeps, ModerationError,
     ModerationService, NewParkingLocation, NewVerification, ObjectStorage, ParkingEdit,
     ParkingPhotoReader, PasswordHasher, PhotoDeps, PhotoError, PhotoKind, PhotoService,
-    PhotoTarget, ProposalApplication, Readiness, SearchInput, SearchParking, TokenGenerator,
+    PhotoTarget, PrivacyDeps, PrivacyError, PrivacyService, ProposalApplication, Readiness,
+    SearchInput, SearchParking, TokenGenerator,
 };
 use bikenest_domain::{
     Cost, CurrencyCode, GeoPoint, Money, ModerationState, OpeningHours, ParkingLocation, ParkingType,
-    PricingUnit, ReportOutcome, ReportState, ReportTargetType, ReviewBody, SecurityFeature,
-    SecurityState, StarRating, TimeRange, is_known_attribute_code, is_known_security_code,
+    PolicyKind, PricingUnit, PrivacyRequestKind, ReportOutcome, ReportState, ReportTargetType,
+    ReviewBody, SecurityFeature, SecurityState, StarRating, TimeRange, is_known_attribute_code,
+    is_known_security_code,
 };
 use bikenest_domain::{ExistenceResult, ProposalKind, Role, UserEmail, UserId};
 use bikenest_infrastructure::probe::SqlxDatabaseProbe;
 use bikenest_infrastructure::{
     Argon2PasswordHasher, Db, FakeGeocoder, FakeOAuthProvider, InMemoryRateLimiter,
     LocalDiskStorage, LocalImageProcessor, OfflineTimezoneResolver, RealTokenGenerator,
-    SqlxAccountRepository, SqlxAuditLog, SqlxAuditLogReader, SqlxContributionHistoryReader,
-    SqlxFavoriteRepository, SqlxModerationRepository, SqlxParkingContributionRepository,
-    SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader, SqlxPhotoRepository,
-    SqlxReportRepository, SqlxReviewPhotosReader, SqlxReviewRepository, SqlxSessionStore,
-    SqlxTokenStore, SqlxVerificationRepository, SystemClock,
+    SqlxAccountRepository, SqlxAnonymizationRepository, SqlxAuditLog, SqlxAuditLogReader,
+    SqlxContributionHistoryReader, SqlxExportRepository, SqlxFavoriteRepository,
+    SqlxModerationRepository, SqlxParkingContributionRepository, SqlxParkingDetailsReader,
+    SqlxParkingPhotoReader, SqlxParkingSearchReader, SqlxPhotoRepository, SqlxPolicyReader,
+    SqlxPrivacyRequestRepository, SqlxReportRepository, SqlxReviewPhotosReader,
+    SqlxReviewRepository, SqlxSessionStore, SqlxTokenStore, SqlxVerificationRepository, SystemClock,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -40,12 +43,14 @@ use crate::auth::{anon_csrf_token, Auth, clear_session_cookie, set_anon_csrf_coo
 use crate::i18n::{Locale, Translator};
 use crate::view::{self, CardVm, ResultsData};
 use crate::{
-    AboutPage, AccountEmailPage, AccountPage, AccountPasswordPage, AdminAuditPage,
+    AboutPage, AccountDeletePage, AccountEmailPage, AccountExportPage, AccountPage,
+    AccountPasswordPage, AccountPrivacyPage, AdminAuditPage, AdminPrivacyRequestsPage,
     AdminUserContributionsPage, AdminUsersPage, ContributionsPage, DetailsPage, ErrorPage,
     FavoritesPage, HomePage, LoginPage, ModerationActionResultVm, ModerationDashboardPage,
     ModerationPhotosPage, ModerationProposalsPage, ModerationReportsPage, PageLayout,
     ParkingEditPage, ParkingNewPage, PasswordResetNewPage, PasswordResetPage, PhotoVm,
-    RegisterPage, ReportResultVm, ReviewFormPage, SearchPageVm, SearchResultsVm, VerifyEmailPage,
+    PolicyPage, PolicyVersionsPage, RegisterPage, ReportResultVm, ReviewFormPage,
+    SearchPageVm, SearchResultsVm, VerifyEmailPage,
 };
 
 /// Shared application state wired at startup.
@@ -60,6 +65,8 @@ pub struct AppState {
     pub contributions: Arc<ContributionService>,
     pub photo: Arc<PhotoService>,
     pub moderation: Arc<ModerationService>,
+    pub privacy: Arc<PrivacyService>,
+    pub policy: Arc<dyn bikenest_application::PolicyReader>,
 }
 
 /// Builds the full application router with a real database handle and the
@@ -70,19 +77,19 @@ pub fn app_router(db: Db, probe_timeout: std::time::Duration) -> Router {
         probe_timeout,
         bikenest_infrastructure::email_from_env(),
         FakeOAuthProvider::from_env(),
-        Box::new(Argon2PasswordHasher),
+        Argon2PasswordHasher,
     )
 }
 
 /// Builds the router with injectable email/OAuth/password providers (tests pass
 /// fakes — e.g. a fast [`TestPasswordHasher`] — to keep the suite fast). See
 /// plans/m2-accounts-auth.md §7 for the wiring.
-pub fn app_router_with(
+pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
     db: Db,
     probe_timeout: std::time::Duration,
     email: Box<dyn EmailProvider>,
     oauth: FakeOAuthProvider,
-    hasher: Box<dyn PasswordHasher>,
+    hasher: H,
 ) -> Router {
     let probe = SqlxDatabaseProbe::new(db.clone(), probe_timeout);
     let search_uc = SearchParking::new(
@@ -99,7 +106,7 @@ pub fn app_router_with(
         Box::new(SqlxAccountRepository::new(db.clone())),
         Box::new(SqlxSessionStore::new(db.clone())),
         Box::new(SqlxTokenStore::new(db.clone())),
-        hasher,                                     // password hasher (Argon2 in prod, fast fake in tests)
+        Box::new(hasher.clone()),                    // password hasher (Argon2 in prod, fast fake in tests)
         Box::new(RealTokenGenerator),
         Box::new(SystemClock),
         email,                                       // EmailProvider (Ledger #4)
@@ -139,6 +146,19 @@ pub fn app_router_with(
         history: Box::new(SqlxContributionHistoryReader::new(db.clone())),
         rate_limiter: Box::new(InMemoryRateLimiter::new()), // Ledger #6
     });
+    let privacy_service = PrivacyService::new(PrivacyDeps {
+        exports: Box::new(SqlxExportRepository::new(db.clone())),
+        requests: Box::new(SqlxPrivacyRequestRepository::new(db.clone())),
+        anonymization: Box::new(SqlxAnonymizationRepository::new(db.clone())),
+        accounts: Box::new(SqlxAccountRepository::new(db.clone())),
+        sessions: Box::new(SqlxSessionStore::new(db.clone())),
+        audit: Box::new(SqlxAuditLog::new(db.clone())),
+        hasher: Box::new(hasher),
+        tokens_gen: Box::new(RealTokenGenerator),
+        clock: Box::new(SystemClock),
+    });
+    let policy_reader: Arc<dyn bikenest_application::PolicyReader> =
+        Arc::new(SqlxPolicyReader::new(db.clone()));
     let state = AppState {
         readiness: Arc::new(CheckReadiness::new(probe)),
         search: Arc::new(search_uc),
@@ -149,6 +169,8 @@ pub fn app_router_with(
         contributions: Arc::new(contribution_service),
         photo: Arc::new(photo_service),
         moderation: Arc::new(moderation_service),
+        privacy: Arc::new(privacy_service),
+        policy: policy_reader,
     };
     Router::new()
         .route("/", get(home))
@@ -173,6 +195,21 @@ pub fn app_router_with(
         .route("/account", get(account))
         .route("/account/password", get(account_password).post(account_password_post))
         .route("/account/email", get(account_email).post(account_email_post))
+        // --- M6 privacy & account lifecycle ---
+        .route("/privacy", get(privacy_page))
+        .route("/terms", get(terms_page))
+        .route("/cookies", get(cookies_page))
+        .route("/privacy/versions", get(privacy_versions))
+        .route("/terms/versions", get(terms_versions))
+        .route("/cookies/versions", get(cookies_versions))
+        .route("/account/privacy", get(account_privacy))
+        .route("/account/privacy/export", post(account_export_post))
+        .route("/account/privacy/request", post(account_privacy_request_post))
+        .route("/account/export/{id}", get(account_export))
+        .route("/account/export/{id}/download", get(account_export_download))
+        .route("/account/delete", get(account_delete).post(account_delete_post))
+        .route("/admin/privacy-requests", get(admin_privacy_requests))
+        .route("/admin/privacy-requests/{id}/fulfill", post(admin_privacy_request_fulfill))
         // --- M3 community contributions ---
         .route("/parking/new", get(parking_new_page).post(parking_new_post))
         .route("/parking/{id}/edit", get(parking_edit_page).post(parking_edit_post))
@@ -2211,6 +2248,348 @@ async fn admin_role_post(
             axum::response::Redirect::to(path).into_response()
         }
         Err(_) => axum::response::Redirect::to("/admin/users?error=1").into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M6 — Privacy & account lifecycle
+// ---------------------------------------------------------------------------
+
+/// Shared builder for a public versioned legal page (P4/P5/P6).
+async fn policy_page_impl(state: &AppState, tr: Translator, kind: PolicyKind) -> Response {
+    let (kind_code, kind_label) = match kind {
+        PolicyKind::Privacy => ("privacy", tr.t("nav.privacy")),
+        PolicyKind::Terms => ("terms", tr.t("nav.terms")),
+        PolicyKind::Cookies => ("cookies", tr.t("nav.cookies")),
+    };
+    let layout = PageLayout::new(format!("{kind_label} — BikeNest"), kind_code);
+    match state.policy.current(kind).await {
+        Ok(Some(doc)) => render(
+            PolicyPage {
+                layout,
+                tr,
+                kind_code,
+                kind_label,
+                version: doc.version.clone(),
+                effective_label: view::iso_datetime_label(doc.effective_at),
+                content: doc.content.clone(),
+            },
+            StatusCode::OK,
+        ),
+        _ => render(
+            PolicyPage {
+                layout,
+                tr,
+                kind_code,
+                kind_label,
+                version: "—".to_string(),
+                effective_label: String::new(),
+                content: tr.t("policy.missing").to_string(),
+            },
+            StatusCode::OK,
+        ),
+    }
+}
+
+async fn privacy_page(locale: Locale, State(state): State<AppState>) -> Response {
+    policy_page_impl(&state, Translator::new(locale), PolicyKind::Privacy).await
+}
+async fn terms_page(locale: Locale, State(state): State<AppState>) -> Response {
+    policy_page_impl(&state, Translator::new(locale), PolicyKind::Terms).await
+}
+async fn cookies_page(locale: Locale, State(state): State<AppState>) -> Response {
+    policy_page_impl(&state, Translator::new(locale), PolicyKind::Cookies).await
+}
+
+/// Shared builder for a policy version-history page (§70).
+async fn policy_versions_impl(state: &AppState, tr: Translator, kind: PolicyKind) -> Response {
+    let (kind_code, kind_label) = match kind {
+        PolicyKind::Privacy => ("privacy", tr.t("nav.privacy")),
+        PolicyKind::Terms => ("terms", tr.t("nav.terms")),
+        PolicyKind::Cookies => ("cookies", tr.t("nav.cookies")),
+    };
+    let docs = state.policy.history(kind).await.unwrap_or_default();
+    let items: Vec<view::PolicyVersionVm> = docs.iter().map(|d| view::policy_version_vm(tr, d)).collect();
+    render(
+        PolicyVersionsPage {
+            layout: PageLayout::new(format!("{} — BikeNest", tr.t("policy.versions_title")), kind_code),
+            tr,
+            kind_code,
+            kind_label,
+            items,
+        },
+        StatusCode::OK,
+    )
+}
+
+async fn privacy_versions(locale: Locale, State(state): State<AppState>) -> Response {
+    policy_versions_impl(&state, Translator::new(locale), PolicyKind::Privacy).await
+}
+async fn terms_versions(locale: Locale, State(state): State<AppState>) -> Response {
+    policy_versions_impl(&state, Translator::new(locale), PolicyKind::Terms).await
+}
+async fn cookies_versions(locale: Locale, State(state): State<AppState>) -> Response {
+    policy_versions_impl(&state, Translator::new(locale), PolicyKind::Cookies).await
+}
+
+/// C6 — privacy & data hub.
+async fn account_privacy(locale: Locale, auth: Auth) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let _ = user;
+    let notice = None;
+    render(
+        AccountPrivacyPage {
+            layout: PageLayout::with_csrf(tr.t("privacy.hub_title").to_string(), "account", auth.csrf_value()),
+            tr,
+            request_types: view::privacy_request_kind_options(tr),
+            consent_records: false,
+            notice,
+        },
+        StatusCode::OK,
+    )
+}
+
+/// POST /account/privacy/export — request a personal-data export.
+async fn account_export_post(State(state): State<AppState>, _locale: Locale, auth: Auth) -> Response {
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    match state.privacy.request_export(user).await {
+        Ok(req) => Redirect::to(&format!("/account/export/{}?token={}", req.id, req.token)).into_response(),
+        Err(_) => Redirect::to("/account/privacy?export_error=1").into_response(),
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct RightsRequestForm {
+    kind: String,
+    #[serde(default)]
+    details: String,
+}
+
+/// POST /account/privacy/request — submit a manual rights request (§72).
+async fn account_privacy_request_post(
+    State(state): State<AppState>,
+    _locale: Locale,
+    auth: Auth,
+    Form(form): Form<RightsRequestForm>,
+) -> Response {
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let kind = match PrivacyRequestKind::from_code(&form.kind) {
+        Ok(k) => k,
+        Err(_) => return Redirect::to("/account/privacy?request_error=1").into_response(),
+    };
+    let details = if form.details.trim().is_empty() {
+        json!({})
+    } else {
+        json!({ "note": form.details.trim() })
+    };
+    match state.privacy.submit_request(user, kind, details).await {
+        Ok(_) => Redirect::to("/account/privacy?requested=1").into_response(),
+        Err(_) => Redirect::to("/account/privacy?request_error=1").into_response(),
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ExportQuery {
+    token: Option<String>,
+    id: Option<i64>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// C7 — export status + single-use download link.
+async fn account_export(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Query(q): Query<ExportQuery>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let exports = state.privacy.list_exports(user).await.unwrap_or_default();
+    let items: Vec<view::ExportVm> = exports
+        .iter()
+        .map(|e| {
+            let token = if Some(e.id) == q.id { q.token.clone() } else { None };
+            view::export_vm(tr, e, token)
+        })
+        .collect();
+    let notice = if q.error.is_some() {
+        Some(tr.t("export.error").to_string())
+    } else {
+        None
+    };
+    render(
+        AccountExportPage {
+            layout: PageLayout::with_csrf(tr.t("export.title").to_string(), "account", auth.csrf_value()),
+            tr,
+            items,
+            notice,
+        },
+        StatusCode::OK,
+    )
+}
+
+/// GET /account/export/{id}/download?token=… — owner-only, single-use, expiring.
+async fn account_export_download(
+    State(state): State<AppState>,
+    _locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+    Query(q): Query<ExportQuery>,
+) -> Response {
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let token = q.token.as_deref().unwrap_or("");
+    match state.privacy.download_export(user, id, token).await {
+        Ok(download) => {
+            let body = serde_json::to_vec_pretty(&download.payload).unwrap_or_else(|_| b"{}".to_vec());
+            let mut resp = body.into_response();
+            resp.headers_mut()
+                .insert(header::CONTENT_TYPE, "application/json; charset=utf-8".parse().unwrap());
+            resp.headers_mut().insert(
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"bikenest-export.json\"".parse().unwrap(),
+            );
+            resp.headers_mut().insert(
+                header::HeaderName::from_static("x-robots-tag"),
+                "noindex".parse().unwrap(),
+            );
+            resp
+        }
+        // Uniform response for a non-existent id and an id that belongs to
+        // another user, so the endpoint does not leak whether an export id
+        // exists (no id-probe oracle).
+        Err(PrivacyError::NotFound | PrivacyError::NotAuthorized) => {
+            (StatusCode::FORBIDDEN, "Forbidden").into_response()
+        }
+        // The legitimate "link no longer works" cases (expired / already used /
+        // bad token) land back on the owner's C7 page with a notice.
+        Err(PrivacyError::Expired | PrivacyError::AlreadyDownloaded | PrivacyError::InvalidToken) => {
+            Redirect::to(&format!("/account/export/{id}?error=1")).into_response()
+        }
+        Err(_) => Redirect::to(&format!("/account/export/{id}?error=1")).into_response(),
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct DeleteForm {
+    email: String,
+    #[serde(default)]
+    password: String,
+}
+
+/// GET /account/delete — deletion confirmation form.
+async fn account_delete(locale: Locale, auth: Auth) -> Response {
+    let tr = Translator::new(locale);
+    if let Err(resp) = auth.require_user() {
+        return resp;
+    }
+    render(
+        AccountDeletePage {
+            layout: PageLayout::with_csrf(tr.t("delete.title").to_string(), "account", auth.csrf_value()),
+            tr,
+            error: None,
+        },
+        StatusCode::OK,
+    )
+}
+
+/// POST /account/delete — re-auth + confirm, then anonymize-in-place.
+async fn account_delete_post(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Form(form): Form<DeleteForm>,
+) -> Response {
+    let tr = Translator::new(locale);
+    let user = match auth.require_user() {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let password = if form.password.trim().is_empty() { None } else { Some(form.password.as_str()) };
+    let delete_err = |tr: Translator, key: &str| {
+        render(
+            AccountDeletePage {
+                layout: PageLayout::with_csrf(tr.t("delete.title").to_string(), "account", auth.csrf_value()),
+                tr,
+                error: Some(tr.t(key).to_string()),
+            },
+            StatusCode::OK,
+        )
+    };
+    match state.privacy.request_deletion(user, password, &form.email).await {
+        Ok(()) => {
+            // Session was revoked in the service; clear the cookie too.
+            let mut resp = Redirect::to("/login?deleted=1").into_response();
+            resp.headers_mut()
+                .insert(header::SET_COOKIE, clear_session_cookie().parse().unwrap());
+            resp
+        }
+        Err(PrivacyError::LastAdmin) => delete_err(tr, "delete.last_admin_error"),
+        Err(PrivacyError::ReauthRequired) => delete_err(tr, "delete.reauth_error"),
+        Err(_) => delete_err(tr, "delete.reauth_error"),
+    }
+}
+
+/// GET /admin/privacy-requests — the manual rights queue (ADMIN-only).
+async fn admin_privacy_requests(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+) -> Response {
+    let tr = Translator::new(locale);
+    let admin = match auth.require_role(Role::Admin) {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+    let items: Vec<view::PrivacyRequestVm> = state
+        .privacy
+        .list_requests(admin, None)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|r| view::privacy_request_vm(tr, r))
+        .collect();
+    render(
+        AdminPrivacyRequestsPage {
+            layout: PageLayout::with_csrf(tr.t("admin.privacy_requests.title").to_string(), "moderation", auth.csrf_value()),
+            tr,
+            items,
+            notice: None,
+        },
+        StatusCode::OK,
+    )
+}
+
+/// POST /admin/privacy-requests/{id}/fulfill — mark a manual request COMPLETED.
+async fn admin_privacy_request_fulfill(
+    State(state): State<AppState>,
+    _locale: Locale,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Response {
+    let admin = match auth.require_role(Role::Admin) {
+        Ok(a) => a,
+        Err(resp) => return resp,
+    };
+    match state.privacy.fulfill_request(admin, id).await {
+        Ok(()) => Redirect::to("/admin/privacy-requests?fulfilled=1").into_response(),
+        Err(_) => Redirect::to("/admin/privacy-requests?error=1").into_response(),
     }
 }
 

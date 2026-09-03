@@ -75,7 +75,7 @@ impl VerificationRepository for SqlxVerificationRepository {
         location_id: i64,
     ) -> Result<Vec<ExistenceSignal>, ContributionError> {
         struct SignalRow {
-            user_id: i64,
+            user_id: Option<i64>,
             result: String,
             created_at: DateTime<Utc>,
         }
@@ -84,7 +84,7 @@ impl VerificationRepository for SqlxVerificationRepository {
             r#"
             SELECT DISTINCT ON (user_id) user_id, result, created_at
             FROM verification
-            WHERE location_id = $1 AND kind = 'existence'
+            WHERE location_id = $1 AND kind = 'existence' AND user_id IS NOT NULL
             ORDER BY user_id, created_at DESC
             "#,
             location_id
@@ -93,16 +93,15 @@ impl VerificationRepository for SqlxVerificationRepository {
         .await
         .map_err(map_err)?;
 
-        rows.into_iter()
-            .map(|r| {
-                Ok(ExistenceSignal::new(
-                    UserId(r.user_id),
-                    ExistenceResult::from_code(&r.result)
-                        .map_err(|e| ContributionError::InvalidField(e.to_string()))?,
-                    r.created_at,
-                ))
-            })
-            .collect()
+        let mut signals = Vec::with_capacity(rows.len());
+        for r in rows {
+            // The SQL already excludes NULL users; skip defensively too.
+            let Some(uid) = r.user_id else { continue };
+            let result = ExistenceResult::from_code(&r.result)
+                .map_err(|e| ContributionError::InvalidField(e.to_string()))?;
+            signals.push(ExistenceSignal::new(UserId(uid), result, r.created_at));
+        }
+        Ok(signals)
     }
 
     async fn attribute_summary(

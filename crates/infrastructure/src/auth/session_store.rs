@@ -126,4 +126,16 @@ impl SessionStore for SqlxSessionStore {
         .map_err(|_| AuthError::Internal)?;
         Ok(())
     }
+
+    async fn revoke_all_for_user(&self, user_id: UserId) -> Result<(), AuthError> {
+        sqlx::query(
+            "UPDATE sessions SET revoked_at = now()
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id.0)
+        .execute(self.db.pool())
+        .await
+        .map_err(|_| AuthError::Internal)?;
+        Ok(())
+    }
 }

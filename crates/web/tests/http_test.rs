@@ -235,7 +235,7 @@ async fn auth_app() -> (axum::Router, FakeEmailProvider) {
         std::time::Duration::from_secs(2),
         Box::new(email.clone()),
         oauth,
-        Box::new(TestPasswordHasher),
+        TestPasswordHasher,
     );
     (app, email)
 }
@@ -381,6 +381,93 @@ async fn register_verify_login_account_logout(tx: &mut bikenest_test_support::Te
     assert!(matches!(s, StatusCode::SEE_OTHER | StatusCode::FOUND));
     let (s, _) = get_c(&app, "/account", Some(&cookie)).await;
     assert!(matches!(s, StatusCode::SEE_OTHER | StatusCode::FOUND), "logged-out user is redirected");
+
+    let _ = tx;
+    cleanup_user(EMAIL).await;
+}
+
+#[db_test]
+async fn privacy_public_pages_gating_and_export_flow(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "privacy-web@example.com";
+    cleanup_user(EMAIL).await;
+
+    // Public legal pages render (200), even with placeholder content.
+    let (s, body) = get_c(&app, "/privacy", None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(body.contains("Privacy policy"));
+    let (s, _) = get_c(&app, "/terms", None).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = get_c(&app, "/cookies", None).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // Authenticated+admin surfaces redirect anonymous users to login.
+    let (s, _) = get_c(&app, "/account/privacy", None).await;
+    assert!(matches!(s, StatusCode::SEE_OTHER | StatusCode::FOUND), "privacy hub requires auth");
+    let (s, _) = get_c(&app, "/admin/privacy-requests", None).await;
+    assert!(matches!(s, StatusCode::SEE_OTHER | StatusCode::FOUND), "admin queue requires login");
+
+    // Register -> verify -> login.
+    post_form(&app, "/register", &[("email", EMAIL), ("password", "password123")], None).await;
+    let token = email.token_for("/verify-email").expect("verification email captured");
+    get_c(&app, &format!("/verify-email?token={token}"), None).await;
+    let (_, _, cookie) = post_form(&app, "/login", &[("email", EMAIL), ("password", "password123")], None).await;
+    let cookie = cookie.unwrap().split(';').next().unwrap().to_string();
+
+    // C6 hub renders with a CSRF token.
+    let (s, body) = get_c(&app, "/account/privacy", Some(&cookie)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(body.contains("Export your data"));
+    let csrf = extract_csrf(&body);
+
+    // Request an export: POST -> 303 redirect to /account/export/{id}?token=...
+    let req = Request::builder()
+        .method("POST")
+        .uri("/account/privacy/export")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("cookie", &cookie)
+        .header("Accept-Language", "en")
+        .body(Body::from(format!("csrf={csrf}")))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER, "export request redirects");
+    let loc = res
+        .headers()
+        .get(axum::http::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(loc.starts_with("/account/export/"), "redirect carries the export link");
+
+    // The C7 page renders the export status (Ready).
+    let (s, body) = get_c(&app, &loc, Some(&cookie)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(body.contains("Ready") || body.contains("Downloaded") || body.contains("Expired"));
+
+    // The single-use download returns JSON with attachment headers.
+    let (export_path, query) = loc.split_once('?').unwrap_or((&loc, ""));
+    let download_uri = format!("{export_path}/download?{query}");
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&download_uri)
+                .header("cookie", &cookie)
+                .header("Accept-Language", "en")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "download succeeds for the owner");
+    assert_eq!(
+        res.headers().get("content-type").and_then(|v| v.to_str().ok()),
+        Some("application/json; charset=utf-8"),
+    );
+
+    // A non-admin (this user is USER only) gets 403 on the admin queue.
+    let (s, _) = get_c(&app, "/admin/privacy-requests", Some(&cookie)).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "non-admin blocked from the privacy-request queue");
 
     let _ = tx;
     cleanup_user(EMAIL).await;

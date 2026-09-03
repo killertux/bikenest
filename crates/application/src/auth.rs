@@ -190,6 +190,9 @@ pub trait SessionStore: Send + Sync {
         user_id: UserId,
         keep: &SessionId,
     ) -> Result<(), AuthError>;
+    /// Revoke every session for a user (the deletion path's "invalidate
+    /// sessions" — no session is kept).
+    async fn revoke_all_for_user(&self, user_id: UserId) -> Result<(), AuthError>;
 }
 
 /// Port: single-use verification / reset token store (§16).

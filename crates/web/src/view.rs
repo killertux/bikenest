@@ -619,7 +619,8 @@ pub struct ReportVm {
     pub id: i64,
     /// The submitting user's id (moderators may compare against the viewer to
     /// hide resolve/dismiss on one's own report); never rendered on public pages.
-    pub reporter_id: i64,
+    /// `None` once the reporter's account is anonymized (M6).
+    pub reporter_id: Option<i64>,
     pub target_type_label: &'static str,
     pub target_id: i64,
     pub reason_label: &'static str,
@@ -686,7 +687,7 @@ fn report_state_label(t: Translator, s: bikenest_domain::ReportState) -> &'stati
 pub fn report_vm(t: Translator, r: &bikenest_application::Report) -> ReportVm {
     ReportVm {
         id: r.id,
-        reporter_id: r.reporter_id.0,
+        reporter_id: r.reporter_id.map(|u| u.0),
         target_type_label: report_target_label(t, r.target_type.as_code()),
         target_id: r.target_id,
         reason_label: report_reason_label(t, &r.reason),
@@ -698,7 +699,10 @@ pub fn report_vm(t: Translator, r: &bikenest_application::Report) -> ReportVm {
             bikenest_domain::ReportState::UnderReview => "aging",
             bikenest_domain::ReportState::Resolved | bikenest_domain::ReportState::Dismissed => "fresh",
         },
-        reporter_label: format!("{} #{}", t.t("moderation.contributor"), r.reporter_id.0),
+        reporter_label: r
+            .reporter_id
+            .map(|u| format!("{} #{}", t.t("moderation.contributor"), u.0))
+            .unwrap_or_else(|| t.t("report.reporter.anonymous").to_string()),
         claimed_by_label: r
             .claimed_by
             .map(|c| format!("{} #{}", t.t("moderation.moderator"), c.0))
@@ -757,7 +761,10 @@ pub fn proposal_vm(t: Translator, p: &bikenest_application::Proposal) -> Proposa
         kind_code: p.kind.as_code(),
         kind_label: proposal_kind_label(t, p.kind),
         detail: proposal_detail(t, p.kind, &p.proposed),
-        proposer_label: format!("{} #{}", t.t("moderation.proposer"), p.proposer_id.0),
+        proposer_label: p
+            .proposer_id
+            .map(|u| format!("{} #{}", t.t("moderation.proposer"), u.0))
+            .unwrap_or_else(|| t.t("report.reporter.anonymous").to_string()),
         base_version: p.base_version,
         created_label: time_ago_label(t, p.created_at),
     }
@@ -796,6 +803,147 @@ pub fn audit_row_vm(t: Translator, e: &bikenest_application::AuditStoredEvent) -
         metadata: e.event.metadata.to_string(),
         created_label: time_ago_label(t, e.created_at),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Privacy & account lifecycle (M6)
+// ---------------------------------------------------------------------------
+
+/// A locale-neutral ISO date-time label (YYYY-MM-DD HH:MM).
+pub fn iso_datetime_label(dt: chrono::DateTime<chrono::Utc>) -> String {
+    dt.format("%Y-%m-%d %H:%M").to_string()
+}
+
+/// One row of the C7 export-status page (status + optional single-use link).
+#[derive(Debug, Clone)]
+pub struct ExportVm {
+    pub id: i64,
+    pub state_code: &'static str,
+    pub state_label: &'static str,
+    pub created_label: String,
+    pub expires_label: String,
+    pub download_token: Option<String>,
+    pub is_ready: bool,
+}
+
+pub fn export_state_label(t: Translator, s: bikenest_domain::ExportState) -> &'static str {
+    match s {
+        bikenest_domain::ExportState::Ready => t.t("export.state.ready"),
+        bikenest_domain::ExportState::Downloaded => t.t("export.state.downloaded"),
+        bikenest_domain::ExportState::Expired => t.t("export.state.expired"),
+    }
+}
+
+/// Build a C7 row. `token` is the single-use download token — only present for
+/// the just-requested export (rendered once as the owner-only link).
+pub fn export_vm(t: Translator, e: &bikenest_application::Export, token: Option<String>) -> ExportVm {
+    ExportVm {
+        id: e.id,
+        state_code: e.state.as_code(),
+        state_label: export_state_label(t, e.state),
+        created_label: iso_datetime_label(e.created_at),
+        expires_label: iso_datetime_label(e.expires_at),
+        download_token: if e.state == bikenest_domain::ExportState::Ready { token } else { None },
+        is_ready: e.state == bikenest_domain::ExportState::Ready,
+    }
+}
+
+/// One row of the admin privacy-request queue (or the C6 rights list).
+#[derive(Debug, Clone)]
+pub struct PrivacyRequestVm {
+    pub id: i64,
+    pub kind_code: &'static str,
+    pub kind_label: &'static str,
+    pub state_code: &'static str,
+    pub state_label: &'static str,
+    pub created_label: String,
+}
+
+pub fn privacy_request_kind_label(t: Translator, kind: bikenest_domain::PrivacyRequestKind) -> &'static str {
+    match kind {
+        bikenest_domain::PrivacyRequestKind::Access => t.t("privacy.kind.access"),
+        bikenest_domain::PrivacyRequestKind::Rectification => t.t("privacy.kind.rectification"),
+        bikenest_domain::PrivacyRequestKind::Deletion => t.t("privacy.kind.deletion"),
+        bikenest_domain::PrivacyRequestKind::Export => t.t("privacy.kind.export"),
+        bikenest_domain::PrivacyRequestKind::Restriction => t.t("privacy.kind.restriction"),
+        bikenest_domain::PrivacyRequestKind::Objection => t.t("privacy.kind.objection"),
+        bikenest_domain::PrivacyRequestKind::ConsentWithdrawal => t.t("privacy.kind.consent"),
+    }
+}
+
+pub fn privacy_request_state_label(t: Translator, s: bikenest_domain::PrivacyRequestState) -> &'static str {
+    match s {
+        bikenest_domain::PrivacyRequestState::Open => t.t("privacy.state.open"),
+        bikenest_domain::PrivacyRequestState::InProgress => t.t("privacy.state.in_progress"),
+        bikenest_domain::PrivacyRequestState::Completed => t.t("privacy.state.completed"),
+        bikenest_domain::PrivacyRequestState::Declined => t.t("privacy.state.declined"),
+    }
+}
+
+pub fn privacy_request_vm(t: Translator, r: &bikenest_application::PrivacyRequest) -> PrivacyRequestVm {
+    PrivacyRequestVm {
+        id: r.id,
+        kind_code: r.kind.as_code(),
+        kind_label: privacy_request_kind_label(t, r.kind),
+        state_code: r.state.as_code(),
+        state_label: privacy_request_state_label(t, r.state),
+        created_label: iso_datetime_label(r.created_at),
+    }
+}
+
+/// One row of the policy version-history list.
+#[derive(Debug, Clone)]
+pub struct PolicyVersionVm {
+    pub version: String,
+    pub effective_label: String,
+    pub is_current: bool,
+}
+
+pub fn policy_version_vm(
+    _t: Translator,
+    doc: &bikenest_application::PolicyDocument,
+) -> PolicyVersionVm {
+    PolicyVersionVm {
+        version: doc.version.clone(),
+        effective_label: iso_datetime_label(doc.effective_at),
+        is_current: doc.superseded_at.is_none(),
+    }
+}
+
+/// One selectable manual rights kind on the C6 hub.
+#[derive(Debug, Clone)]
+pub struct PrivacyRequestKindVm {
+    pub code: &'static str,
+    pub label: &'static str,
+    pub description: &'static str,
+}
+
+/// The manual (operator-fulfilled) rights kinds, with descriptions, for the C6
+/// request list (§72). Access/export and deletion are automatic and have their
+/// own cards.
+pub fn privacy_request_kind_options(t: Translator) -> Vec<PrivacyRequestKindVm> {
+    vec![
+        PrivacyRequestKindVm {
+            code: "rectification",
+            label: privacy_request_kind_label(t, bikenest_domain::PrivacyRequestKind::Rectification),
+            description: t.t("privacy.rights.rectification_desc"),
+        },
+        PrivacyRequestKindVm {
+            code: "restriction",
+            label: privacy_request_kind_label(t, bikenest_domain::PrivacyRequestKind::Restriction),
+            description: t.t("privacy.rights.restriction_desc"),
+        },
+        PrivacyRequestKindVm {
+            code: "objection",
+            label: privacy_request_kind_label(t, bikenest_domain::PrivacyRequestKind::Objection),
+            description: t.t("privacy.rights.objection_desc"),
+        },
+        PrivacyRequestKindVm {
+            code: "consent_withdrawal",
+            label: privacy_request_kind_label(t, bikenest_domain::PrivacyRequestKind::ConsentWithdrawal),
+            description: t.t("privacy.rights.consent_desc"),
+        },
+    ]
 }
 
 pub fn contribution_vm(t: Translator, i: &bikenest_application::ContributionItem) -> ContributionVm {

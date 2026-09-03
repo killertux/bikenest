@@ -229,6 +229,8 @@ See `plans/m5-moderation.md` for the full plan and decisions.
   hosting provider, observability/error-tracking. Confirm the §77 minimization boundaries (the map
   renderer/geocoder/image store receive no account identity).
 
+See `plans/m6-privacy.md` for the full plan and decisions.
+
 **Working app means:** a user exports their data, requests deletion, and the account is anonymized while community contributions remain unattributed; privacy pages are versioned; retention jobs are testable; the provider data-flow inventory is complete.
 
 **Mocks/fakes:** none new.
@@ -307,3 +309,5 @@ Bookkeeping for anything temporary, mocked, or knowingly incomplete. **Each entr
 | 17 | Confidence-state thresholds + conflict rule hardcoded in domain | improve | M3 | M7 | Make configurable like `FreshnessConfig`; document for tuning (§106). |
 | 18 | Photo upload/processing constants hardcoded (10 MiB, 20 MP, JPEG q85, 400 px thumb, rate-limit defaults) | improve | M4 | M7 | Make size/dimension/quality/limits configurable; document for tuning (§30). |
 | 19 | Moderation constants hardcoded (report description length, report rate-limit defaults 10/day/user + 20/day/IP, proposal/adjust values) | improve | M5 | M7 | Made configurable + documented for tuning, like Ledger #18. |
+| 20 | Retention/export TTLs hardcoded (reset 1h, verification 24h, session 30d/90d, parked-here 90d, export 24h, upload-orphan 24h) | improve | M6 | M7 | Make configurable via `RetentionPolicy`/env, like Ledger #18/#19. |
+| 21 | `seed-policies` placeholder legal text (privacy/terms/cookies) | placeholder | M6 | legal review (product) | §71: content is product/legal content, not assumed final text. |

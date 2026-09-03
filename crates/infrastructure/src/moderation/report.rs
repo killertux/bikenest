@@ -18,7 +18,7 @@ impl SqlxReportRepository {
 
 struct ReportRow {
     id: i64,
-    reporter_id: i64,
+    reporter_id: Option<i64>,
     target_type: String,
     target_id: i64,
     reason: String,
@@ -38,7 +38,7 @@ impl ReportRow {
         let state = ReportState::from_code(&self.state).map_err(ModerationError::from)?;
         Ok(Report {
             id: self.id,
-            reporter_id: UserId(self.reporter_id),
+            reporter_id: self.reporter_id.map(UserId),
             target_type,
             target_id: self.target_id,
             reason: self.reason,

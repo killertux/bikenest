@@ -35,7 +35,7 @@
               <button type="submit" class="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white">{{ tr.t("report.claim") }}</button>
             </form>
           {% endif %}
-          {% if r.state_code == "UNDER_REVIEW" && r.reporter_id != viewer_id %}
+          {% if r.state_code == "UNDER_REVIEW" && r.reporter_id != Some(*viewer_id) %}
             <form action="/moderation/reports/{{ r.id }}/resolve" method="post" hx-post="/moderation/reports/{{ r.id }}/resolve" hx-swap="outerHTML" hx-target="closest article">
               <input type="hidden" name="csrf" value="{{ layout.csrf }}">
               <input type="text" name="note" placeholder="{{ tr.t("report.resolve_placeholder") }}" class="w-40 rounded-lg border border-border px-2 py-2 text-sm">

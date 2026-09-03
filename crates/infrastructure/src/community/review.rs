@@ -152,7 +152,7 @@ impl ReviewRepository for SqlxReviewRepository {
 struct ReviewRow {
     id: i64,
     location_id: i64,
-    author_id: i64,
+    author_id: Option<i64>,
     rating: i16,
     body: String,
     created_at: chrono::DateTime<chrono::Utc>,
@@ -163,7 +163,7 @@ fn review_from_row(r: ReviewRow) -> Result<Review, ContributionError> {
     Ok(Review {
         id: r.id,
         location_id: r.location_id,
-        author: UserId(r.author_id),
+        author: r.author_id.map(UserId),
         rating: StarRating::from_smallint(r.rating)
             .map_err(|e| ContributionError::InvalidField(e.to_string()))?,
         body: ReviewBody::new(&r.body)

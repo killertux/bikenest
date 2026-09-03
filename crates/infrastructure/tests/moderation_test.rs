@@ -52,7 +52,7 @@ async fn report_repo_state_machine(tx: &mut bikenest_test_support::TestTx) {
 
     let got = repo.get(report_id).await.unwrap().unwrap();
     assert_eq!(got.state, ReportState::Open);
-    assert_eq!(got.reporter_id, UserId(reporter));
+    assert_eq!(got.reporter_id, Some(UserId(reporter)));
 
     // Claim: OPEN → UNDER_REVIEW.
     repo.claim(report_id, UserId(moderator)).await.unwrap();

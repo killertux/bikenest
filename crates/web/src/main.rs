@@ -63,6 +63,98 @@ async fn main() {
                 }
             }
         }
+        Some("retention") => {
+            db.migrate().await.unwrap_or_else(|err| {
+                eprintln!("migration error: {err}");
+                std::process::exit(1);
+            });
+            let media_root = std::env::var("MEDIA_ROOT")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from("media"));
+            let storage = bikenest_infrastructure::LocalDiskStorage::from_env();
+            let retention = bikenest_infrastructure::SqlxRetentionRepository::new(
+                db.clone(),
+                bikenest_domain::RetentionPolicy::default(),
+                Box::new(storage),
+                media_root,
+            );
+            let job = bikenest_application::RetentionJob::new(
+                Box::new(retention),
+                Box::new(bikenest_infrastructure::SqlxAuditLog::new(db.clone())),
+                Box::new(bikenest_infrastructure::SystemClock),
+                bikenest_application::RetentionConfig {
+                    inactive_account_anonymize_after_days:
+                        config.inactive_account_anonymize_after_days,
+                    deleted_account_purge_after_days:
+                        config.deleted_account_purge_after_days,
+                },
+            );
+            match job.run().await {
+                Ok(summary) => {
+                    println!("retention run ({})", summary.steps.len());
+                    for step in &summary.steps {
+                        println!("  {:<28} {}", step.name, step.purged);
+                    }
+                    println!("audited: retention.purged");
+                }
+                Err(err) => {
+                    eprintln!("retention error: {err}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some("seed-policies") => {
+            db.migrate().await.unwrap_or_else(|err| {
+                eprintln!("migration error: {err}");
+                std::process::exit(1);
+            });
+            let version = std::env::var("POLICY_VERSION")
+                .unwrap_or_else(|_| "2025-01-01.1".to_string());
+            let effective_at = std::env::var("POLICY_EFFECTIVE_AT")
+                .ok()
+                .and_then(|v| {
+                    chrono::DateTime::parse_from_rfc3339(&v)
+                        .ok()
+                        .map(|d| d.with_timezone(&chrono::Utc))
+                })
+                .unwrap_or_else(chrono::Utc::now);
+            let mut ok = true;
+            for (kind_code, file) in [
+                ("privacy", "policies/privacy.md"),
+                ("terms", "policies/terms.md"),
+                ("cookies", "policies/cookies.md"),
+            ] {
+                let content = match std::fs::read_to_string(file) {
+                    Ok(c) => c,
+                    Err(err) => {
+                        eprintln!("seed-policies: cannot read {file}: {err}");
+                        ok = false;
+                        continue;
+                    }
+                };
+                let kind = bikenest_domain::PolicyKind::from_code(kind_code)
+                    .expect("valid policy kind");
+                if let Err(err) = bikenest_infrastructure::seed_policy(
+                    &db,
+                    kind,
+                    &version,
+                    effective_at,
+                    &content,
+                )
+                .await
+                {
+                    eprintln!("seed-policies: {kind_code}: {err}");
+                    ok = false;
+                }
+            }
+            if ok {
+                println!(
+                    "seeded policies as version {version} (placeholder legal text, §71 — requires review)"
+                );
+            } else {
+                std::process::exit(1);
+            }
+        }
         _ => serve(config, db).await,
     }
 }

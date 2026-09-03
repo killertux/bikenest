@@ -13,6 +13,7 @@ pub mod email;
 pub mod moderation;
 pub mod photo;
 pub mod ports;
+pub mod privacy;
 pub mod rate_limit;
 pub mod search;
 pub mod storage;
@@ -45,6 +46,14 @@ pub use photo::{
     ImageProcessor, NewPendingPhoto, PendingPhoto, PhotoDeps, PhotoError, PhotoForModeration,
     PhotoKind, PhotoRepository, PhotoService, PhotoTarget, ProcessedImage, RejectedPhoto,
     UploadedPhoto,
+};
+pub use privacy::{
+    AnonymizationReport, AnonymizationRepository, Export, ExportAccount, ExportDownload,
+    ExportFavorite, ExportPayload, ExportPhoto, ExportProvider, ExportReport, ExportRepository,
+    ExportProposal, ExportRequested, ExportReview, ExportReviewRevision, ExportSession,
+    ExportVerification, NewExport, NewPrivacyRequest, PolicyDocument, PolicyReader, PrivacyDeps,
+    PrivacyError, PrivacyRequest, PrivacyRequestRepository, PrivacyService, RetentionConfig,
+    RetentionJob, RetentionRepository, RetentionStep, RetentionSummary,
 };
 pub use rate_limit::{RateLimitError, RateLimiter};
 pub use storage::{ObjectStorage, PutObject, StorageError};

@@ -1,0 +1,67 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<section class="mx-auto max-w-3xl px-4 py-10 lg:px-8">
+  <div class="mb-8">
+    <p class="font-mono text-xs uppercase tracking-[0.14em] text-muted">{{ tr.t("account.nav") }}</p>
+    <h1 class="mt-1 font-display text-3xl font-bold tracking-tight">{{ tr.t("privacy.hub_title") }}</h1>
+    <p class="mt-2 text-sm leading-relaxed text-muted">{{ tr.t("privacy.hub_intro") }} <a href="/privacy" class="font-medium text-accent-strong hover:underline">{{ tr.t("nav.privacy") }}</a></p>
+  </div>
+
+  {% if notice.is_some() %}
+    <div class="mb-4 max-w-2xl rounded-lg border border-fresh/30 bg-fresh/10 px-4 py-3 text-sm text-fresh">{{ notice.as_deref().unwrap_or("") }}</div>
+  {% endif %}
+
+  <div class="space-y-4">
+    <!-- Export -->
+    <section class="flex flex-col gap-4 rounded-2xl border border-border bg-surface p-6 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h2 class="font-display text-[15px] font-semibold">{{ tr.t("privacy.export_title") }}</h2>
+        <p class="mt-1 text-sm leading-relaxed text-muted">{{ tr.t("privacy.export_desc") }}</p>
+      </div>
+      <form action="/account/privacy/export" method="post">
+        <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+        <button type="submit" class="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-accent-strong px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("privacy.request_export") }}</button>
+      </form>
+    </section>
+
+    <!-- Other rights -->
+    <section class="rounded-2xl border border-border bg-surface p-6">
+      <h2 class="font-display text-[15px] font-semibold">{{ tr.t("privacy.rights_title") }}</h2>
+      <p class="mt-1 text-sm leading-relaxed text-muted">{{ tr.t("privacy.rights_desc") }}</p>
+      <div class="mt-4 divide-y divide-border border-t border-border">
+        {% for rt in request_types %}
+        <form action="/account/privacy/request" method="post" class="py-4">
+          <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+          <input type="hidden" name="kind" value="{{ rt.code }}" />
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="text-sm">{{ rt.label }}</p>
+              <p class="text-xs text-muted">{{ rt.description }}</p>
+            </div>
+            <button type="submit" class="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-fg transition-colors hover:bg-bg">{{ tr.t("privacy.request") }}</button>
+          </div>
+          <label class="mt-3 block text-xs text-muted">
+            <span class="sr-only">{{ tr.t("privacy.details") }}</span>
+            <textarea name="details" rows="1" placeholder="{{ tr.t("privacy.details_placeholder") }}" class="mt-1 w-full rounded-lg border border-border px-3 py-2 text-sm"></textarea>
+          </label>
+        </form>
+        {% endfor %}
+      </div>
+    </section>
+
+    <!-- Deletion -->
+    <section class="rounded-2xl border border-danger/30 bg-surface p-6">
+      <h2 class="font-display text-[15px] font-semibold">{{ tr.t("delete.title") }}</h2>
+      <p class="mt-1 text-sm leading-relaxed text-muted">{{ tr.t("delete.intro") }}</p>
+      <a href="/account/delete" class="mt-4 inline-flex items-center gap-2 rounded-xl bg-danger px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[oklch(42%_0.16_30)]">{{ tr.t("delete.request") }}</a>
+    </section>
+
+    {% if consent_records %}
+    <section class="rounded-2xl border border-border bg-surface p-6">
+      <h2 class="font-display text-lg font-bold">{{ tr.t("privacy.consent_title") }}</h2>
+      <p class="mt-1 text-sm leading-relaxed text-muted">{{ tr.t("privacy.consent_desc") }}</p>
+    </section>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

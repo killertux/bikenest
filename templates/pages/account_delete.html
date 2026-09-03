@@ -1,0 +1,31 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<section class="mx-auto max-w-md px-4 py-12 lg:px-8">
+  <a href="/account/privacy" class="inline-flex items-center gap-1.5 text-sm font-medium text-muted hover:text-fg">← {{ tr.t("privacy.back") }}</a>
+  <p class="mt-5 font-mono text-xs uppercase tracking-[0.14em] text-muted">{{ tr.t("account.nav") }}</p>
+  <h1 class="mt-1 font-display text-3xl font-bold tracking-tight">{{ tr.t("delete.title") }}</h1>
+  <p class="mt-2 text-sm leading-relaxed text-muted">{{ tr.t("delete.intro") }}</p>
+
+  {% if error.is_some() %}
+    <div class="mt-4 rounded-lg border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">{{ error.as_deref().unwrap_or("") }}</div>
+  {% endif %}
+
+  <form action="/account/delete" method="post" class="mt-6 space-y-4 rounded-2xl border border-border bg-surface p-6">
+    <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+    <div>
+      <label class="block text-sm font-medium" for="delete-email">{{ tr.t("auth.email") }}</label>
+      <input id="delete-email" type="email" name="email" required autocomplete="email" class="mt-1 w-full rounded-lg border border-border px-3 py-2 text-sm" />
+    </div>
+    <div>
+      <label class="block text-sm font-medium" for="delete-password">{{ tr.t("auth.password") }} <span class="text-xs font-normal text-muted">({{ tr.t("delete.password_optional") }})</span></label>
+      <input id="delete-password" type="password" name="password" autocomplete="current-password" class="mt-1 w-full rounded-lg border border-border px-3 py-2 text-sm" />
+    </div>
+    <ul class="space-y-1.5 text-xs leading-relaxed text-muted">
+      <li>• {{ tr.t("delete.list_identity") }}</li>
+      <li>• {{ tr.t("delete.list_contributions") }}</li>
+      <li>• {{ tr.t("delete.list_private") }}</li>
+    </ul>
+    <button type="submit" class="w-full rounded-xl bg-danger px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[oklch(42%_0.16_30)]">{{ tr.t("delete.confirm") }}</button>
+  </form>
+</section>
+{% endblock %}

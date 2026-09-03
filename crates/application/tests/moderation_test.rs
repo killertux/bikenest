@@ -59,7 +59,7 @@ impl ReportRepository for FakeReports {
             id,
             Report {
                 id,
-                reporter_id: r.reporter_id,
+                reporter_id: Some(r.reporter_id),
                 target_type: r.target_type,
                 target_id: r.target_id,
                 reason: r.reason.clone(),
@@ -279,7 +279,7 @@ fn proposal(id: i64, kind: ProposalKind, proposed: serde_json::Value) -> Proposa
         id,
         location_id: 10,
         location_name: "Test".to_string(),
-        proposer_id: UserId(3),
+        proposer_id: Some(UserId(3)),
         base_version: 1,
         kind,
         proposed,

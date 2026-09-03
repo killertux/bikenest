@@ -448,6 +448,72 @@ pub struct AdminUsersPage {
     pub error: Option<String>,
 }
 
+/// M6 — a versioned legal page (P4/P5/P6): current version + effective date.
+#[derive(Template)]
+#[template(path = "pages/policy.html")]
+pub struct PolicyPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    /// Stable kind code ("privacy" | "terms" | "cookies").
+    pub kind_code: &'static str,
+    pub kind_label: &'static str,
+    pub version: String,
+    pub effective_label: String,
+    /// Stored markdown, rendered escaped (never `|safe`).
+    pub content: String,
+}
+
+/// M6 — the version history for a legal page (§70 determinability).
+#[derive(Template)]
+#[template(path = "pages/policy_versions.html")]
+pub struct PolicyVersionsPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub kind_code: &'static str,
+    pub kind_label: &'static str,
+    pub items: Vec<view::PolicyVersionVm>,
+}
+
+/// M6 — C6 privacy & data hub.
+#[derive(Template)]
+#[template(path = "pages/account_privacy.html")]
+pub struct AccountPrivacyPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub request_types: Vec<view::PrivacyRequestKindVm>,
+    pub consent_records: bool,
+    pub notice: Option<String>,
+}
+
+/// M6 — C7 export status.
+#[derive(Template)]
+#[template(path = "pages/account_export.html")]
+pub struct AccountExportPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub items: Vec<view::ExportVm>,
+    pub notice: Option<String>,
+}
+
+/// M6 — account deletion confirmation.
+#[derive(Template)]
+#[template(path = "pages/account_delete.html")]
+pub struct AccountDeletePage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub error: Option<String>,
+}
+
+/// M6 — admin privacy-request queue.
+#[derive(Template)]
+#[template(path = "pages/admin_privacy_requests.html")]
+pub struct AdminPrivacyRequestsPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub items: Vec<view::PrivacyRequestVm>,
+    pub notice: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // M3 community pages
 // ---------------------------------------------------------------------------
@@ -665,12 +731,12 @@ pub fn app_router(db: bikenest_infrastructure::Db, probe_timeout: std::time::Dur
 /// Test-oriented constructor: inject email/OAuth/password providers (tests pass
 /// a fast [`bikenest_test_support::TestPasswordHasher`] to keep argon2 out of
 /// the suite).
-pub fn app_router_with(
+pub fn app_router_with<H: bikenest_application::PasswordHasher + Clone + 'static>(
     db: bikenest_infrastructure::Db,
     probe_timeout: std::time::Duration,
     email: Box<dyn bikenest_application::EmailProvider>,
     oauth: bikenest_infrastructure::FakeOAuthProvider,
-    hasher: Box<dyn bikenest_application::PasswordHasher>,
+    hasher: H,
 ) -> axum::Router {
     http::app_router_with(db, probe_timeout, email, oauth, hasher)
 }

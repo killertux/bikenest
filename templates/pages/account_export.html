@@ -1,0 +1,48 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<section class="mx-auto max-w-2xl px-4 py-10 lg:px-8">
+  <a href="/account/privacy" class="inline-flex items-center gap-1.5 text-sm font-medium text-muted hover:text-fg">← {{ tr.t("privacy.back") }}</a>
+
+  <div class="mb-8 mt-5">
+    <p class="font-mono text-xs uppercase tracking-[0.14em] text-muted">{{ tr.t("privacy.hub_title") }}</p>
+    <h1 class="mt-1 font-display text-3xl font-bold tracking-tight">{{ tr.t("export.title") }}</h1>
+  </div>
+
+  {% if notice.is_some() %}
+    <div class="mb-4 max-w-2xl rounded-lg border border-aging/30 bg-aging/10 px-4 py-3 text-sm text-aging">{{ notice.as_deref().unwrap_or("") }}</div>
+  {% endif %}
+
+  {% if items.is_empty() %}
+    <section class="rounded-2xl border border-border bg-surface p-6">
+      <p class="text-sm text-muted">{{ tr.t("export.none") }}</p>
+      <a href="/account/privacy" class="mt-3 inline-block text-sm font-medium text-accent-strong hover:underline">{{ tr.t("privacy.request_export") }}</a>
+    </section>
+  {% else %}
+    <section class="rounded-2xl border border-border bg-surface p-6">
+      <h2 class="font-display text-lg font-bold">{{ tr.t("export.status_title") }}</h2>
+      <table class="mt-4 w-full text-left text-sm">
+        <thead><tr class="border-b border-border text-xs uppercase tracking-wide text-muted">
+          <th class="py-2.5 pr-4 font-medium">{{ tr.t("export.requested") }}</th>
+          <th class="py-2.5 pr-4 font-medium">{{ tr.t("export.expires") }}</th>
+          <th class="py-2.5 font-medium">{{ tr.t("export.status") }}</th>
+        </tr></thead>
+        <tbody class="divide-y divide-border">
+          {% for item in items %}
+          <tr>
+            <td class="py-3 pr-4 font-mono text-xs text-fg">{{ item.created_label }}</td>
+            <td class="py-3 pr-4 font-mono text-xs text-fg">{{ item.expires_label }}</td>
+            <td class="py-3">
+              <span class="text-xs">{{ item.state_label }}</span>
+              {% if item.is_ready && item.download_token.is_some() %}
+                <a href="/account/export/{{ item.id }}/download?token={{ item.download_token.as_deref().unwrap_or("") }}" class="mt-1 block text-xs font-medium text-accent-strong hover:underline">{{ tr.t("export.download") }}</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="mt-4 text-xs leading-relaxed text-muted">{{ tr.t("export.expiry_note") }}</p>
+    </section>
+  {% endif %}
+</section>
+{% endblock %}

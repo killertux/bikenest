@@ -130,11 +130,12 @@ pub struct DuplicateCandidate {
 }
 
 /// A review as read from the store (only `ACTIVE` rows are ever returned).
+/// `author` is `None` once the reviewer's account is anonymized (M6).
 #[derive(Debug, Clone)]
 pub struct Review {
     pub id: i64,
     pub location_id: i64,
-    pub author: UserId,
+    pub author: Option<UserId>,
     pub rating: StarRating,
     pub body: ReviewBody,
     pub created_at: DateTime<Utc>,
