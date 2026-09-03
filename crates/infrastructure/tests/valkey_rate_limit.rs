@@ -44,7 +44,11 @@ async fn single_node_sliding_window() {
     }
 
     // First `limit` calls allowed, then denied.
-    assert_eq!(results, [true, true, true, false, false], "sliding window should allow limit then deny");
+    assert_eq!(
+        results,
+        [true, true, true, false, false],
+        "sliding window should allow limit then deny"
+    );
 
     // An unrelated key is independent.
     let fresh = format!("{key}:fresh");
@@ -74,17 +78,18 @@ async fn cluster_sliding_window() {
     for _ in 0..(limit + 2) {
         results.push(rl.check(&key, limit, window).await.expect("no error"));
     }
-    assert_eq!(results, [true, true, false, false], "cluster should enforce the same sliding window");
+    assert_eq!(
+        results,
+        [true, true, false, false],
+        "cluster should enforce the same sliding window"
+    );
 
     // A second client pointing at the same cluster agrees on the shared counter
     // (i.e. the limit aggregates across processes, not per client).
     let other = ValKeyRateLimiter::cluster(urls, false).expect("valid cluster config");
     for _ in 0..(limit + 1) {
         assert!(
-            !other
-                .check(&key, limit, window)
-                .await
-                .expect("no error"),
+            !other.check(&key, limit, window).await.expect("no error"),
             "second client should see the shared counter"
         );
     }

@@ -85,8 +85,8 @@ async fn main() {
             let storage = bikenest_infrastructure::storage_from_env();
             let retention = bikenest_infrastructure::SqlxRetentionRepository::new(
                 db.clone(),
-                config.retention.clone(),
-                Box::new(storage),
+                config.retention,
+                std::sync::Arc::new(storage),
                 media_root,
             );
             let job = bikenest_application::RetentionJob::new(
@@ -94,10 +94,9 @@ async fn main() {
                 Box::new(bikenest_infrastructure::SqlxAuditLog::new(db.clone())),
                 Box::new(bikenest_infrastructure::SystemClock),
                 bikenest_application::RetentionConfig {
-                    inactive_account_anonymize_after_days:
-                        config.inactive_account_anonymize_after_days,
-                    deleted_account_purge_after_days:
-                        config.deleted_account_purge_after_days,
+                    inactive_account_anonymize_after_days: config
+                        .inactive_account_anonymize_after_days,
+                    deleted_account_purge_after_days: config.deleted_account_purge_after_days,
                 },
             );
             match job.run().await {
@@ -119,8 +118,8 @@ async fn main() {
                 eprintln!("migration error: {err}");
                 std::process::exit(1);
             });
-            let version = std::env::var("POLICY_VERSION")
-                .unwrap_or_else(|_| "2025-01-01.1".to_string());
+            let version =
+                std::env::var("POLICY_VERSION").unwrap_or_else(|_| "2026-09-03.1".to_string());
             let effective_at = std::env::var("POLICY_EFFECTIVE_AT")
                 .ok()
                 .and_then(|v| {
@@ -129,38 +128,68 @@ async fn main() {
                         .map(|d| d.with_timezone(&chrono::Utc))
                 })
                 .unwrap_or_else(chrono::Utc::now);
+            // §70: controller identity + contact come from the environment
+            // (POLICY_OPERATOR_*, POLICY_CONTACT_EMAIL) and are substituted
+            // into the {{TOKEN}}s of policies/*.md. Never seed with a hole.
+            let lookup = |token: &str| -> Option<String> {
+                bikenest_infrastructure::POLICY_PLACEHOLDERS
+                    .iter()
+                    .find(|(t, _)| *t == token)
+                    .and_then(|(_, var)| std::env::var(var).ok())
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+            };
             let mut ok = true;
-            for (kind_code, file) in [
-                ("privacy", "policies/privacy.md"),
-                ("terms", "policies/terms.md"),
-                ("cookies", "policies/cookies.md"),
-            ] {
-                let content = match std::fs::read_to_string(file) {
-                    Ok(c) => c,
-                    Err(err) => {
-                        eprintln!("seed-policies: cannot read {file}: {err}");
+            for locale in bikenest_infrastructure::POLICY_LOCALES {
+                for kind_code in ["privacy", "terms", "cookies"] {
+                    let file = format!("policies/{kind_code}.{locale}.md");
+                    let raw = match std::fs::read_to_string(&file) {
+                        Ok(c) => c,
+                        Err(err) => {
+                            eprintln!("seed-policies: cannot read {file}: {err}");
+                            ok = false;
+                            continue;
+                        }
+                    };
+                    let content = match bikenest_infrastructure::fill_policy_placeholders(
+                        &raw, lookup,
+                    ) {
+                        Ok(c) => c,
+                        Err(missing) => {
+                            let vars: Vec<&str> = bikenest_infrastructure::POLICY_PLACEHOLDERS
+                                .iter()
+                                .filter(|(t, _)| missing.iter().any(|m| m == t))
+                                .map(|(_, var)| *var)
+                                .collect();
+                            eprintln!(
+                                "seed-policies: {file}: unresolved placeholders {missing:?} — set {} (see .env.example)",
+                                vars.join(", ")
+                            );
+                            ok = false;
+                            continue;
+                        }
+                    };
+                    let kind = bikenest_domain::PolicyKind::from_code(kind_code)
+                        .expect("valid policy kind");
+                    if let Err(err) = bikenest_infrastructure::seed_policy(
+                        &db,
+                        kind,
+                        locale,
+                        &version,
+                        effective_at,
+                        &content,
+                    )
+                    .await
+                    {
+                        eprintln!("seed-policies: {kind_code} ({locale}): {err}");
                         ok = false;
-                        continue;
                     }
-                };
-                let kind = bikenest_domain::PolicyKind::from_code(kind_code)
-                    .expect("valid policy kind");
-                if let Err(err) = bikenest_infrastructure::seed_policy(
-                    &db,
-                    kind,
-                    &version,
-                    effective_at,
-                    &content,
-                )
-                .await
-                {
-                    eprintln!("seed-policies: {kind_code}: {err}");
-                    ok = false;
                 }
             }
             if ok {
                 println!(
-                    "seeded policies as version {version} (placeholder legal text, §71 — requires review)"
+                    "seeded policies version {version} for locales {:?} (legal text drafted by product; counsel review tracked in docs/legal-review.md)",
+                    bikenest_infrastructure::POLICY_LOCALES
                 );
             } else {
                 std::process::exit(1);
@@ -177,6 +206,21 @@ async fn serve(config: Config, db: Db) {
         std::process::exit(1);
     }
     tracing::info!(migrations = "applied", "database ready");
+
+    // Background worker (plans/m9-background-jobs.md): a tokio task that claims
+    // and runs durable one-shot + recurring jobs. Disable with `JOBS_ENABLED=false`
+    // for web-only instances (or to run jobs elsewhere).
+    if config.jobs.enabled {
+        let storage: std::sync::Arc<dyn bikenest_application::ObjectStorage> =
+            std::sync::Arc::new(bikenest_infrastructure::storage_from_env());
+        let services = bikenest_infrastructure::job_services(db.clone(), &config, storage);
+        let worker =
+            bikenest_infrastructure::Worker::new(services.repo, services.registry, config.jobs);
+        tokio::spawn(worker.run());
+        tracing::info!(jobs = "enabled", "background worker started");
+    } else {
+        tracing::info!(jobs = "disabled", "background worker not started");
+    }
 
     let app = app_router(db, config.probe_timeout);
     let listener = tokio::net::TcpListener::bind(&config.bind_addr)

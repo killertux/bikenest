@@ -4,8 +4,8 @@
 //! Rows are tagged with `seed_key` so re-runs are idempotent (delete + insert
 //! in one transaction) and easy to identify for cleanup.
 
-use crate::devdata::mock_parkings;
 use crate::Db;
+use crate::devdata::mock_parkings;
 use bikenest_application::{ObjectStorage, PutObject};
 
 const SEED_KEY: &str = "mock-cwb-2026-01";
@@ -44,8 +44,9 @@ pub async fn seed_mock(db: &Db, storage: &dyn ObjectStorage) -> Result<usize, sq
             bikenest_domain::Cost::Paid { price: None } => ("paid", None, None, None),
         };
         let rating_avg = mock.rating_avg.map(|a| a as f32);
-        let last_verified_at =
-            mock.verified_days_ago.map(|d| now - chrono::Duration::days(d));
+        let last_verified_at = mock
+            .verified_days_ago
+            .map(|d| now - chrono::Duration::days(d));
 
         let row: (i64,) = sqlx::query_as(
             r#"
@@ -132,9 +133,9 @@ pub async fn seed_mock(db: &Db, storage: &dyn ObjectStorage) -> Result<usize, sq
             let key = format!("seed/curitiba/{basename}");
             let bytes = tokio::fs::read(format!("{IMG_DIR}/{basename}"))
                 .await
-                .map_err(|e| sqlx::Error::Io(std::io::Error::other(format!(
-                    "seed photo {basename}: {e}"
-                ))))?;
+                .map_err(|e| {
+                    sqlx::Error::Io(std::io::Error::other(format!("seed photo {basename}: {e}")))
+                })?;
             storage
                 .put(PutObject {
                     key: key.clone(),

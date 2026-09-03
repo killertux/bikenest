@@ -153,13 +153,16 @@ cargo run -- seed-mock         # mock data (dev only)
 # Seed an admin user (Ledger #10): set ADMIN_EMAIL/ADMIN_PASSWORD in .env first.
 cargo run -- seed-admin
 
-# Versioned legal pages (Ledger #21): upsert the current policies/*.md as new
-# policy_version rows (placeholder legal text — requires review, §71).
+# Versioned legal pages (Ledger #21): upsert policies/{privacy,terms,cookies}.{pt-BR,en}.md
+# as policy_version rows. The {{TOKEN}}s (operator name/CNPJ/address, contact
+# e-mail) come from POLICY_OPERATOR_* / POLICY_CONTACT_EMAIL in .env; the
+# command refuses to seed with any of them unset. Bump POLICY_VERSION when the
+# text changes. Legal review status: docs/legal-review.md.
 cargo run -- seed-policies
 
 # Retention job (§75): purge expired sessions/tokens/parked-here/exports +
-# orphan media sweep. The two config-gated steps (inactive-anonymize,
-# deleted-shell-purge) default off (0) until approved.
+# orphan media sweep. Config-gated steps: inactive-anonymize stays OFF (0) by
+# decision; deleted-shell-purge runs at 30 days (docs/retention-policy.md).
 cargo run -- retention
 
 cargo run                      # default command; serves on BIND_ADDR (:8080)
@@ -193,6 +196,10 @@ credentials needed.
 - `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_TLS` — SMTP backend (Mailpit: `localhost:1025`, no TLS/auth).
 - `RESEND_API_KEY` / `RESEND_FROM` — Resend API backend.
 - `ADMIN_EMAIL` / `ADMIN_PASSWORD` — `seed-admin` bootstrap (Ledger #10; password must be 8+ chars).
+- `JOBS_ENABLED` / `JOBS_POLL_INTERVAL_MS` / `JOBS_BATCH_SIZE` / `JOBS_LEASE_TTL_MS` — background job
+  worker (M9); `JOBS_ENABLED=false` for web-only instances.
+- `JOBS_MAX_ATTEMPTS` / `JOBS_BACKOFF_BASE_MS` / `JOBS_HISTORY_RETENTION_DAYS` — retry budget,
+  exponential-backoff base, and how long `jobs.gc` keeps terminal rows (default 7 days).
 - `FAKE_OAUTH_EMAIL` / `FAKE_OAUTH_SUB` — deterministic `FakeOAuthProvider` dev identity (Ledger #5).
 
 M7 also documents **security/**csp/**tuning** knobs: `TLS_ON`, `CSP_TILE_HOSTS`, `CSP_GEOCODE_HOSTS`,

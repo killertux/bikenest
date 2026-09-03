@@ -62,9 +62,7 @@ async fn real_search(
         .await
 }
 
-async fn real_details(
-    id: i64,
-) -> Result<Option<bikenest_domain::ParkingLocation>, ReaderError> {
+async fn real_details(id: i64) -> Result<Option<bikenest_domain::ParkingLocation>, ReaderError> {
     let db = bikenest_infrastructure::Db::from_pool(pool().await);
     bikenest_infrastructure::SqlxParkingDetailsReader::new(db)
         .details(id)
@@ -76,9 +74,24 @@ async fn within_radius_ordered_by_distance_with_correct_total(tx: &mut TestTx) {
     const MARK: &str = "fix-within-radius";
     cleanup_fixture(MARK).await;
     let conn = tx.executor();
-    at(1.0, 100.0).with_fixture_tag(MARK).with_name("A 100m").create(&mut *conn).await.unwrap();
-    at(1.0, 300.0).with_fixture_tag(MARK).with_name("B 300m").create(&mut *conn).await.unwrap();
-    at(1.0, 2000.0).with_fixture_tag(MARK).with_name("C 2km").create(&mut *conn).await.unwrap();
+    at(1.0, 100.0)
+        .with_fixture_tag(MARK)
+        .with_name("A 100m")
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    at(1.0, 300.0)
+        .with_fixture_tag(MARK)
+        .with_name("B 300m")
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    at(1.0, 2000.0)
+        .with_fixture_tag(MARK)
+        .with_name("C 2km")
+        .create(&mut *conn)
+        .await
+        .unwrap();
     tx.commit_fixture().await;
 
     let mut req = request_at(1.0, Sort::Distance);
@@ -97,8 +110,16 @@ async fn radius_filter_excludes_far_locations(tx: &mut TestTx) {
     const MARK: &str = "fix-radius";
     cleanup_fixture(MARK).await;
     let conn = tx.executor();
-    at(2.0, 50.0).with_fixture_tag(MARK).create(&mut *conn).await.unwrap();
-    at(2.0, 1500.0).with_fixture_tag(MARK).create(&mut *conn).await.unwrap();
+    at(2.0, 50.0)
+        .with_fixture_tag(MARK)
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    at(2.0, 1500.0)
+        .with_fixture_tag(MARK)
+        .create(&mut *conn)
+        .await
+        .unwrap();
     tx.commit_fixture().await;
 
     let mut req = request_at(2.0, Sort::Distance);
@@ -124,7 +145,11 @@ async fn cost_type_and_security_filters_apply(tx: &mut TestTx) {
     at(3.0, 60.0)
         .with_fixture_tag(MARK)
         .with_cost(Cost::Paid {
-            price: Some(Money::new(500, CurrencyCode::parse("BRL").unwrap(), PricingUnit::Day)),
+            price: Some(Money::new(
+                500,
+                CurrencyCode::parse("BRL").unwrap(),
+                PricingUnit::Day,
+            )),
         })
         .with_type(ParkingType::Locker)
         .create(&mut *conn)
@@ -191,7 +216,10 @@ async fn open_now_filter_agrees_with_domain_for_all_day_hours(tx: &mut TestTx) {
     req.filters.open_now = true;
     let page = real_search(&req, 20, false).await.unwrap();
     assert_eq!(page.total, 1);
-    assert!(page.items[0].is_open_now, "all-day location must be open now");
+    assert!(
+        page.items[0].is_open_now,
+        "all-day location must be open now"
+    );
     cleanup_fixture(MARK).await;
 }
 
@@ -206,10 +234,16 @@ async fn non_active_locations_are_hidden_from_search(tx: &mut TestTx) {
         .create(&mut *conn)
         .await
         .unwrap();
-    at(5.0, 60.0).with_fixture_tag(MARK).create(&mut *conn).await.unwrap();
+    at(5.0, 60.0)
+        .with_fixture_tag(MARK)
+        .create(&mut *conn)
+        .await
+        .unwrap();
     tx.commit_fixture().await;
 
-    let page = real_search(&request_at(5.0, Sort::Distance), 20, false).await.unwrap();
+    let page = real_search(&request_at(5.0, Sort::Distance), 20, false)
+        .await
+        .unwrap();
     assert_eq!(page.total, 1);
     cleanup_fixture(MARK).await;
 }
@@ -275,7 +309,9 @@ async fn rating_and_recently_verified_sorts_work(tx: &mut TestTx) {
         .unwrap();
     tx.commit_fixture().await;
 
-    let page = real_search(&request_at(7.0, Sort::Rating), 20, false).await.unwrap();
+    let page = real_search(&request_at(7.0, Sort::Rating), 20, false)
+        .await
+        .unwrap();
     assert!(page.items[0].rating.avg().unwrap() > page.items[1].rating.avg().unwrap());
 
     // Recently verified: never-verified item sorts last (key 0).
@@ -295,7 +331,11 @@ async fn details_assemble_the_full_aggregate(tx: &mut TestTx) {
         .with_fixture_tag(MARK)
         .with_name("Detalhe Completo")
         .with_cost(Cost::Paid {
-            price: Some(Money::new(500, CurrencyCode::parse("BRL").unwrap(), PricingUnit::Day)),
+            price: Some(Money::new(
+                500,
+                CurrencyCode::parse("BRL").unwrap(),
+                PricingUnit::Day,
+            )),
         })
         .with_type(ParkingType::Secured)
         .with_hours(1..=5, (8, 0), (18, 0))
@@ -340,12 +380,22 @@ async fn details_assemble_the_full_aggregate(tx: &mut TestTx) {
     );
     let by_code = |c: &str| details.security().iter().find(|f| f.code() == c).unwrap();
     assert_eq!(by_code("cctv").state(), bikenest_domain::SecurityState::Yes);
-    assert_eq!(by_code("indoor").state(), bikenest_domain::SecurityState::No);
-    assert_eq!(by_code("staffed").state(), bikenest_domain::SecurityState::Unknown);
+    assert_eq!(
+        by_code("indoor").state(),
+        bikenest_domain::SecurityState::No
+    );
+    assert_eq!(
+        by_code("staffed").state(),
+        bikenest_domain::SecurityState::Unknown
+    );
     // Labels are localized in the presentation layer, not stored — only the
     // code round-trips through the reader.
     assert_eq!(by_code("cctv").code(), "cctv");
-    assert_eq!(details.security().len(), 8, "every catalog feature recorded");
+    assert_eq!(
+        details.security().len(),
+        8,
+        "every catalog feature recorded"
+    );
     assert_eq!(details.security_yes_count(), 1);
     cleanup_fixture(MARK).await;
 }

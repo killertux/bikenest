@@ -38,12 +38,11 @@ impl SqlxAccountRepository {
     }
 
     async fn roles_bysql(&self, id: UserId) -> Result<Vec<Role>, sqlx::Error> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT role FROM user_roles WHERE user_id = $1 ORDER BY role",
-        )
-        .bind(id.0)
-        .fetch_all(self.db.pool())
-        .await?;
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT role FROM user_roles WHERE user_id = $1 ORDER BY role")
+                .bind(id.0)
+                .fetch_all(self.db.pool())
+                .await?;
         Ok(rows
             .into_iter()
             .filter_map(|(r,)| Role::from_code(&r))
@@ -63,11 +62,14 @@ struct UserRow {
 #[async_trait]
 impl AccountRepository for SqlxAccountRepository {
     async fn find_by_email(&self, email: &UserEmail) -> Result<Option<User>, AuthError> {
-        let row = sqlx::query_as::<_, UserRow>(r#"
+        let row = sqlx::query_as::<_, UserRow>(
+            r#"
             SELECT id, email, display_name, account_state, email_verified_at
             FROM users
             WHERE email = $1
-            "#).bind(email.as_str())
+            "#,
+        )
+        .bind(email.as_str())
         .fetch_optional(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;
@@ -78,11 +80,14 @@ impl AccountRepository for SqlxAccountRepository {
     }
 
     async fn find_by_id(&self, id: UserId) -> Result<Option<User>, AuthError> {
-        let row = sqlx::query_as::<_, UserRow>(r#"
+        let row = sqlx::query_as::<_, UserRow>(
+            r#"
             SELECT id, email, display_name, account_state, email_verified_at
             FROM users
             WHERE id = $1
-            "#).bind(id.0)
+            "#,
+        )
+        .bind(id.0)
         .fetch_optional(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;
@@ -93,7 +98,12 @@ impl AccountRepository for SqlxAccountRepository {
     }
 
     async fn create(&self, new: NewAccount<'_>) -> Result<UserId, AuthError> {
-        let mut tx = self.db.pool().begin().await.map_err(|_| AuthError::Internal)?;
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(|_| AuthError::Internal)?;
         let (id,): (i64,) = sqlx::query_as(
             r#"
             INSERT INTO users (email, display_name, account_state, updated_at)
@@ -124,13 +134,11 @@ impl AccountRepository for SqlxAccountRepository {
             .map_err(|_| AuthError::Internal)?;
         }
 
-        sqlx::query(
-            "INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, 'USER', NULL)",
-        )
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|_| AuthError::Internal)?;
+        sqlx::query("INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, 'USER', NULL)")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| AuthError::Internal)?;
 
         tx.commit().await.map_err(|_| AuthError::Internal)?;
         Ok(UserId(id))
@@ -157,7 +165,12 @@ impl AccountRepository for SqlxAccountRepository {
     }
 
     async fn update_canonical_email(&self, id: UserId, email: &UserEmail) -> Result<(), AuthError> {
-        let mut tx = self.db.pool().begin().await.map_err(|_| AuthError::Internal)?;
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(|_| AuthError::Internal)?;
         sqlx::query("UPDATE users SET email = $2, updated_at = now() WHERE id = $1")
             .bind(id.0)
             .bind(email.as_str())
@@ -178,8 +191,18 @@ impl AccountRepository for SqlxAccountRepository {
         Ok(())
     }
 
-    async fn confirm_email(&self, id: UserId, at: DateTime<Utc>, email: &UserEmail) -> Result<(), AuthError> {
-        let mut tx = self.db.pool().begin().await.map_err(|_| AuthError::Internal)?;
+    async fn confirm_email(
+        &self,
+        id: UserId,
+        at: DateTime<Utc>,
+        email: &UserEmail,
+    ) -> Result<(), AuthError> {
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(|_| AuthError::Internal)?;
         // email_verified_at + advance to Active + (if different) switch the
         // canonical email, all in one transaction (§2/§20).
         sqlx::query(
@@ -249,7 +272,7 @@ impl AccountRepository for SqlxAccountRepository {
         provider: AuthenticationProvider,
         subject: &str,
     ) -> Result<Option<IdentityRecord>, AuthError> {
-#[derive(sqlx::FromRow)]
+        #[derive(sqlx::FromRow)]
         struct Row {
             id: i64,
             user_id: i64,
@@ -257,18 +280,22 @@ impl AccountRepository for SqlxAccountRepository {
             provider_subject: String,
             credential_hash: Option<String>,
         }
-        let row = sqlx::query_as::<_, Row>(r#"
+        let row = sqlx::query_as::<_, Row>(
+            r#"
             SELECT id, user_id, provider, provider_subject, credential_hash
             FROM authentication_identities
             WHERE provider = $1 AND provider_subject = $2
-            "#).bind(provider.as_code()).bind(subject)
+            "#,
+        )
+        .bind(provider.as_code())
+        .bind(subject)
         .fetch_optional(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;
         match row {
             Some(r) => {
-                let provider = AuthenticationProvider::from_code(&r.provider)
-                    .ok_or(AuthError::Internal)?;
+                let provider =
+                    AuthenticationProvider::from_code(&r.provider).ok_or(AuthError::Internal)?;
                 Ok(Some(IdentityRecord {
                     id: r.id,
                     user_id: UserId(r.user_id),
@@ -310,11 +337,13 @@ impl AccountRepository for SqlxAccountRepository {
     }
 
     async fn list_users(&self) -> Result<Vec<User>, AuthError> {
-        let rows = sqlx::query_as::<_, UserRow>(r#"
+        let rows = sqlx::query_as::<_, UserRow>(
+            r#"
             SELECT id, email, display_name, account_state, email_verified_at
             FROM users
             ORDER BY id DESC
-            "#)
+            "#,
+        )
         .fetch_all(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;

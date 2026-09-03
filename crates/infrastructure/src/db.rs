@@ -1,5 +1,5 @@
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 
 /// Real PostgreSQL connection + migration runner (SQLx, hand-written SQL — §9/§10).
 #[derive(Debug, Clone)]

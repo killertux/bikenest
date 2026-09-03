@@ -12,7 +12,9 @@ use bikenest_application::Geocoder;
 use bikenest_infrastructure::MapboxGeocoder;
 
 fn token() -> Option<String> {
-    std::env::var("MAPBOX_TEST_TOKEN").ok().filter(|t| !t.is_empty())
+    std::env::var("MAPBOX_TEST_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
 }
 
 /// The blank-query guard runs before any network call, so it is not gated.

@@ -177,12 +177,12 @@ impl ValKeyRateLimiter {
                 Ok(ValKeyConn::Single(manager))
             }
             ValKeyConfig::Cluster(urls) => {
-                let client = redis::cluster::ClusterClient::new(urls.clone())
-                    .map_err(|e| RateLimitError::Unexpected(format!("valkey cluster connect: {e}")))?;
-                let conn = client
-                    .get_async_connection()
-                    .await
-                    .map_err(|e| RateLimitError::Unexpected(format!("valkey cluster connect: {e}")))?;
+                let client = redis::cluster::ClusterClient::new(urls.clone()).map_err(|e| {
+                    RateLimitError::Unexpected(format!("valkey cluster connect: {e}"))
+                })?;
+                let conn = client.get_async_connection().await.map_err(|e| {
+                    RateLimitError::Unexpected(format!("valkey cluster connect: {e}"))
+                })?;
                 Ok(ValKeyConn::Cluster(conn))
             }
         }
@@ -274,24 +274,23 @@ pub fn rate_limiter_from_env() -> Box<dyn RateLimiter> {
             .map(|n| n.trim().to_string())
             .filter(|n| !n.is_empty())
             .collect::<Vec<_>>()
-    }) {
-        if !nodes.is_empty() {
-            match ValKeyRateLimiter::cluster(nodes, fail_open) {
-                Ok(l) => return Box::new(l),
-                Err(e) => {
-                    tracing::warn!(error = %e, "VALKEY_CLUSTER_URLS invalid; falling back to in-memory");
-                }
+    }) && !nodes.is_empty()
+    {
+        match ValKeyRateLimiter::cluster(nodes, fail_open) {
+            Ok(l) => return Box::new(l),
+            Err(e) => {
+                tracing::warn!(error = %e, "VALKEY_CLUSTER_URLS invalid; falling back to in-memory");
             }
         }
     }
 
-    if let Ok(url) = std::env::var("VALKEY_URL") {
-        if !url.is_empty() {
-            match ValKeyRateLimiter::single(url, fail_open) {
-                Ok(l) => return Box::new(l),
-                Err(e) => {
-                    tracing::warn!(error = %e, "VALKEY_URL invalid; falling back to in-memory");
-                }
+    if let Ok(url) = std::env::var("VALKEY_URL")
+        && !url.is_empty()
+    {
+        match ValKeyRateLimiter::single(url, fail_open) {
+            Ok(l) => return Box::new(l),
+            Err(e) => {
+                tracing::warn!(error = %e, "VALKEY_URL invalid; falling back to in-memory");
             }
         }
     }

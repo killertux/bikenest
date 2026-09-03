@@ -143,7 +143,13 @@ impl PhotoRepository for SqlxPhotoRepository {
         Ok(())
     }
 
-    async fn approve(&self, kind: PhotoKind, id: i64, moderator: UserId, position: i32) -> Result<(), PhotoError> {
+    async fn approve(
+        &self,
+        kind: PhotoKind,
+        id: i64,
+        moderator: UserId,
+        position: i32,
+    ) -> Result<(), PhotoError> {
         let rows = sqlx::query(&format!(
             "UPDATE {} SET moderation_state = 'APPROVED', position = $3, reviewed_by = $2, reviewed_at = now() \
              WHERE id = $1 AND moderation_state = 'PENDING_REVIEW'",
@@ -228,7 +234,11 @@ impl PhotoRepository for SqlxPhotoRepository {
             .collect())
     }
 
-    async fn get_for_moderation(&self, kind: PhotoKind, id: i64) -> Result<Option<PhotoForModeration>, PhotoError> {
+    async fn get_for_moderation(
+        &self,
+        kind: PhotoKind,
+        id: i64,
+    ) -> Result<Option<PhotoForModeration>, PhotoError> {
         let (table, parent_col) = (kind.table(), parent_col(kind));
         let row = sqlx::query_as::<_, ModRow>(&format!(
             "SELECT id, {parent_col} AS parent_id, moderation_state, storage_key, thumbnail_key FROM {table} WHERE id = $1"

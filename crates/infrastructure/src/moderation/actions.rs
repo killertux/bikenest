@@ -62,7 +62,11 @@ struct LocationRow {
 
 #[async_trait]
 impl ModerationRepository for SqlxModerationRepository {
-    async fn target_exists(&self, target_type: ReportTargetType, target_id: i64) -> Result<bool, ModerationError> {
+    async fn target_exists(
+        &self,
+        target_type: ReportTargetType,
+        target_id: i64,
+    ) -> Result<bool, ModerationError> {
         let sql = match target_type {
             ReportTargetType::Parking => "SELECT 1 FROM parking_location WHERE id = $1",
             ReportTargetType::ParkingPhoto => "SELECT 1 FROM parking_photo WHERE id = $1",
@@ -79,8 +83,11 @@ impl ModerationRepository for SqlxModerationRepository {
 
     async fn hide_review(&self, id: i64, moderator: UserId) -> Result<(), ModerationError> {
         let _ = moderator;
-        let res = sqlx::query("UPDATE review SET moderation_state = 'HIDDEN', updated_at = now()
-             WHERE id = $1 AND moderation_state = 'ACTIVE'").bind(id)
+        let res = sqlx::query(
+            "UPDATE review SET moderation_state = 'HIDDEN', updated_at = now()
+             WHERE id = $1 AND moderation_state = 'ACTIVE'",
+        )
+        .bind(id)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -92,8 +99,11 @@ impl ModerationRepository for SqlxModerationRepository {
 
     async fn restore_review(&self, id: i64, moderator: UserId) -> Result<(), ModerationError> {
         let _ = moderator;
-        let res = sqlx::query("UPDATE review SET moderation_state = 'ACTIVE', updated_at = now()
-             WHERE id = $1 AND moderation_state = 'HIDDEN'").bind(id)
+        let res = sqlx::query(
+            "UPDATE review SET moderation_state = 'ACTIVE', updated_at = now()
+             WHERE id = $1 AND moderation_state = 'HIDDEN'",
+        )
+        .bind(id)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -103,7 +113,12 @@ impl ModerationRepository for SqlxModerationRepository {
         Ok(())
     }
 
-    async fn hide_photo(&self, kind: PhotoKind, id: i64, moderator: UserId) -> Result<(), ModerationError> {
+    async fn hide_photo(
+        &self,
+        kind: PhotoKind,
+        id: i64,
+        moderator: UserId,
+    ) -> Result<(), ModerationError> {
         let table = kind.table();
         let res = sqlx::query(&format!(
             "UPDATE {table}
@@ -121,7 +136,12 @@ impl ModerationRepository for SqlxModerationRepository {
         Ok(())
     }
 
-    async fn restore_photo(&self, kind: PhotoKind, id: i64, moderator: UserId) -> Result<(), ModerationError> {
+    async fn restore_photo(
+        &self,
+        kind: PhotoKind,
+        id: i64,
+        moderator: UserId,
+    ) -> Result<(), ModerationError> {
         let table = kind.table();
         let res = sqlx::query(&format!(
             "UPDATE {table}
@@ -149,14 +169,19 @@ impl ModerationRepository for SqlxModerationRepository {
         let from_codes: Vec<String> = from.iter().map(|s| s.as_code().to_string()).collect();
         let mut tx = self.db.pool().begin().await.map_err(map_err)?;
 
-        let row = sqlx::query_as::<_, LocationRow>(r#"
+        let row = sqlx::query_as::<_, LocationRow>(
+            r#"
             UPDATE parking_location
             SET moderation_state = $2, version = version + 1, updated_at = now()
             WHERE id = $1 AND moderation_state = ANY($3)
             RETURNING id, name, address, description, parking_type, cost_kind, price_cents,
                       price_currency, price_unit, lat, lon, timezone, hours_unknown,
                       moderation_state, version
-            "#).bind(id).bind(to.as_code()).bind(&from_codes)
+            "#,
+        )
+        .bind(id)
+        .bind(to.as_code())
+        .bind(&from_codes)
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_err)?;
@@ -165,20 +190,30 @@ impl ModerationRepository for SqlxModerationRepository {
         };
 
         let snapshot = snapshot_with(&mut tx, &row).await?;
-        insert_revision(&mut tx, row.id, row.version, moderator, "moderated", snapshot).await?;
+        insert_revision(
+            &mut tx,
+            row.id,
+            row.version,
+            moderator,
+            "moderated",
+            snapshot,
+        )
+        .await?;
         tx.commit().await.map_err(map_err)?;
         Ok(())
     }
 
     async fn list_pending_proposals(&self) -> Result<Vec<Proposal>, ModerationError> {
-        let rows = sqlx::query_as::<_, ProposalRow>(r#"
+        let rows = sqlx::query_as::<_, ProposalRow>(
+            r#"
             SELECT p.id, p.location_id, l.name AS location_name, p.proposer_id, p.base_version,
                    p.kind, p.proposed, p.status, p.created_at
             FROM parking_proposal p
             JOIN parking_location l ON l.id = p.location_id
             WHERE p.status = 'PENDING'
             ORDER BY p.created_at, p.id
-            "#)
+            "#,
+        )
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -186,13 +221,16 @@ impl ModerationRepository for SqlxModerationRepository {
     }
 
     async fn get_proposal(&self, id: i64) -> Result<Option<Proposal>, ModerationError> {
-        let row = sqlx::query_as::<_, ProposalRow>(r#"
+        let row = sqlx::query_as::<_, ProposalRow>(
+            r#"
             SELECT p.id, p.location_id, l.name AS location_name, p.proposer_id, p.base_version,
                    p.kind, p.proposed, p.status, p.created_at
             FROM parking_proposal p
             JOIN parking_location l ON l.id = p.location_id
             WHERE p.id = $1
-            "#).bind(id)
+            "#,
+        )
+        .bind(id)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -210,7 +248,10 @@ impl ModerationRepository for SqlxModerationRepository {
     ) -> Result<(), ModerationError> {
         let mut tx = self.db.pool().begin().await.map_err(map_err)?;
 
-        let prop = sqlx::query_as::<_, ProposalLockRow>("SELECT location_id, status FROM parking_proposal WHERE id = $1 FOR UPDATE").bind(id)
+        let prop = sqlx::query_as::<_, ProposalLockRow>(
+            "SELECT location_id, status FROM parking_proposal WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_err)?;
@@ -224,7 +265,8 @@ impl ModerationRepository for SqlxModerationRepository {
 
         let row = match &applied {
             ProposalApplication::MoveLocation { lat, lon, timezone } => {
-                sqlx::query_as::<_, LocationRow>(r#"
+                sqlx::query_as::<_, LocationRow>(
+                    r#"
                     UPDATE parking_location
                     SET location = ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography,
                         timezone = $3, version = version + 1, updated_at = now()
@@ -232,21 +274,30 @@ impl ModerationRepository for SqlxModerationRepository {
                     RETURNING id, name, address, description, parking_type, cost_kind, price_cents,
                               price_currency, price_unit, lat, lon, timezone, hours_unknown,
                               moderation_state, version
-                    "#).bind(lat).bind(lon).bind(timezone.name()).bind(location_id)
+                    "#,
+                )
+                .bind(lat)
+                .bind(lon)
+                .bind(timezone.name())
+                .bind(location_id)
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(map_err)?
             }
             ProposalApplication::ChangeExistence { exists } => {
                 let state = if *exists { "ACTIVE" } else { "REMOVED" };
-                sqlx::query_as::<_, LocationRow>(r#"
+                sqlx::query_as::<_, LocationRow>(
+                    r#"
                     UPDATE parking_location
                     SET moderation_state = $2, version = version + 1, updated_at = now()
                     WHERE id = $1
                     RETURNING id, name, address, description, parking_type, cost_kind, price_cents,
                               price_currency, price_unit, lat, lon, timezone, hours_unknown,
                               moderation_state, version
-                    "#).bind(location_id).bind(state)
+                    "#,
+                )
+                .bind(location_id)
+                .bind(state)
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(map_err)?
@@ -261,7 +312,15 @@ impl ModerationRepository for SqlxModerationRepository {
             ProposalApplication::MoveLocation { .. } => "proposal applied (move)",
             ProposalApplication::ChangeExistence { .. } => "proposal applied (existence)",
         };
-        insert_revision(&mut tx, location_id, row.version, moderator, summary, snapshot).await?;
+        insert_revision(
+            &mut tx,
+            location_id,
+            row.version,
+            moderator,
+            summary,
+            snapshot,
+        )
+        .await?;
 
         sqlx::query("UPDATE parking_proposal SET status = 'APPROVED', resolved_by = $2, resolved_at = now() WHERE id = $1")
             .bind(id)
@@ -281,10 +340,19 @@ impl ModerationRepository for SqlxModerationRepository {
         Ok(())
     }
 
-    async fn reject_proposal(&self, id: i64, moderator: UserId, reason: &str) -> Result<(), ModerationError> {
+    async fn reject_proposal(
+        &self,
+        id: i64,
+        moderator: UserId,
+        reason: &str,
+    ) -> Result<(), ModerationError> {
         let _ = reason;
-        let res = sqlx::query("UPDATE parking_proposal SET status = 'REJECTED', resolved_by = $2, resolved_at = now()
-             WHERE id = $1 AND status = 'PENDING'").bind(id).bind(moderator.0)
+        let res = sqlx::query(
+            "UPDATE parking_proposal SET status = 'REJECTED', resolved_by = $2, resolved_at = now()
+             WHERE id = $1 AND status = 'PENDING'",
+        )
+        .bind(id)
+        .bind(moderator.0)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -348,7 +416,12 @@ async fn snapshot_with(
 ) -> Result<serde_json::Value, ModerationError> {
     let hours = read_hours_json(tx, row.id, row.hours_unknown).await?;
     let security = read_security_json(tx, row.id).await?;
-    let cost = cost_json(&row.cost_kind, row.price_cents, row.price_currency.as_deref(), row.price_unit.as_deref());
+    let cost = cost_json(
+        &row.cost_kind,
+        row.price_cents,
+        row.price_currency.as_deref(),
+        row.price_unit.as_deref(),
+    );
     Ok(serde_json::json!({
         "name": row.name,
         "address": row.address,
@@ -368,7 +441,7 @@ async fn read_hours_json(
     location_id: i64,
     unknown: bool,
 ) -> Result<serde_json::Value, ModerationError> {
-#[derive(sqlx::FromRow)]
+    #[derive(sqlx::FromRow)]
     struct HourRow {
         day_of_week: i16,
         opens_at: chrono::NaiveTime,
@@ -397,12 +470,15 @@ async fn read_security_json(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     location_id: i64,
 ) -> Result<serde_json::Value, ModerationError> {
-#[derive(sqlx::FromRow)]
+    #[derive(sqlx::FromRow)]
     struct SecRow {
         feature_code: String,
         state: i16,
     }
-    let rows = sqlx::query_as::<_, SecRow>("SELECT feature_code, state FROM parking_security WHERE location_id = $1").bind(location_id)
+    let rows = sqlx::query_as::<_, SecRow>(
+        "SELECT feature_code, state FROM parking_security WHERE location_id = $1",
+    )
+    .bind(location_id)
     .fetch_all(&mut **tx)
     .await
     .map_err(map_err)?;
@@ -423,7 +499,9 @@ fn cost_json(
         "free" => serde_json::json!({ "kind": "free" }),
         "unknown" => serde_json::json!({ "kind": "unknown" }),
         "paid" => match (cents, currency, unit) {
-            (Some(c), Some(cur), Some(u)) => serde_json::json!({ "kind": "paid", "cents": c, "currency": cur, "unit": u }),
+            (Some(c), Some(cur), Some(u)) => {
+                serde_json::json!({ "kind": "paid", "cents": c, "currency": cur, "unit": u })
+            }
             _ => serde_json::json!({ "kind": "paid" }),
         },
         _ => serde_json::json!({ "kind": "unknown" }),

@@ -5,10 +5,10 @@
 
 use async_trait::async_trait;
 use bikenest_application::{
-    AuditFilter, AuditLog, AuditLogReader, AuditPage, AuthenticatedUser,
-    ContributionHistoryReader, ContributionItem, ModerationDeps, ModerationError,
-    ModerationRepository, ModerationService, PhotoKind, Proposal, ProposalApplication,
-    Report, ReportRepository, RateLimitError, RateLimiter,
+    AuditFilter, AuditLog, AuditLogReader, AuditPage, AuthenticatedUser, ContributionHistoryReader,
+    ContributionItem, ModerationDeps, ModerationError, ModerationRepository, ModerationService,
+    PhotoKind, Proposal, ProposalApplication, RateLimitError, RateLimiter, Report,
+    ReportRepository,
 };
 use bikenest_domain::{
     AccountState, ModerationLimits, ModerationState, ProposalKind, ProposalStatus, ReportOutcome,
@@ -54,7 +54,9 @@ impl FakeReports {
 #[async_trait]
 impl ReportRepository for FakeReports {
     async fn create(&self, r: &bikenest_application::NewReport) -> Result<i64, ModerationError> {
-        let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.rows.lock().unwrap().insert(
             id,
             Report {
@@ -80,7 +82,7 @@ impl ReportRepository for FakeReports {
             .lock()
             .unwrap()
             .values()
-            .filter(|r| state.map_or(true, |s| r.state == s))
+            .filter(|r| state.is_none_or(|s| r.state == s))
             .cloned()
             .collect())
     }
@@ -158,11 +160,21 @@ impl ModerationRepository for FakeModeration {
         self.restored_reviews.lock().unwrap().push(id);
         Ok(())
     }
-    async fn hide_photo(&self, kind: PhotoKind, id: i64, _m: UserId) -> Result<(), ModerationError> {
+    async fn hide_photo(
+        &self,
+        kind: PhotoKind,
+        id: i64,
+        _m: UserId,
+    ) -> Result<(), ModerationError> {
         self.hidden_photos.lock().unwrap().push((kind, id));
         Ok(())
     }
-    async fn restore_photo(&self, kind: PhotoKind, id: i64, _m: UserId) -> Result<(), ModerationError> {
+    async fn restore_photo(
+        &self,
+        kind: PhotoKind,
+        id: i64,
+        _m: UserId,
+    ) -> Result<(), ModerationError> {
         self.restored_photos.lock().unwrap().push((kind, id));
         Ok(())
     }
@@ -195,7 +207,10 @@ impl ModerationRepository for FakeModeration {
         applied: ProposalApplication,
     ) -> Result<(), ModerationError> {
         let mut props = self.pending_proposals.lock().unwrap();
-        let p = props.iter_mut().find(|p| p.id == id).ok_or(ModerationError::NotFound)?;
+        let p = props
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or(ModerationError::NotFound)?;
         if p.status != ProposalStatus::Pending {
             return Err(ModerationError::InvalidState);
         }
@@ -205,7 +220,10 @@ impl ModerationRepository for FakeModeration {
     }
     async fn reject_proposal(&self, id: i64, _m: UserId, _r: &str) -> Result<(), ModerationError> {
         let mut props = self.pending_proposals.lock().unwrap();
-        let p = props.iter_mut().find(|p| p.id == id).ok_or(ModerationError::NotFound)?;
+        let p = props
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or(ModerationError::NotFound)?;
         if p.status != ProposalStatus::Pending {
             return Err(ModerationError::InvalidState);
         }
@@ -219,7 +237,10 @@ struct FakeAuditReader;
 #[async_trait]
 impl AuditLogReader for FakeAuditReader {
     async fn list(&self, _f: AuditFilter) -> Result<AuditPage, bikenest_application::AuditError> {
-        Ok(AuditPage { items: Vec::new(), next_cursor: None })
+        Ok(AuditPage {
+            items: Vec::new(),
+            next_cursor: None,
+        })
     }
 }
 
@@ -227,7 +248,10 @@ impl AuditLogReader for FakeAuditReader {
 struct FakeHistory;
 #[async_trait]
 impl ContributionHistoryReader for FakeHistory {
-    async fn history(&self, _u: UserId) -> Result<Vec<ContributionItem>, bikenest_application::ContributionError> {
+    async fn history(
+        &self,
+        _u: UserId,
+    ) -> Result<Vec<ContributionItem>, bikenest_application::ContributionError> {
         Ok(Vec::new())
     }
 }
@@ -247,7 +271,10 @@ impl RateLimiter for FakeRate {
 struct FakeAudit(Arc<Mutex<Vec<String>>>);
 #[async_trait]
 impl AuditLog for FakeAudit {
-    async fn record(&self, e: bikenest_application::AuditEvent) -> Result<(), bikenest_application::AuditError> {
+    async fn record(
+        &self,
+        e: bikenest_application::AuditEvent,
+    ) -> Result<(), bikenest_application::AuditError> {
         self.0.lock().unwrap().push(e.action);
         Ok(())
     }
@@ -307,7 +334,11 @@ fn harness(allow_rate: bool) -> Harness {
         rate_limiter: Box::new(FakeRate { allow: allow_rate }),
         limits: ModerationLimits::default(),
     });
-    Harness { service, moderation, audit }
+    Harness {
+        service,
+        moderation,
+        audit,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -320,14 +351,32 @@ async fn submit_report_happy_path_persists_open_and_audits() {
     h.moderation.target_exists.lock().unwrap().clone_from(&true);
     let id = h
         .service
-        .submit_report(&reporter(), "1.2.3.4", ReportTargetType::Review, 5, "spam", Some("bad".to_string()))
+        .submit_report(
+            &reporter(),
+            "1.2.3.4",
+            ReportTargetType::Review,
+            5,
+            "spam",
+            Some("bad".to_string()),
+        )
         .await
         .unwrap();
     assert!(id > 0);
-    let stored = h.service.get_report(&moderator(), id).await.unwrap().unwrap();
+    let stored = h
+        .service
+        .get_report(&moderator(), id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(stored.state, ReportState::Open);
     assert_eq!(stored.reason, "spam");
-    assert!(h.audit.0.lock().unwrap().contains(&"report.created".to_string()));
+    assert!(
+        h.audit
+            .0
+            .lock()
+            .unwrap()
+            .contains(&"report.created".to_string())
+    );
 }
 
 #[tokio::test]
@@ -335,7 +384,16 @@ async fn submit_report_rejects_unknown_reason() {
     let h = harness(true);
     h.moderation.target_exists.lock().unwrap().clone_from(&true);
     assert!(matches!(
-        h.service.submit_report(&reporter(), "1.2.3.4", ReportTargetType::Parking, 1, "bogus", None).await,
+        h.service
+            .submit_report(
+                &reporter(),
+                "1.2.3.4",
+                ReportTargetType::Parking,
+                1,
+                "bogus",
+                None
+            )
+            .await,
         Err(ModerationError::InvalidReason)
     ));
 }
@@ -346,7 +404,16 @@ async fn submit_report_rejects_reason_not_allowed_for_target() {
     h.moderation.target_exists.lock().unwrap().clone_from(&true);
     // inappropriate_photo is not allowed on a parking location.
     assert!(matches!(
-        h.service.submit_report(&reporter(), "1.2.3.4", ReportTargetType::Parking, 1, "inappropriate_photo", None).await,
+        h.service
+            .submit_report(
+                &reporter(),
+                "1.2.3.4",
+                ReportTargetType::Parking,
+                1,
+                "inappropriate_photo",
+                None
+            )
+            .await,
         Err(ModerationError::InvalidReason)
     ));
 }
@@ -354,9 +421,22 @@ async fn submit_report_rejects_reason_not_allowed_for_target() {
 #[tokio::test]
 async fn submit_report_returns_target_not_found() {
     let h = harness(true);
-    h.moderation.target_exists.lock().unwrap().clone_from(&false);
+    h.moderation
+        .target_exists
+        .lock()
+        .unwrap()
+        .clone_from(&false);
     assert!(matches!(
-        h.service.submit_report(&reporter(), "1.2.3.4", ReportTargetType::Review, 999, "spam", None).await,
+        h.service
+            .submit_report(
+                &reporter(),
+                "1.2.3.4",
+                ReportTargetType::Review,
+                999,
+                "spam",
+                None
+            )
+            .await,
         Err(ModerationError::TargetNotFound)
     ));
 }
@@ -366,7 +446,16 @@ async fn submit_report_is_rate_limited() {
     let h = harness(false);
     h.moderation.target_exists.lock().unwrap().clone_from(&true);
     assert!(matches!(
-        h.service.submit_report(&reporter(), "1.2.3.4", ReportTargetType::Parking, 1, "spam", None).await,
+        h.service
+            .submit_report(
+                &reporter(),
+                "1.2.3.4",
+                ReportTargetType::Parking,
+                1,
+                "spam",
+                None
+            )
+            .await,
         Err(ModerationError::RateLimited)
     ));
 }
@@ -378,7 +467,14 @@ async fn resolve_own_report_is_self_resolve() {
     let mod_reporter = user(1, vec![Role::Moderator]);
     let id = h
         .service
-        .submit_report(&mod_reporter, "1.2.3.4", ReportTargetType::Parking, 1, "spam", None)
+        .submit_report(
+            &mod_reporter,
+            "1.2.3.4",
+            ReportTargetType::Parking,
+            1,
+            "spam",
+            None,
+        )
         .await
         .unwrap();
     let err = h
@@ -394,7 +490,14 @@ async fn claim_then_resolve_flow_audits_both() {
     let h = harness(true);
     let id = h
         .service
-        .submit_report(&reporter(), "1.2.3.4", ReportTargetType::Parking, 1, "spam", None)
+        .submit_report(
+            &reporter(),
+            "1.2.3.4",
+            ReportTargetType::Parking,
+            1,
+            "spam",
+            None,
+        )
         .await
         .unwrap();
     h.service.claim_report(&moderator(), id).await.unwrap();
@@ -402,11 +505,28 @@ async fn claim_then_resolve_flow_audits_both() {
         .resolve_report(&moderator(), id, ReportOutcome::Resolved, "removed listing")
         .await
         .unwrap();
-    let stored = h.service.get_report(&moderator(), id).await.unwrap().unwrap();
+    let stored = h
+        .service
+        .get_report(&moderator(), id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(stored.state, ReportState::Resolved);
     assert_eq!(stored.resolved_by, Some(UserId(2)));
-    assert!(h.audit.0.lock().unwrap().contains(&"report.claimed".to_string()));
-    assert!(h.audit.0.lock().unwrap().contains(&"report.resolved".to_string()));
+    assert!(
+        h.audit
+            .0
+            .lock()
+            .unwrap()
+            .contains(&"report.claimed".to_string())
+    );
+    assert!(
+        h.audit
+            .0
+            .lock()
+            .unwrap()
+            .contains(&"report.resolved".to_string())
+    );
 }
 
 #[tokio::test]
@@ -432,60 +552,131 @@ async fn hide_and_restore_review_audits() {
     h.service.hide_review(&moderator(), 7).await.unwrap();
     h.service.restore_review(&moderator(), 7).await.unwrap();
     assert_eq!(h.moderation.hidden_reviews.lock().unwrap().as_slice(), &[7]);
-    assert_eq!(h.moderation.restored_reviews.lock().unwrap().as_slice(), &[7]);
-    assert!(h.audit.0.lock().unwrap().contains(&"review.hidden".to_string()));
-    assert!(h.audit.0.lock().unwrap().contains(&"review.restored".to_string()));
+    assert_eq!(
+        h.moderation.restored_reviews.lock().unwrap().as_slice(),
+        &[7]
+    );
+    assert!(
+        h.audit
+            .0
+            .lock()
+            .unwrap()
+            .contains(&"review.hidden".to_string())
+    );
+    assert!(
+        h.audit
+            .0
+            .lock()
+            .unwrap()
+            .contains(&"review.restored".to_string())
+    );
 }
 
 #[tokio::test]
 async fn invalidate_and_restore_parking_audits() {
     let h = harness(true);
-    h.service.invalidate_parking(&moderator(), 10).await.unwrap();
+    h.service
+        .invalidate_parking(&moderator(), 10)
+        .await
+        .unwrap();
     // The fake only keeps the latest state (restore overwrites invalid), so we
     // assert on the audit trail + final state rather than both intermediate ones.
     h.service.restore_parking(&moderator(), 10).await.unwrap();
     let states = h.moderation.parking_states.lock().unwrap();
     assert_eq!(states.get(&10), Some(&ModerationState::Active));
     drop(states);
-    assert!(h.audit.0.lock().unwrap().contains(&"parking.invalidated".to_string()));
-    assert!(h.audit.0.lock().unwrap().contains(&"parking.restored".to_string()));
+    assert!(
+        h.audit
+            .0
+            .lock()
+            .unwrap()
+            .contains(&"parking.invalidated".to_string())
+    );
+    assert!(
+        h.audit
+            .0
+            .lock()
+            .unwrap()
+            .contains(&"parking.restored".to_string())
+    );
 }
 
 #[tokio::test]
 async fn approve_and_reject_proposal() {
     let h = harness(true);
-    h.moderation.pending_proposals.lock().unwrap().push(proposal(
-        1,
-        ProposalKind::MoveLocation,
-        serde_json::json!({ "lat": -25.0, "lon": -49.0, "timezone": "America/Sao_Paulo" }),
-    ));
-    h.moderation.pending_proposals.lock().unwrap().push(proposal(
-        2,
-        ProposalKind::ChangeExistence,
-        serde_json::json!({ "existence": "removed" }),
-    ));
+    h.moderation
+        .pending_proposals
+        .lock()
+        .unwrap()
+        .push(proposal(
+            1,
+            ProposalKind::MoveLocation,
+            serde_json::json!({ "lat": -25.0, "lon": -49.0, "timezone": "America/Sao_Paulo" }),
+        ));
+    h.moderation
+        .pending_proposals
+        .lock()
+        .unwrap()
+        .push(proposal(
+            2,
+            ProposalKind::ChangeExistence,
+            serde_json::json!({ "existence": "removed" }),
+        ));
 
     let applied = ProposalApplication::from_proposed(
         ProposalKind::MoveLocation,
         &serde_json::json!({ "lat": -25.0, "lon": -49.0, "timezone": "America/Sao_Paulo" }),
     )
     .unwrap();
-    h.service.approve_proposal(&moderator(), 1, applied).await.unwrap();
-    h.service.reject_proposal(&moderator(), 2, "not right").await.unwrap();
+    h.service
+        .approve_proposal(&moderator(), 1, applied)
+        .await
+        .unwrap();
+    h.service
+        .reject_proposal(&moderator(), 2, "not right")
+        .await
+        .unwrap();
 
-    assert!(h.audit.0.lock().unwrap().contains(&"proposal.approved".to_string()));
-    assert!(h.audit.0.lock().unwrap().contains(&"proposal.rejected".to_string()));
+    assert!(
+        h.audit
+            .0
+            .lock()
+            .unwrap()
+            .contains(&"proposal.approved".to_string())
+    );
+    assert!(
+        h.audit
+            .0
+            .lock()
+            .unwrap()
+            .contains(&"proposal.rejected".to_string())
+    );
 }
 
 #[tokio::test]
 async fn without_moderator_role_all_actions_are_unauthorized() {
     let h = harness(true);
     let plain = user(9, vec![]);
-    assert!(matches!(h.service.claim_report(&plain, 1).await, Err(ModerationError::NotAuthorized)));
-    assert!(matches!(h.service.hide_review(&plain, 1).await, Err(ModerationError::NotAuthorized)));
-    assert!(matches!(h.service.invalidate_parking(&plain, 1).await, Err(ModerationError::NotAuthorized)));
-    assert!(matches!(h.service.list_pending_proposals(&plain).await, Err(ModerationError::NotAuthorized)));
-    assert!(matches!(h.service.list_reports(&plain, None).await, Err(ModerationError::NotAuthorized)));
+    assert!(matches!(
+        h.service.claim_report(&plain, 1).await,
+        Err(ModerationError::NotAuthorized)
+    ));
+    assert!(matches!(
+        h.service.hide_review(&plain, 1).await,
+        Err(ModerationError::NotAuthorized)
+    ));
+    assert!(matches!(
+        h.service.invalidate_parking(&plain, 1).await,
+        Err(ModerationError::NotAuthorized)
+    ));
+    assert!(matches!(
+        h.service.list_pending_proposals(&plain).await,
+        Err(ModerationError::NotAuthorized)
+    ));
+    assert!(matches!(
+        h.service.list_reports(&plain, None).await,
+        Err(ModerationError::NotAuthorized)
+    ));
 }
 
 #[tokio::test]
@@ -494,11 +685,17 @@ async fn submission_has_no_role_gate() {
     let h = harness(true);
     h.moderation.target_exists.lock().unwrap().clone_from(&true);
     let fresh = user(77, vec![]);
-    assert!(h
-        .service
-        .submit_report(&fresh, "9.9.9.9", ReportTargetType::Parking, 1, "spam", None)
-        .await
-        .is_ok());
+    assert!(
+        h.service
+            .submit_report(
+                &fresh,
+                "9.9.9.9",
+                ReportTargetType::Parking,
+                1,
+                "spam",
+                None
+            )
+            .await
+            .is_ok()
+    );
 }
-
-

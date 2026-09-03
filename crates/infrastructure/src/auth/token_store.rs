@@ -2,8 +2,8 @@
 //! hashes; single-use is enforced atomically by the `used_at IS NULL` guard in
 //! the `UPDATE … RETURNING` (no read-then-write race).
 
-use crate::auth::hash::sha256_hex;
 use crate::Db;
+use crate::auth::hash::sha256_hex;
 use async_trait::async_trait;
 use bikenest_application::{AuthError, TokenStore};
 use bikenest_domain::{UserId, VerificationToken};
@@ -33,10 +33,16 @@ impl TokenStore for SqlxTokenStore {
     ) -> Result<(), AuthError> {
         let token_hash = sha256_hex(raw.as_bytes());
         let expires_at = now + VERIFICATION_TTL;
-        sqlx::query(r#"
+        sqlx::query(
+            r#"
             INSERT INTO email_verification_tokens (token_hash, user_id, email, expires_at)
             VALUES ($1, $2, $3, $4)
-            "#).bind(token_hash).bind(user_id.0).bind(email).bind(expires_at)
+            "#,
+        )
+        .bind(token_hash)
+        .bind(user_id.0)
+        .bind(email)
+        .bind(expires_at)
         .execute(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;
@@ -49,17 +55,21 @@ impl TokenStore for SqlxTokenStore {
         now: DateTime<Utc>,
     ) -> Result<Option<(UserId, String)>, AuthError> {
         let token_hash = sha256_hex(raw.as_bytes());
-#[derive(sqlx::FromRow)]
+        #[derive(sqlx::FromRow)]
         struct Row {
             user_id: i64,
             email: String,
         }
-        let row = sqlx::query_as::<_, Row>(r#"
+        let row = sqlx::query_as::<_, Row>(
+            r#"
             UPDATE email_verification_tokens
             SET used_at = $2
             WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2
             RETURNING user_id, email
-            "#).bind(token_hash).bind(now)
+            "#,
+        )
+        .bind(token_hash)
+        .bind(now)
         .fetch_optional(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;
@@ -74,10 +84,15 @@ impl TokenStore for SqlxTokenStore {
     ) -> Result<(), AuthError> {
         let token_hash = sha256_hex(raw.as_bytes());
         let expires_at = now + RESET_TTL;
-        sqlx::query(r#"
+        sqlx::query(
+            r#"
             INSERT INTO password_reset_tokens (token_hash, user_id, expires_at)
             VALUES ($1, $2, $3)
-            "#).bind(token_hash).bind(user_id.0).bind(expires_at)
+            "#,
+        )
+        .bind(token_hash)
+        .bind(user_id.0)
+        .bind(expires_at)
         .execute(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;
@@ -90,16 +105,20 @@ impl TokenStore for SqlxTokenStore {
         now: DateTime<Utc>,
     ) -> Result<Option<UserId>, AuthError> {
         let token_hash = sha256_hex(raw.as_bytes());
-#[derive(sqlx::FromRow)]
+        #[derive(sqlx::FromRow)]
         struct Row {
             user_id: i64,
         }
-        let row = sqlx::query_as::<_, Row>(r#"
+        let row = sqlx::query_as::<_, Row>(
+            r#"
             UPDATE password_reset_tokens
             SET used_at = $2
             WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2
             RETURNING user_id
-            "#).bind(token_hash).bind(now)
+            "#,
+        )
+        .bind(token_hash)
+        .bind(now)
         .fetch_optional(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;

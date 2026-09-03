@@ -46,7 +46,10 @@ fn tiff_with_orientation(orientation: u8) -> Vec<u8> {
 
 /// Inject an EXIF APP1 segment (orientation) right after the JPEG SOI.
 fn jpeg_with_exif_orientation(base: &[u8], orientation: u8) -> Vec<u8> {
-    assert!(base.len() >= 4 && base[0] == 0xFF && base[1] == 0xD8, "SOI expected");
+    assert!(
+        base.len() >= 4 && base[0] == 0xFF && base[1] == 0xD8,
+        "SOI expected"
+    );
     let tiff = tiff_with_orientation(orientation);
     let payload_len = 6 + tiff.len(); // "Exif\0\0" + TIFF
     let seg_len = 2 + payload_len; // includes the 2 length bytes
@@ -98,9 +101,18 @@ fn has_exif(jpeg: &[u8]) -> bool {
 #[tokio::test]
 async fn processor_round_trips_jpeg_to_derivatives_without_exif() {
     let source = base_jpeg(800, 600);
-    let out = LocalImageProcessor::new(PhotoLimits::default()).process(&source).await.unwrap();
+    let out = LocalImageProcessor::new(PhotoLimits::default())
+        .process(&source)
+        .await
+        .unwrap();
     assert_eq!(out.content_type, "image/jpeg");
-    assert_eq!(out.dimensions, PhotoDimensions { width: 800, height: 600 });
+    assert_eq!(
+        out.dimensions,
+        PhotoDimensions {
+            width: 800,
+            height: 600
+        }
+    );
     // Both derivatives are non-empty JPEGs.
     assert!(out.full.len() > 1000);
     assert!(out.thumb.len() > 100);
@@ -114,9 +126,21 @@ async fn processor_applies_exif_orientation_then_strips_exif() {
     // Orientation 6 = Rotate90 → a 400x300 source yields a 300x400 derivative.
     let source = base_jpeg(400, 300);
     let oriented = jpeg_with_exif_orientation(&source, 6);
-    let out = LocalImageProcessor::new(PhotoLimits::default()).process(&oriented).await.unwrap();
-    assert_eq!(out.dimensions, PhotoDimensions { width: 300, height: 400 });
-    assert!(!has_exif(&out.full), "EXIF must be stripped after applying orientation");
+    let out = LocalImageProcessor::new(PhotoLimits::default())
+        .process(&oriented)
+        .await
+        .unwrap();
+    assert_eq!(
+        out.dimensions,
+        PhotoDimensions {
+            width: 300,
+            height: 400
+        }
+    );
+    assert!(
+        !has_exif(&out.full),
+        "EXIF must be stripped after applying orientation"
+    );
     assert!(!has_exif(&out.thumb));
 }
 
@@ -125,7 +149,9 @@ async fn processor_rejects_non_allowlisted_format() {
     // BMP magic "BM" is sniffed as BMP → not in the allowlist → UnsupportedFormat.
     let bmp = b"BM\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
     assert!(matches!(
-        LocalImageProcessor::new(PhotoLimits::default()).process(bmp).await,
+        LocalImageProcessor::new(PhotoLimits::default())
+            .process(bmp)
+            .await,
         Err(PhotoError::UnsupportedFormat)
     ));
 }
@@ -133,12 +159,16 @@ async fn processor_rejects_non_allowlisted_format() {
 #[tokio::test]
 async fn processor_rejects_non_image_input_as_undecodable() {
     assert!(matches!(
-        LocalImageProcessor::new(PhotoLimits::default()).process(b"this is definitely not an image").await,
+        LocalImageProcessor::new(PhotoLimits::default())
+            .process(b"this is definitely not an image")
+            .await,
         Err(PhotoError::Undecodable)
     ));
     // Empty input.
     assert!(matches!(
-        LocalImageProcessor::new(PhotoLimits::default()).process(b"").await,
+        LocalImageProcessor::new(PhotoLimits::default())
+            .process(b"")
+            .await,
         Err(PhotoError::Undecodable)
     ));
 }
@@ -146,7 +176,10 @@ async fn processor_rejects_non_image_input_as_undecodable() {
 #[tokio::test]
 async fn processor_thumbnails_to_max_side() {
     let source = base_jpeg(1200, 2400); // tall
-    let out = LocalImageProcessor::new(PhotoLimits::default()).process(&source).await.unwrap();
+    let out = LocalImageProcessor::new(PhotoLimits::default())
+        .process(&source)
+        .await
+        .unwrap();
     // Longest side must be ≤ THUMBNAIL_MAX_SIDE (400); aspect preserved.
     let (w, h) = decode_jpeg_dims(&out.thumb);
     assert!(w <= 400 && h <= 400, "thumb {w}x{h} exceeds 400 max side");
@@ -192,7 +225,11 @@ async fn fresh_fixture(tx: &mut bikenest_test_support::TestTx, email: &str) -> F
             .unwrap();
     }
 
-    let user = UserBuilder::new().with_email(email).create(tx.executor()).await.unwrap();
+    let user = UserBuilder::new()
+        .with_email(email)
+        .create(tx.executor())
+        .await
+        .unwrap();
     let moderator = UserBuilder::new()
         .with_email(&moderator_email)
         .create(tx.executor())
@@ -266,11 +303,15 @@ async fn repo_mark_processed_sets_keys_and_dimensions(tx: &mut bikenest_test_sup
     let repo = SqlxPhotoRepository::new(db().await);
     let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
 
-    repo.mark_processed(PhotoKind::Parking, 
+    repo.mark_processed(
+        PhotoKind::Parking,
         id,
         "uploads/1/full.jpg",
         "uploads/1/thumb.jpg",
-        PhotoDimensions { width: 800, height: 600 },
+        PhotoDimensions {
+            width: 800,
+            height: 600,
+        },
         chrono::Utc::now(),
     )
     .await
@@ -297,18 +338,24 @@ async fn repo_approve_sets_position_and_reviewer(tx: &mut bikenest_test_support:
     let fx = fresh_fixture(tx, "photo-approve@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
     let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
-    repo.mark_processed(PhotoKind::Parking, 
+    repo.mark_processed(
+        PhotoKind::Parking,
         id,
         "uploads/1/full.jpg",
         "uploads/1/thumb.jpg",
-        PhotoDimensions { width: 10, height: 10 },
+        PhotoDimensions {
+            width: 10,
+            height: 10,
+        },
         chrono::Utc::now(),
     )
     .await
     .unwrap();
 
     let moderator = fx.moderator_id;
-    repo.approve(PhotoKind::Parking, id, moderator, 5).await.unwrap();
+    repo.approve(PhotoKind::Parking, id, moderator, 5)
+        .await
+        .unwrap();
 
     let row = sqlx::query!(
         "SELECT moderation_state, position, reviewed_by FROM parking_photo WHERE id = $1",
@@ -322,7 +369,10 @@ async fn repo_approve_sets_position_and_reviewer(tx: &mut bikenest_test_support:
     assert_eq!(row.reviewed_by, Some(moderator.0));
 
     // Approving a non-pending photo again → NotPending.
-    assert!(matches!(repo.approve(PhotoKind::Parking, id, moderator, 6).await, Err(PhotoError::NotPending)));
+    assert!(matches!(
+        repo.approve(PhotoKind::Parking, id, moderator, 6).await,
+        Err(PhotoError::NotPending)
+    ));
 
     cleanup(&fx).await;
 }
@@ -332,20 +382,30 @@ async fn repo_reject_records_reason_and_returns_keys(tx: &mut bikenest_test_supp
     let fx = fresh_fixture(tx, "photo-reject@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
     let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
-    repo.mark_processed(PhotoKind::Parking, 
+    repo.mark_processed(
+        PhotoKind::Parking,
         id,
         "uploads/2/full.jpg",
         "uploads/2/thumb.jpg",
-        PhotoDimensions { width: 10, height: 10 },
+        PhotoDimensions {
+            width: 10,
+            height: 10,
+        },
         chrono::Utc::now(),
     )
     .await
     .unwrap();
 
     let moderator = fx.moderator_id;
-    let rejected = repo.reject(PhotoKind::Parking, id, moderator, "unclear image").await.unwrap();
+    let rejected = repo
+        .reject(PhotoKind::Parking, id, moderator, "unclear image")
+        .await
+        .unwrap();
     assert_eq!(rejected.storage_key, "uploads/2/full.jpg");
-    assert_eq!(rejected.thumbnail_key.as_deref(), Some("uploads/2/thumb.jpg"));
+    assert_eq!(
+        rejected.thumbnail_key.as_deref(),
+        Some("uploads/2/thumb.jpg")
+    );
 
     let row = sqlx::query!(
         "SELECT moderation_state, rejection_reason, reviewed_by FROM parking_photo WHERE id = $1",
@@ -366,11 +426,21 @@ async fn repo_max_position_and_queue_ordering(tx: &mut bikenest_test_support::Te
     let fx = fresh_fixture(tx, "photo-order@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
 
-    assert_eq!(repo.max_position(PhotoTarget::Parking(fx.location_id)).await.unwrap(), 0);
+    assert_eq!(
+        repo.max_position(PhotoTarget::Parking(fx.location_id))
+            .await
+            .unwrap(),
+        0
+    );
     let first = repo.insert_pending(&new_pending(&fx)).await.unwrap();
     let second = repo.insert_pending(&new_pending(&fx)).await.unwrap();
     // max_position counts APPROVED + all photos (position default 0 here).
-    assert_eq!(repo.max_position(PhotoTarget::Parking(fx.location_id)).await.unwrap(), 0);
+    assert_eq!(
+        repo.max_position(PhotoTarget::Parking(fx.location_id))
+            .await
+            .unwrap(),
+        0
+    );
 
     // Both fixture photos must appear in the queue (it may also hold other
     // tests' pending rows — DB is shared), oldest first relative to each other.
@@ -389,21 +459,30 @@ async fn reader_returns_thumbnail_key_for_processed_photo(tx: &mut bikenest_test
     let fx = fresh_fixture(tx, "photo-thumb@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
     let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
-    repo.mark_processed(PhotoKind::Parking, 
+    repo.mark_processed(
+        PhotoKind::Parking,
         id,
         "uploads/3/full.jpg",
         "uploads/3/thumb.jpg",
-        PhotoDimensions { width: 10, height: 10 },
+        PhotoDimensions {
+            width: 10,
+            height: 10,
+        },
         chrono::Utc::now(),
     )
     .await
     .unwrap();
     // Approve so the gallery reader returns it.
-    repo.approve(PhotoKind::Parking, id, fx.moderator_id, 1).await.unwrap();
+    repo.approve(PhotoKind::Parking, id, fx.moderator_id, 1)
+        .await
+        .unwrap();
 
     let reader = SqlxParkingPhotoReader::new(db().await);
     let photos = reader.photos(fx.location_id).await.unwrap();
-    let p = photos.iter().find(|p| p.alt.as_deref() == Some("An alt text")).expect("photo");
+    let p = photos
+        .iter()
+        .find(|p| p.alt.as_deref() == Some("An alt text"))
+        .expect("photo");
     assert_eq!(p.key, "uploads/3/full.jpg");
     assert_eq!(p.thumbnail_key.as_deref(), Some("uploads/3/thumb.jpg"));
 

@@ -12,7 +12,6 @@ use bikenest_application::{
 };
 use bikenest_domain::{PolicyKind, RetentionPolicy, UserId};
 use bikenest_infrastructure::{
-
     Db, SqlxAnonymizationRepository, SqlxExportRepository, SqlxPolicyReader,
     SqlxRetentionRepository,
 };
@@ -54,7 +53,11 @@ fn af(t: impl AsRef<str>) -> DateTime<Utc> {
 
 #[db_test]
 async fn export_payload_excludes_credential_hash(tx: &mut bikenest_test_support::TestTx) {
-    let user = UserBuilder::new().with_email("m6exp@example.com").create(tx.executor()).await.unwrap();
+    let user = UserBuilder::new()
+        .with_email("m6exp@example.com")
+        .create(tx.executor())
+        .await
+        .unwrap();
     let uid = user.id.0;
     sqlx::query(
         "INSERT INTO authentication_identities (user_id, provider, provider_subject, credential_hash) \
@@ -87,7 +90,11 @@ async fn export_payload_excludes_credential_hash(tx: &mut bikenest_test_support:
 async fn export_consume_download_is_single_use_and_distinguishes_errors(
     tx: &mut bikenest_test_support::TestTx,
 ) {
-    let user = UserBuilder::new().with_email("m6exp2@example.com").create(tx.executor()).await.unwrap();
+    let user = UserBuilder::new()
+        .with_email("m6exp2@example.com")
+        .create(tx.executor())
+        .await
+        .unwrap();
     let uid = user.id.0;
     tx.commit_fixture().await;
 
@@ -121,7 +128,10 @@ async fn export_consume_download_is_single_use_and_distinguishes_errors(
         })
         .await
         .unwrap();
-    let e3 = repo.consume_download(id2, &[9u8; 32], now).await.unwrap_err();
+    let e3 = repo
+        .consume_download(id2, &[9u8; 32], now)
+        .await
+        .unwrap_err();
     assert!(matches!(e3, PrivacyError::InvalidToken));
 
     // An expired export reports Expired.
@@ -134,7 +144,10 @@ async fn export_consume_download_is_single_use_and_distinguishes_errors(
         })
         .await
         .unwrap();
-    let e4 = repo.consume_download(id3, &[10u8; 32], now).await.unwrap_err();
+    let e4 = repo
+        .consume_download(id3, &[10u8; 32], now)
+        .await
+        .unwrap_err();
     assert!(matches!(e4, PrivacyError::Expired));
 
     // Clean up the committed fixture user (cascades to exports).
@@ -148,9 +161,18 @@ async fn export_consume_download_is_single_use_and_distinguishes_errors(
 #[db_test]
 async fn anonymize_scrubs_identity_and_nulls_attribution(tx: &mut bikenest_test_support::TestTx) {
     // A location to hang content off of.
-    let loc = ParkingBuilder::new().with_name("M6 Anon").create(tx.executor()).await.unwrap();
+    let loc = ParkingBuilder::new()
+        .with_name("M6 Anon")
+        .create(tx.executor())
+        .await
+        .unwrap();
     let loc_id = loc.id();
-    let user = UserBuilder::new().with_email("m6anon@example.com").with_name("Ada").create(tx.executor()).await.unwrap();
+    let user = UserBuilder::new()
+        .with_email("m6anon@example.com")
+        .with_name("Ada")
+        .create(tx.executor())
+        .await
+        .unwrap();
     let uid = user.id.0;
 
     // Identity + session (private, deleted).
@@ -165,20 +187,32 @@ async fn anonymize_scrubs_identity_and_nulls_attribution(tx: &mut bikenest_test_
     )
     .bind(uid).execute(tx.executor()).await.unwrap();
     sqlx::query("INSERT INTO favorite (user_id, location_id, created_at) VALUES ($1, $2, now())")
-        .bind(uid).bind(loc_id).execute(tx.executor()).await.unwrap();
+        .bind(uid)
+        .bind(loc_id)
+        .execute(tx.executor())
+        .await
+        .unwrap();
 
     // Parked-here (private, deleted).
     sqlx::query(
         "INSERT INTO verification (location_id, user_id, kind, result, created_at, expires_at) \
          VALUES ($1, $2, 'parked_here', 'still_exists', now(), now() + interval '90 days')",
     )
-    .bind(loc_id).bind(uid).execute(tx.executor()).await.unwrap();
+    .bind(loc_id)
+    .bind(uid)
+    .execute(tx.executor())
+    .await
+    .unwrap();
     // Existence verification (community content, retained but unattributed).
     sqlx::query(
         "INSERT INTO verification (location_id, user_id, kind, result, created_at) \
          VALUES ($1, $2, 'existence', 'still_exists', now())",
     )
-    .bind(loc_id).bind(uid).execute(tx.executor()).await.unwrap();
+    .bind(loc_id)
+    .bind(uid)
+    .execute(tx.executor())
+    .await
+    .unwrap();
     // Review (retained, author NULL).
     sqlx::query(
         "INSERT INTO review (location_id, author_id, rating, body, moderation_state, created_at, updated_at) \
@@ -229,39 +263,75 @@ async fn anonymize_scrubs_identity_and_nulls_attribution(tx: &mut bikenest_test_
     assert!(deleted_at.is_some());
 
     // private activity gone.
-    let identities: i64 = sqlx::query_scalar("SELECT count(*) FROM authentication_identities WHERE user_id = $1")
-        .bind(uid).fetch_one(&pool).await.unwrap();
+    let identities: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM authentication_identities WHERE user_id = $1")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(identities, 0);
     let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions WHERE user_id = $1")
-        .bind(uid).fetch_one(&pool).await.unwrap();
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(sessions, 0);
     let favs: i64 = sqlx::query_scalar("SELECT count(*) FROM favorite WHERE user_id = $1")
-        .bind(uid).fetch_one(&pool).await.unwrap();
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(favs, 0);
     let parked: i64 = sqlx::query_scalar("SELECT count(*) FROM verification WHERE user_id = $1")
-        .bind(uid).fetch_one(&pool).await.unwrap();
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(parked, 0);
 
     // community content retained + unattributed.
-    let review_author: Option<i64> = sqlx::query_scalar("SELECT author_id FROM review WHERE location_id = $1")
-        .bind(loc_id).fetch_one(&pool).await.unwrap();
+    let review_author: Option<i64> =
+        sqlx::query_scalar("SELECT author_id FROM review WHERE location_id = $1")
+            .bind(loc_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(review_author.is_none());
     let existence_user: Option<i64> = sqlx::query_scalar(
         "SELECT user_id FROM verification WHERE location_id = $1 AND kind = 'existence'",
     )
-    .bind(loc_id).fetch_one(&pool).await.unwrap();
+    .bind(loc_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert!(existence_user.is_none());
-    let prop: Option<i64> = sqlx::query_scalar("SELECT proposer_id FROM parking_proposal WHERE location_id = $1")
-        .bind(loc_id).fetch_one(&pool).await.unwrap();
+    let prop: Option<i64> =
+        sqlx::query_scalar("SELECT proposer_id FROM parking_proposal WHERE location_id = $1")
+            .bind(loc_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(prop.is_none());
-    let rep: Option<i64> = sqlx::query_scalar("SELECT reporter_id FROM report WHERE target_id = $1 AND target_type = 'parking'")
-        .bind(loc_id).fetch_one(&pool).await.unwrap();
+    let rep: Option<i64> = sqlx::query_scalar(
+        "SELECT reporter_id FROM report WHERE target_id = $1 AND target_type = 'parking'",
+    )
+    .bind(loc_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert!(rep.is_none());
-    let photo: Option<i64> = sqlx::query_scalar("SELECT uploader_id FROM parking_photo WHERE location_id = $1")
-        .bind(loc_id).fetch_one(&pool).await.unwrap();
+    let photo: Option<i64> =
+        sqlx::query_scalar("SELECT uploader_id FROM parking_photo WHERE location_id = $1")
+            .bind(loc_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(photo.is_none());
-    let req_user: Option<i64> = sqlx::query_scalar("SELECT user_id FROM privacy_request WHERE details = '{}'")
-        .fetch_one(&pool).await.unwrap();
+    let req_user: Option<i64> =
+        sqlx::query_scalar("SELECT user_id FROM privacy_request WHERE details = '{}'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(req_user.is_none());
 
     // Report counts.
@@ -286,7 +356,11 @@ async fn anonymize_scrubs_identity_and_nulls_attribution(tx: &mut bikenest_test_
 
 #[db_test]
 async fn retention_purges_only_expired(tx: &mut bikenest_test_support::TestTx) {
-    let user = UserBuilder::new().with_email("m6ret@example.com").create(tx.executor()).await.unwrap();
+    let user = UserBuilder::new()
+        .with_email("m6ret@example.com")
+        .create(tx.executor())
+        .await
+        .unwrap();
     let uid = user.id.0;
     let now = Utc::now();
     // One expired + one valid password-reset token.
@@ -303,13 +377,17 @@ async fn retention_purges_only_expired(tx: &mut bikenest_test_support::TestTx) {
     let repo = SqlxRetentionRepository::new(
         db().await,
         RetentionPolicy::default(),
-        Box::new(TestObjectStorage::new()),
+        std::sync::Arc::new(TestObjectStorage::new()),
         "media".into(),
     );
     let n = repo.purge_expired_password_reset_tokens(now).await.unwrap();
     assert_eq!(n, 1);
-    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM password_reset_tokens WHERE user_id = $1")
-        .bind(uid).fetch_one(&pool().await).await.unwrap();
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM password_reset_tokens WHERE user_id = $1")
+            .bind(uid)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
     assert_eq!(remaining, 1);
 
     // Clean up the committed fixture user (cascades to password_reset_tokens).
@@ -347,11 +425,16 @@ async fn policy_reader_current_and_history(tx: &mut bikenest_test_support::TestT
     .unwrap();
     tx.commit_fixture().await;
 
-    let current = reader.current(PolicyKind::Privacy).await.unwrap().unwrap();
+    let current = reader
+        .current(PolicyKind::Privacy, "pt-BR")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.locale, "pt-BR");
     assert_eq!(current.version, "m6-test-new");
     assert!(current.superseded_at.is_none());
 
-    let history = reader.history(PolicyKind::Privacy).await.unwrap();
+    let history = reader.history(PolicyKind::Privacy, "pt-BR").await.unwrap();
     assert!(history.iter().any(|d| d.version == old));
     assert!(history.iter().any(|d| d.version == new));
     // Newest first.

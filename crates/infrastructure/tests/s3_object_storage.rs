@@ -17,7 +17,10 @@ use bikenest_infrastructure::S3ObjectStorage;
 use std::time::Duration;
 
 fn env_or(key: &str, default: &str) -> String {
-    std::env::var(key).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_string())
+    std::env::var(key)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 fn store() -> S3ObjectStorage {
@@ -33,7 +36,13 @@ fn store() -> S3ObjectStorage {
 #[tokio::test]
 async fn put_get_delete_round_trip() {
     let s = store();
-    let key = format!("test/s3-roundtrip/{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
+    let key = format!(
+        "test/s3-roundtrip/{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
     let bytes = b"hello s3";
 
     let stored = s
@@ -44,20 +53,34 @@ async fn put_get_delete_round_trip() {
         })
         .await;
     let Ok(k) = stored else {
-        eprintln!("S3 put failed (is MinIO up? `docker compose up -d minio minio-init`): {stored:?}");
+        eprintln!(
+            "S3 put failed (is MinIO up? `docker compose up -d minio minio-init`): {stored:?}"
+        );
         return;
     };
     assert_eq!(k, key);
 
     // Direct S3 presigned URL (SigV4) pointing at the bucket — the browser hits
     // the bucket directly; the app is not a media proxy.
-    let url = s.presigned_get(&key, Duration::from_secs(60)).await.unwrap();
-    assert!(url.contains("X-Amz-Signature="), "direct S3 presigned url: {url}");
+    let url = s
+        .presigned_get(&key, Duration::from_secs(60))
+        .await
+        .unwrap();
+    assert!(
+        url.contains("X-Amz-Signature="),
+        "direct S3 presigned url: {url}"
+    );
     assert!(url.contains("X-Amz-Expires=60"), "carries TTL: {url}");
-    assert!(!url.starts_with("/media/"), "direct presign bypasses the app: {url}");
+    assert!(
+        !url.starts_with("/media/"),
+        "direct presign bypasses the app: {url}"
+    );
 
     // `get` (the app /media proxy path) is intentionally unsupported.
-    assert!(matches!(s.get(&key).await, Err(bikenest_application::StorageError::Unexpected(_))));
+    assert!(matches!(
+        s.get(&key).await,
+        Err(bikenest_application::StorageError::Unexpected(_))
+    ));
 
     s.delete(&key).await.expect("delete should succeed");
 }

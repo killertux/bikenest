@@ -79,8 +79,6 @@ impl From<bikenest_domain::DomainError> for AuthError {
     }
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Ports: password hashing, token generation, clock
 // ---------------------------------------------------------------------------
@@ -139,7 +137,12 @@ pub trait AccountRepository: Send + Sync {
     /// Atomic confirm: set `email_verified_at`, advance to `Active`, and (when
     /// the address differs) switch `users.email` + the password identity subject
     /// in a single transaction (§2, §20).
-    async fn confirm_email(&self, id: UserId, at: DateTime<Utc>, email: &UserEmail) -> Result<(), AuthError>;
+    async fn confirm_email(
+        &self,
+        id: UserId,
+        at: DateTime<Utc>,
+        email: &UserEmail,
+    ) -> Result<(), AuthError>;
     async fn set_password(&self, id: UserId, hash: &str) -> Result<(), AuthError>;
     async fn link_identity(
         &self,
@@ -183,7 +186,11 @@ pub trait SessionStore: Send + Sync {
         csrf: &CsrfToken,
         now: DateTime<Utc>,
     ) -> Result<(), AuthError>;
-    async fn resolve(&self, raw: &SessionId, now: DateTime<Utc>) -> Result<Option<Session>, AuthError>;
+    async fn resolve(
+        &self,
+        raw: &SessionId,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Session>, AuthError>;
     async fn revoke(&self, raw: &SessionId) -> Result<(), AuthError>;
     async fn revoke_all_for_user_except(
         &self,
@@ -284,8 +291,7 @@ pub struct LoginOutcome {
 
 /// A dummy argon2id PHC string used to equalize login timing when an identity
 /// does not exist (the verify call still runs argon2).
-const DUMMY_HASH: &str =
-    "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 // ---------------------------------------------------------------------------
 // AuthService
@@ -384,7 +390,12 @@ impl AuthService {
         }
     }
 
-    async fn allowed(&self, key: &str, limit: u32, window: std::time::Duration) -> Result<(), AuthError> {
+    async fn allowed(
+        &self,
+        key: &str,
+        limit: u32,
+        window: std::time::Duration,
+    ) -> Result<(), AuthError> {
         if self.rate_limiter.check(key, limit, window).await? {
             Ok(())
         } else {
@@ -442,7 +453,9 @@ impl AuthService {
         self.tokens
             .issue_verification(user_id, email.as_str(), &token, now)
             .await?;
-        self.email.send(self.verification_email(&email, &token)).await?;
+        self.email
+            .send(self.verification_email(&email, &token))
+            .await?;
         self.audit
             .record(AuditEvent::success(
                 Some(user_id),
@@ -473,7 +486,9 @@ impl AuthService {
         // to `Active`, and (when changing) switch `users.email` + the password
         // identity subject in a single transaction — one login-lookup key, never
         // divergent (§2, §20).
-        self.accounts.confirm_email(user_id, now, &new_email).await?;
+        self.accounts
+            .confirm_email(user_id, now, &new_email)
+            .await?;
         if is_change_email {
             // An email change is a security event: invalidate every session so
             // a stale credential on the old address can't keep a session alive.
@@ -481,7 +496,11 @@ impl AuthService {
                 .revoke_all_for_user_except(user_id, &SessionId::new([0u8; 32]))
                 .await?;
         }
-        let action = if is_change_email { "auth.email_changed" } else { "auth.email_verified" };
+        let action = if is_change_email {
+            "auth.email_changed"
+        } else {
+            "auth.email_verified"
+        };
         self.audit
             .record(AuditEvent::success(
                 Some(user_id),
@@ -515,7 +534,9 @@ impl AuthService {
         self.tokens
             .issue_verification(user.id, email.as_str(), &token, self.now())
             .await?;
-        self.email.send(self.verification_email(email, &token)).await?;
+        self.email
+            .send(self.verification_email(email, &token))
+            .await?;
         Ok(())
     }
 
@@ -558,28 +579,48 @@ impl AuthService {
             // Not found: still run a dummy verify to equalise timing (§45).
             let _ = self.hasher.verify(&password, DUMMY_HASH).await;
             self.audit
-                .record(AuditEvent::failure(None, "auth.login", "user", identity_key))
+                .record(AuditEvent::failure(
+                    None,
+                    "auth.login",
+                    "user",
+                    identity_key,
+                ))
                 .await?;
             return Err(AuthError::InvalidCredentials);
         };
 
         let Some(hash) = identity.credential_hash.as_deref() else {
             self.audit
-                .record(AuditEvent::failure(None, "auth.login", "user", identity_key))
+                .record(AuditEvent::failure(
+                    None,
+                    "auth.login",
+                    "user",
+                    identity_key,
+                ))
                 .await?;
             return Err(AuthError::InvalidCredentials);
         };
         let ok = self.hasher.verify(&password, hash).await?;
         if !ok {
             self.audit
-                .record(AuditEvent::failure(None, "auth.login", "user", identity_key))
+                .record(AuditEvent::failure(
+                    None,
+                    "auth.login",
+                    "user",
+                    identity_key,
+                ))
                 .await?;
             return Err(AuthError::InvalidCredentials);
         }
 
         let Some(user) = self.accounts.find_by_id(identity.user_id).await? else {
             self.audit
-                .record(AuditEvent::failure(None, "auth.login", "user", identity_key))
+                .record(AuditEvent::failure(
+                    None,
+                    "auth.login",
+                    "user",
+                    identity_key,
+                ))
                 .await?;
             return Err(AuthError::InvalidCredentials);
         };
@@ -587,7 +628,12 @@ impl AuthService {
         // login*, with the generic message — the caller can never tell why.
         if !user.account_state.can_log_in() {
             self.audit
-                .record(AuditEvent::failure(None, "auth.login", "user", identity_key))
+                .record(AuditEvent::failure(
+                    None,
+                    "auth.login",
+                    "user",
+                    identity_key,
+                ))
                 .await?;
             return Err(AuthError::InvalidCredentials);
         }
@@ -643,16 +689,18 @@ impl AuthService {
             return Ok(());
         };
         let token = VerificationToken::new(self.tokens_gen.generate());
-        self.tokens
-            .issue_reset(user.id, &token, self.now())
-            .await?;
+        self.tokens.issue_reset(user.id, &token, self.now()).await?;
         self.email.send(self.reset_email(email, &token)).await?;
         Ok(())
     }
 
     /// Reset the password via a single-use, expiring token; revokes *all*
     /// sessions (§16/§18).
-    pub async fn reset_password(&self, raw_token: &str, raw_password: &str) -> Result<(), AuthError> {
+    pub async fn reset_password(
+        &self,
+        raw_token: &str,
+        raw_password: &str,
+    ) -> Result<(), AuthError> {
         let now = self.now();
         let token = decode_token(raw_token).ok_or(AuthError::TokenInvalid)?;
         let Some(user_id) = self.tokens.consume_reset(&token, now).await? else {
@@ -741,14 +789,20 @@ impl AuthService {
         let Some(hash) = identity.credential_hash.as_deref() else {
             return Err(AuthError::InvalidCredentials);
         };
-        if !self.hasher.verify(&Password::new(current_password), hash).await? {
+        if !self
+            .hasher
+            .verify(&Password::new(current_password), hash)
+            .await?
+        {
             return Err(AuthError::InvalidCredentials);
         }
         let token = VerificationToken::new(self.tokens_gen.generate());
         self.tokens
             .issue_verification(user_id, new_email.as_str(), &token, self.now())
             .await?;
-        self.email.send(self.verification_email(new_email, &token)).await?;
+        self.email
+            .send(self.verification_email(new_email, &token))
+            .await?;
         self.audit
             .record(AuditEvent::success(
                 Some(user_id),
@@ -778,7 +832,11 @@ impl AuthService {
             .find_identity(identity.provider, &identity.subject)
             .await?
         {
-            let user = self.accounts.find_by_id(rec.user_id).await?.ok_or(AuthError::ProviderFailed)?;
+            let user = self
+                .accounts
+                .find_by_id(rec.user_id)
+                .await?
+                .ok_or(AuthError::ProviderFailed)?;
             return self.sign_in(user, now).await;
         }
 
@@ -814,7 +872,11 @@ impl AuthService {
         if identity.email_verified {
             self.accounts.mark_email_verified(user_id, now).await?;
         }
-        let user = self.accounts.find_by_id(user_id).await?.ok_or(AuthError::ProviderFailed)?;
+        let user = self
+            .accounts
+            .find_by_id(user_id)
+            .await?
+            .ok_or(AuthError::ProviderFailed)?;
         self.audit
             .record(AuditEvent::success(
                 Some(user_id),
@@ -856,7 +918,12 @@ impl AuthService {
 
     /// Grant a role. Requires an ADMIN actor; refuses to revoke the actor's own
     /// last ADMIN.
-    pub async fn grant_role(&self, actor: &AuthenticatedUser, target: UserId, role: Role) -> Result<(), AuthError> {
+    pub async fn grant_role(
+        &self,
+        actor: &AuthenticatedUser,
+        target: UserId,
+        role: Role,
+    ) -> Result<(), AuthError> {
         if !actor.has_role(Role::Admin) {
             return Err(AuthError::Unauthorized);
         }
@@ -877,7 +944,12 @@ impl AuthService {
 
     /// Revoke a role. Requires an ADMIN actor; refuses to remove the actor's
     /// own last ADMIN.
-    pub async fn revoke_role(&self, actor: &AuthenticatedUser, target: UserId, role: Role) -> Result<(), AuthError> {
+    pub async fn revoke_role(
+        &self,
+        actor: &AuthenticatedUser,
+        target: UserId,
+        role: Role,
+    ) -> Result<(), AuthError> {
         if !actor.has_role(Role::Admin) {
             return Err(AuthError::Unauthorized);
         }
@@ -911,11 +983,17 @@ impl AuthService {
     // -----------------------------------------------------------------------
 
     /// Suspend an account: set `Suspended`, revoke all sessions, audit.
-    pub async fn suspend_user(&self, actor: &AuthenticatedUser, target: UserId) -> Result<(), AuthError> {
+    pub async fn suspend_user(
+        &self,
+        actor: &AuthenticatedUser,
+        target: UserId,
+    ) -> Result<(), AuthError> {
         if !actor.has_role(Role::Admin) {
             return Err(AuthError::Unauthorized);
         }
-        self.accounts.set_state(target, AccountState::Suspended).await?;
+        self.accounts
+            .set_state(target, AccountState::Suspended)
+            .await?;
         // Revoke every session (keep none): immediate mid-session suspension.
         self.sessions
             .revoke_all_for_user_except(target, &SessionId::new([0u8; 32]))
@@ -932,11 +1010,17 @@ impl AuthService {
     }
 
     /// Restore a suspended account to `Active`, audit.
-    pub async fn restore_user(&self, actor: &AuthenticatedUser, target: UserId) -> Result<(), AuthError> {
+    pub async fn restore_user(
+        &self,
+        actor: &AuthenticatedUser,
+        target: UserId,
+    ) -> Result<(), AuthError> {
         if !actor.has_role(Role::Admin) {
             return Err(AuthError::Unauthorized);
         }
-        self.accounts.set_state(target, AccountState::Active).await?;
+        self.accounts
+            .set_state(target, AccountState::Active)
+            .await?;
         self.audit
             .record(AuditEvent::success(
                 Some(actor.id),
@@ -961,7 +1045,10 @@ impl AuthService {
         Ok(users.iter().map(AuthenticatedUser::from_user).collect())
     }
 
-    pub async fn resolve_session(&self, raw: &SessionId) -> Result<Option<ResolvedSession>, AuthError> {
+    pub async fn resolve_session(
+        &self,
+        raw: &SessionId,
+    ) -> Result<Option<ResolvedSession>, AuthError> {
         let now = self.now();
         let Some(session) = self.sessions.resolve(raw, now).await? else {
             return Ok(None);

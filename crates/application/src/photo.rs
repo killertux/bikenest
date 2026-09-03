@@ -239,7 +239,13 @@ pub trait PhotoRepository: Send + Sync {
     /// Remove a photo row (compensation for a failed storage write).
     async fn delete(&self, kind: PhotoKind, id: i64) -> Result<(), PhotoError>;
     /// Flip to `APPROVED` and set `position`/reviewer columns (one transaction).
-    async fn approve(&self, kind: PhotoKind, id: i64, moderator: UserId, position: i32) -> Result<(), PhotoError>;
+    async fn approve(
+        &self,
+        kind: PhotoKind,
+        id: i64,
+        moderator: UserId,
+        position: i32,
+    ) -> Result<(), PhotoError>;
     /// Flip to `REJECTED`, record the reason + reviewer, and return the keys to
     /// delete (one transaction).
     async fn reject(
@@ -252,7 +258,11 @@ pub trait PhotoRepository: Send + Sync {
     /// The full pending queue, oldest first, across both kinds and tables.
     async fn list_pending(&self) -> Result<Vec<PendingPhoto>, PhotoError>;
     /// A single photo's moderation view (state + derivative keys).
-    async fn get_for_moderation(&self, kind: PhotoKind, id: i64) -> Result<Option<PhotoForModeration>, PhotoError>;
+    async fn get_for_moderation(
+        &self,
+        kind: PhotoKind,
+        id: i64,
+    ) -> Result<Option<PhotoForModeration>, PhotoError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -314,12 +324,7 @@ impl PhotoService {
         }
     }
 
-    async fn allowed(
-        &self,
-        key: &str,
-        limit: u32,
-        window: Duration,
-    ) -> Result<(), PhotoError> {
+    async fn allowed(&self, key: &str, limit: u32, window: Duration) -> Result<(), PhotoError> {
         if self.deps.rate_limiter.check(key, limit, window).await? {
             Ok(())
         } else {
@@ -374,12 +379,8 @@ impl PhotoService {
             DAY,
         )
         .await?;
-        self.allowed(
-            &format!("photo:upload:ip:{ip}"),
-            PHOTO_UPLOAD_IP_LIMIT,
-            DAY,
-        )
-        .await?;
+        self.allowed(&format!("photo:upload:ip:{ip}"), PHOTO_UPLOAD_IP_LIMIT, DAY)
+            .await?;
 
         if !bytes_within_limit(bytes.len(), self.deps.limits.max_bytes) {
             return Err(PhotoError::TooLarge);
@@ -432,7 +433,14 @@ impl PhotoService {
 
         self.deps
             .repository
-            .mark_processed(kind, id, &full_key, &thumb_key, processed.dimensions, self.now())
+            .mark_processed(
+                kind,
+                id,
+                &full_key,
+                &thumb_key,
+                processed.dimensions,
+                self.now(),
+            )
             .await?;
 
         self.audit(

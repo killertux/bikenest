@@ -3,7 +3,9 @@
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{AuditError, AuditEvent, AuditFilter, AuditLogReader, AuditPage, AuditStoredEvent};
+use bikenest_application::{
+    AuditError, AuditEvent, AuditFilter, AuditLogReader, AuditPage, AuditStoredEvent,
+};
 use bikenest_domain::UserId;
 use chrono::{DateTime, Utc};
 
@@ -73,7 +75,9 @@ impl AuditLogReader for SqlxAuditLogReader {
         use sqlx::Row;
         let mut items = Vec::with_capacity(rows.len());
         for row in rows {
-            let id: i64 = row.try_get("id").map_err(|_| AuditError::Unexpected("missing id".into()))?;
+            let id: i64 = row
+                .try_get("id")
+                .map_err(|_| AuditError::Unexpected("missing id".into()))?;
             let actor: Option<i64> = row.try_get("actor_user_id").map_err(map_err)?;
             let action: String = row.try_get("action").map_err(map_err)?;
             let target_type: String = row.try_get("target_type").map_err(map_err)?;

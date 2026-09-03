@@ -1,0 +1,313 @@
+//! Integration tests for the PostgreSQL background job repository
+//! (plans/m9-background-jobs.md).
+//!
+//! The repo operates on the shared pool, so each test seeds rows with a unique
+//! `kind` prefix and cleans them up at the end (rows are not rolled back — they
+//! are on the pool, not the test transaction). Where a test needs a "claimed"
+//! row it simulates it with a direct `UPDATE` so it does not race other tests'
+//! `claim` calls; the one real `claim` test asserts only the `SKIP LOCKED`
+//! disjointness property, which holds regardless of concurrent claims.
+
+use bikenest_infrastructure::{Db, SqlxJobRepository};
+use bikenest_test_support::{db_test, pool};
+use chrono::{Duration, Utc};
+use serde_json::json;
+
+async fn db() -> Db {
+    Db::from_pool(pool().await)
+}
+
+async fn repo() -> SqlxJobRepository {
+    SqlxJobRepository::new(db().await)
+}
+
+/// Delete every background_job row whose kind starts with `jobtest.` (cleanup for
+/// whatever this test created; other tests use their own distinct kinds).
+async fn clear_kind(kind_prefix: &str) {
+    sqlx::query("DELETE FROM background_job WHERE kind LIKE $1")
+        .bind(format!("{kind_prefix}%"))
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+#[db_test]
+async fn enqueue_is_idempotent_on_key(_tx: &mut bikenest_test_support::TestTx) {
+    let r = repo().await;
+    let now = Utc::now();
+    // First insert with a stable key → Ok(Some(id)).
+    let first = r
+        .enqueue(
+            "jobtest.idem",
+            &json!({"n": 1}),
+            now,
+            Some(3),
+            Some("recurring:jobtest.idem"),
+        )
+        .await
+        .unwrap();
+    assert!(first.is_some());
+    // Second insert with the same key is a no-op → Ok(None).
+    let second = r
+        .enqueue(
+            "jobtest.idem",
+            &json!({"n": 2}),
+            now,
+            Some(3),
+            Some("recurring:jobtest.idem"),
+        )
+        .await
+        .unwrap();
+    assert!(second.is_none(), "idempotency_key must dedup enqueue");
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM background_job WHERE kind = 'jobtest.idem'")
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(n, 1);
+    clear_kind("jobtest.idem").await;
+}
+
+#[db_test]
+async fn finish_success_completes_oneshot(_tx: &mut bikenest_test_support::TestTx) {
+    let r = repo().await;
+    let now = Utc::now();
+    let id = r
+        .enqueue("jobtest.oneshot", &json!({}), now, Some(5), None)
+        .await
+        .unwrap()
+        .unwrap();
+    // Simulate a claim (state running, attempt 1).
+    let claimed = sqlx::query(
+        "UPDATE background_job SET state='running', claimed_by='w', lease_expires_at=now()+interval '60 seconds', attempts=1 WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+    assert_eq!(claimed.rows_affected(), 1);
+
+    r.finish_success(id, None, now).await.unwrap();
+
+    let (state, finished): (String, Option<chrono::DateTime<Utc>>) =
+        sqlx::query_as("SELECT state, finished_at FROM background_job WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "succeeded");
+    assert!(finished.is_some());
+    clear_kind("jobtest.oneshot").await;
+}
+
+#[db_test]
+async fn finish_success_reschedules_recurring(_tx: &mut bikenest_test_support::TestTx) {
+    let r = repo().await;
+    let now = Utc::now();
+    let id = r
+        .enqueue("jobtest.recurr", &json!({}), now, Some(5), None)
+        .await
+        .unwrap()
+        .unwrap();
+    // Claim + mark the row as recurring.
+    sqlx::query(
+        "UPDATE background_job SET state='running', schedule='{\"every_seconds\": 60}'::jsonb, attempts=1 WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+
+    let next = now + Duration::seconds(60);
+    r.finish_success(id, Some(next), now).await.unwrap();
+
+    let (state, attempts, run_at): (String, i32, chrono::DateTime<Utc>) =
+        sqlx::query_as("SELECT state, attempts, run_at FROM background_job WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "pending");
+    assert_eq!(attempts, 0, "recurring success resets the attempt budget");
+    assert!(run_at > now, "next run is in the future");
+    clear_kind("jobtest.recurr").await;
+}
+
+#[db_test]
+async fn retry_then_dead_letter(_tx: &mut bikenest_test_support::TestTx) {
+    let r = repo().await;
+    let now = Utc::now();
+    let id = r
+        .enqueue("jobtest.retry", &json!({}), now, Some(2), None)
+        .await
+        .unwrap()
+        .unwrap();
+    sqlx::query("UPDATE background_job SET state='running', attempts=1 WHERE id=$1")
+        .bind(id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+
+    // Attempt 1 < max(2) → retry (state pending, future run_at, last_error set).
+    let run_at = now + Duration::seconds(60);
+    r.retry(id, "boom", run_at).await.unwrap();
+    let (state, last_error): (String, Option<String>) =
+        sqlx::query_as("SELECT state, last_error FROM background_job WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "pending");
+    assert_eq!(last_error.as_deref(), Some("boom"));
+
+    // Attempt 2 == max(2) → dead-letter (state failed, finished_at set).
+    sqlx::query("UPDATE background_job SET state='running', attempts=2 WHERE id=$1")
+        .bind(id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    r.fail(id, "boom-again").await.unwrap();
+    let (state, finished): (String, Option<chrono::DateTime<Utc>>) =
+        sqlx::query_as("SELECT state, finished_at FROM background_job WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "failed");
+    assert!(finished.is_some());
+    clear_kind("jobtest.retry").await;
+}
+
+#[db_test]
+async fn gc_deletes_only_old_terminal_rows(_tx: &mut bikenest_test_support::TestTx) {
+    let r = repo().await;
+    let now = Utc::now();
+    let cut_off = now - Duration::days(7);
+    let id_old = r
+        .enqueue("jobtest.gc_old", &json!({}), now, Some(5), None)
+        .await
+        .unwrap()
+        .unwrap();
+    let id_fresh = r
+        .enqueue("jobtest.gc_fresh", &json!({}), now, Some(5), None)
+        .await
+        .unwrap()
+        .unwrap();
+    // terminal + old → should be deleted; terminal + fresh → kept; pending → kept.
+    sqlx::query("UPDATE background_job SET state='succeeded', finished_at=$2 WHERE id=$1")
+        .bind(id_old)
+        .bind(now - Duration::days(10))
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE background_job SET state='failed', finished_at=now(), last_error='x' WHERE id=$1",
+    )
+    .bind(id_fresh)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+    let id_pending = r
+        .enqueue("jobtest.gc_pending", &json!({}), now, Some(5), None)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let deleted = r.gc(cut_off).await.unwrap();
+    assert!(deleted >= 1, "returns the rows it removed");
+
+    let gone: i64 = sqlx::query_scalar("SELECT count(*) FROM background_job WHERE id=$1")
+        .bind(id_old)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    assert_eq!(gone, 0, "old terminal row is deleted");
+    let fresh: i64 = sqlx::query_scalar("SELECT count(*) FROM background_job WHERE id=$1")
+        .bind(id_fresh)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    assert_eq!(fresh, 1, "fresh terminal row is kept");
+    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM background_job WHERE id=$1")
+        .bind(id_pending)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    assert_eq!(pending, 1, "pending row is never deleted");
+    clear_kind("jobtest.gc").await;
+}
+
+#[db_test]
+async fn concurrent_claims_are_disjoint(_tx: &mut bikenest_test_support::TestTx) {
+    let r = repo().await;
+    let now = Utc::now();
+    // Seed a handful of due, unique-kind rows.
+    let mut ids = Vec::new();
+    for i in 0..6 {
+        let id = r
+            .enqueue("jobtest.disjoint", &json!({"i": i}), now, Some(5), None)
+            .await
+            .unwrap()
+            .unwrap();
+        ids.push(id);
+    }
+
+    // Two workers claim concurrently, each with a large batch so the whole due
+    // set is covered (avoids a concurrent test's due rows crowding ours out).
+    let repo_a = r.clone();
+    let repo_b = r.clone();
+    let a = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let b = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let (a2, b2) = (a.clone(), b.clone());
+    let h1 = tokio::spawn(async move {
+        let got = repo_a
+            .claim(1000, "worker-a", std::time::Duration::from_secs(60))
+            .await
+            .unwrap();
+        *a2.lock().await = got;
+    });
+    let h2 = tokio::spawn(async move {
+        let got = repo_b
+            .claim(1000, "worker-b", std::time::Duration::from_secs(60))
+            .await
+            .unwrap();
+        *b2.lock().await = got;
+    });
+    let _ = (h1.await.unwrap(), h2.await.unwrap());
+    let claim_a = std::mem::take(&mut *a.lock().await);
+    let claim_b = std::mem::take(&mut *b.lock().await);
+
+    // SKIP LOCKED → the two claims never share an id.
+    let ids_a: std::collections::HashSet<i64> = claim_a.iter().map(|j| j.id).collect();
+    let ids_b: std::collections::HashSet<i64> = claim_b.iter().map(|j| j.id).collect();
+    assert!(
+        ids_a.is_disjoint(&ids_b),
+        "two workers must never claim the same job ({ids_a:?} vs {ids_b:?})"
+    );
+
+    // Each of OUR rows was claimed exactly once (state running, attempts 1, held by a
+    // worker). We only assert on our own rows: the claim also picks up OTHER
+    // concurrently-running tests' due rows, which those tests may delete before we
+    // inspect them (hence no assertion over the full union).
+    for id in &ids {
+        let (state, attempts, claimed_by): (String, i32, Option<String>) =
+            sqlx::query_as("SELECT state, attempts, claimed_by FROM background_job WHERE id=$1")
+                .bind(id)
+                .fetch_one(&pool().await)
+                .await
+                .unwrap();
+        assert_eq!(state, "running");
+        assert_eq!(attempts, 1);
+        assert!(claimed_by.is_some(), "claimed row must be held by a worker");
+    }
+    let missing: Vec<i64> = ids
+        .iter()
+        .copied()
+        .filter(|id| !ids_a.contains(id) && !ids_b.contains(id))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "all seeded rows were claimed by exactly one worker, but missed: {missing:?}"
+    );
+    clear_kind("jobtest.disjoint").await;
+}

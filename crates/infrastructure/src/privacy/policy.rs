@@ -1,5 +1,6 @@
 //! SQL-backed policy reader (plans/m6-privacy.md §6, §70). Versioned legal
-//! pages: `current` (latest effective, not superseded) + `history` (all).
+//! pages per locale (§102): `current` (latest effective, not superseded) +
+//! `history` (all). Locale fallback (→ pt-BR) is the caller's job.
 
 use crate::Db;
 use async_trait::async_trait;
@@ -21,6 +22,7 @@ impl SqlxPolicyReader {
 struct PolicyRow {
     id: i64,
     kind: String,
+    locale: String,
     version: String,
     effective_at: DateTime<Utc>,
     superseded_at: Option<DateTime<Utc>>,
@@ -33,6 +35,7 @@ impl PolicyRow {
         Ok(PolicyDocument {
             id: self.id,
             kind,
+            locale: self.locale,
             version: self.version,
             effective_at: self.effective_at,
             superseded_at: self.superseded_at,
@@ -43,14 +46,22 @@ impl PolicyRow {
 
 #[async_trait]
 impl PolicyReader for SqlxPolicyReader {
-    async fn current(&self, kind: PolicyKind) -> Result<Option<PolicyDocument>, PrivacyError> {
-        let row = sqlx::query_as::<_, PolicyRow>(r#"
-            SELECT id, kind, version, effective_at, superseded_at, content
+    async fn current(
+        &self,
+        kind: PolicyKind,
+        locale: &str,
+    ) -> Result<Option<PolicyDocument>, PrivacyError> {
+        let row = sqlx::query_as::<_, PolicyRow>(
+            r#"
+            SELECT id, kind, locale, version, effective_at, superseded_at, content
             FROM policy_version
-            WHERE kind = $1 AND superseded_at IS NULL
+            WHERE kind = $1 AND locale = $2 AND superseded_at IS NULL
             ORDER BY effective_at DESC
             LIMIT 1
-            "#).bind(kind.as_code())
+            "#,
+        )
+        .bind(kind.as_code())
+        .bind(locale)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -60,13 +71,21 @@ impl PolicyReader for SqlxPolicyReader {
         }
     }
 
-    async fn history(&self, kind: PolicyKind) -> Result<Vec<PolicyDocument>, PrivacyError> {
-        let rows = sqlx::query_as::<_, PolicyRow>(r#"
-            SELECT id, kind, version, effective_at, superseded_at, content
+    async fn history(
+        &self,
+        kind: PolicyKind,
+        locale: &str,
+    ) -> Result<Vec<PolicyDocument>, PrivacyError> {
+        let rows = sqlx::query_as::<_, PolicyRow>(
+            r#"
+            SELECT id, kind, locale, version, effective_at, superseded_at, content
             FROM policy_version
-            WHERE kind = $1
+            WHERE kind = $1 AND locale = $2
             ORDER BY effective_at DESC, id DESC
-            "#).bind(kind.as_code())
+            "#,
+        )
+        .bind(kind.as_code())
+        .bind(locale)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;

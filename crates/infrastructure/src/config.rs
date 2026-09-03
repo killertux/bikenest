@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use bikenest_application::{FreshnessConfig, RecommendationConfig, DEFAULT_RECOMMENDATION_CONFIG};
+use bikenest_application::{DEFAULT_RECOMMENDATION_CONFIG, FreshnessConfig, RecommendationConfig};
 use bikenest_domain::RetentionPolicy;
 
 /// Environment-driven configuration (M0 surface is intentionally tiny).
@@ -30,6 +30,8 @@ pub struct Config {
     pub photo: PhotoConfig,
     /// Moderation limits (§43, Ledger #19).
     pub moderation: ModerationConfig,
+    /// Background job queue (plans/m9-background-jobs.md).
+    pub jobs: JobConfig,
 }
 
 /// Photo upload/derivative limits (§30/#44, Ledger #18), env-driven with the
@@ -40,6 +42,41 @@ pub type PhotoConfig = bikenest_domain::PhotoLimits;
 /// Moderation limits (§43, Ledger #19), env-driven with the domain constants as
 /// defaults. Runtime-plumbed through the moderation service in M8.
 pub type ModerationConfig = bikenest_domain::ModerationLimits;
+
+/// Background job queue knobs (plans/m9-background-jobs.md). Defaults target
+/// a single-instance dev worker; tune per deployment.
+#[derive(Debug, Clone, Copy)]
+pub struct JobConfig {
+    /// Spawn the in-process worker loop at startup (set false for web-only instances).
+    pub enabled: bool,
+    /// How often the worker polls the queue when idle.
+    pub poll_interval: Duration,
+    /// How many jobs a worker claims per batch.
+    pub batch_size: usize,
+    /// Lease length; a running job heartbeats to hold it, and a crashed worker's
+    /// lease expires so another worker can re-claim.
+    pub lease_ttl: Duration,
+    /// Retry budget per job (overridable per row at enqueue).
+    pub max_attempts: i32,
+    /// Exponential backoff base; actual delay = base * 2^(attempt-1) + jitter.
+    pub backoff_base_ms: u64,
+    /// Terminal rows older than this many days are deleted by `jobs.gc`.
+    pub history_retention_days: u32,
+}
+
+impl Default for JobConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            poll_interval: Duration::from_secs(5),
+            batch_size: 4,
+            lease_ttl: Duration::from_secs(600),
+            max_attempts: 5,
+            backoff_base_ms: 2000,
+            history_retention_days: 7,
+        }
+    }
+}
 
 impl Config {
     /// Loads configuration from the process environment (typically populated
@@ -59,7 +96,21 @@ impl Config {
             retention: retention_from_env(),
             photo: photo_config_from_env(),
             moderation: moderation_config_from_env(),
+            jobs: job_config_from_env(),
         })
+    }
+}
+
+/// Job queue knobs (plans/m9-background-jobs.md), from env with sane defaults.
+pub fn job_config_from_env() -> JobConfig {
+    JobConfig {
+        enabled: env_bool("JOBS_ENABLED").unwrap_or(true),
+        poll_interval: Duration::from_millis(env_u64("JOBS_POLL_INTERVAL_MS").unwrap_or(5000)),
+        batch_size: env_usize("JOBS_BATCH_SIZE").unwrap_or(4),
+        lease_ttl: Duration::from_millis(env_u64("JOBS_LEASE_TTL_MS").unwrap_or(600_000)),
+        max_attempts: env_i64("JOBS_MAX_ATTEMPTS").unwrap_or(5) as i32,
+        backoff_base_ms: env_u64("JOBS_BACKOFF_BASE_MS").unwrap_or(2000),
+        history_retention_days: env_u32("JOBS_HISTORY_RETENTION_DAYS").unwrap_or(7),
     }
 }
 
@@ -106,9 +157,12 @@ pub fn freshness_config_from_env() -> FreshnessConfig {
 pub fn photo_config_from_env() -> PhotoConfig {
     PhotoConfig {
         max_bytes: env_usize("PHOTO_MAX_BYTES").unwrap_or(bikenest_domain::MAX_PHOTO_BYTES),
-        max_megapixels: env_u64("PHOTO_MAX_MEGAPIXELS").unwrap_or(bikenest_domain::MAX_PHOTO_MEGAPIXELS),
-        thumb_max_side: env_u32("PHOTO_THUMB_MAX_SIDE").unwrap_or(bikenest_domain::THUMBNAIL_MAX_SIDE),
-        derivative_quality: env_u8("PHOTO_DERIVATIVE_QUALITY").unwrap_or(bikenest_domain::DERIVATIVE_QUALITY),
+        max_megapixels: env_u64("PHOTO_MAX_MEGAPIXELS")
+            .unwrap_or(bikenest_domain::MAX_PHOTO_MEGAPIXELS),
+        thumb_max_side: env_u32("PHOTO_THUMB_MAX_SIDE")
+            .unwrap_or(bikenest_domain::THUMBNAIL_MAX_SIDE),
+        derivative_quality: env_u8("PHOTO_DERIVATIVE_QUALITY")
+            .unwrap_or(bikenest_domain::DERIVATIVE_QUALITY),
     }
 }
 
@@ -120,8 +174,7 @@ pub fn moderation_config_from_env() -> ModerationConfig {
             .unwrap_or(d.report_description_max_len),
         report_create_user_limit: env_u32("MOD_REPORT_USER_LIMIT")
             .unwrap_or(d.report_create_user_limit),
-        report_create_ip_limit: env_u32("MOD_REPORT_IP_LIMIT")
-            .unwrap_or(d.report_create_ip_limit),
+        report_create_ip_limit: env_u32("MOD_REPORT_IP_LIMIT").unwrap_or(d.report_create_ip_limit),
     }
 }
 
@@ -197,16 +250,28 @@ fn env_f64(key: &str) -> Option<f64> {
     std::env::var(key).ok().and_then(|v| v.parse().ok())
 }
 
+fn env_bool(key: &str) -> Option<bool> {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| match v.trim().to_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        })
+}
+
 /// Retention TTLs (§75, Ledger #20). Values are seconds; each defaults to the
 /// `RetentionPolicy::default()` value when unset.
 fn retention_from_env() -> RetentionPolicy {
     let d = RetentionPolicy::default();
     RetentionPolicy {
         password_reset_ttl: chrono::Duration::seconds(
-            env_i64("RETENTION_PASSWORD_RESET_SECONDS").unwrap_or(d.password_reset_ttl.num_seconds()),
+            env_i64("RETENTION_PASSWORD_RESET_SECONDS")
+                .unwrap_or(d.password_reset_ttl.num_seconds()),
         ),
         email_verification_ttl: chrono::Duration::seconds(
-            env_i64("RETENTION_EMAIL_VERIFICATION_SECONDS").unwrap_or(d.email_verification_ttl.num_seconds()),
+            env_i64("RETENTION_EMAIL_VERIFICATION_SECONDS")
+                .unwrap_or(d.email_verification_ttl.num_seconds()),
         ),
         session_idle: chrono::Duration::seconds(
             env_i64("RETENTION_SESSION_IDLE_SECONDS").unwrap_or(d.session_idle.num_seconds()),
@@ -259,9 +324,18 @@ mod tests {
 
     #[test]
     fn retention_defaults_match_policy() {
-        assert_eq!(retention_from_env().session_idle, RetentionPolicy::default().session_idle);
-        assert_eq!(retention_from_env().parked_here_ttl, RetentionPolicy::default().parked_here_ttl);
-        assert_eq!(retention_from_env().export_ttl, RetentionPolicy::default().export_ttl);
+        assert_eq!(
+            retention_from_env().session_idle,
+            RetentionPolicy::default().session_idle
+        );
+        assert_eq!(
+            retention_from_env().parked_here_ttl,
+            RetentionPolicy::default().parked_here_ttl
+        );
+        assert_eq!(
+            retention_from_env().export_ttl,
+            RetentionPolicy::default().export_ttl
+        );
     }
 
     #[test]

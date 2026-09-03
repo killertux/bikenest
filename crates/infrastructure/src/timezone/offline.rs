@@ -27,13 +27,19 @@ type BBox = (f64, f64, f64, f64);
 /// this as the offline fallback.
 const ZONES: &[(BBox, chrono_tz::Tz)] = &[
     // Curitiba / São Paulo / Brasília (the app's home region).
-    ((-34.0, 5.0, -74.0, -34.0), chrono_tz::Tz::America__Sao_Paulo),
+    (
+        (-34.0, 5.0, -74.0, -34.0),
+        chrono_tz::Tz::America__Sao_Paulo,
+    ),
     // Eastern US / Canada.
     ((24.0, 48.0, -82.0, -66.0), chrono_tz::Tz::America__New_York),
     // Central US.
     ((25.0, 48.0, -98.0, -82.0), chrono_tz::Tz::America__Chicago),
     // Western US.
-    ((32.0, 49.0, -125.0, -98.0), chrono_tz::Tz::America__Los_Angeles),
+    (
+        (32.0, 49.0, -125.0, -98.0),
+        chrono_tz::Tz::America__Los_Angeles,
+    ),
     // Western Europe.
     ((36.0, 58.0, -12.0, 30.0), chrono_tz::Tz::Europe__Paris),
     // UK / Ireland.
@@ -51,9 +57,15 @@ const ZONES: &[(BBox, chrono_tz::Tz)] = &[
     // Southeast Asia.
     ((-8.0, 23.0, 92.0, 122.0), chrono_tz::Tz::Asia__Singapore),
     // Eastern Australia.
-    ((-44.0, -10.0, 113.0, 154.0), chrono_tz::Tz::Australia__Sydney),
+    (
+        (-44.0, -10.0, 113.0, 154.0),
+        chrono_tz::Tz::Australia__Sydney,
+    ),
     // Mexico / Central America.
-    ((14.0, 33.0, -118.0, -86.0), chrono_tz::Tz::America__Mexico_City),
+    (
+        (14.0, 33.0, -118.0, -86.0),
+        chrono_tz::Tz::America__Mexico_City,
+    ),
     // Andean South America.
     ((-56.0, 2.0, -81.0, -58.0), chrono_tz::Tz::America__Bogota),
 ];
@@ -63,15 +75,24 @@ const CAPITALS: &[(BBox, chrono_tz::Tz)] = &[
     // Portugal (mainland).
     ((36.0, 42.0, -10.0, -6.0), chrono_tz::Tz::Europe__Lisbon),
     // Argentina.
-    ((-56.0, -21.0, -74.0, -53.0), chrono_tz::Tz::America__Argentina__Buenos_Aires),
+    (
+        (-56.0, -21.0, -74.0, -53.0),
+        chrono_tz::Tz::America__Argentina__Buenos_Aires,
+    ),
     // Chile.
-    ((-56.0, -17.0, -76.0, -66.0), chrono_tz::Tz::America__Santiago),
+    (
+        (-56.0, -17.0, -76.0, -66.0),
+        chrono_tz::Tz::America__Santiago,
+    ),
     // Iceland / Norway.
     ((60.0, 71.0, -25.0, 30.0), chrono_tz::Tz::Europe__Oslo),
     // Middle East / Turkey.
     ((24.0, 42.0, 26.0, 60.0), chrono_tz::Tz::Asia__Dubai),
     // South Africa.
-    ((-35.0, -22.0, 16.0, 33.0), chrono_tz::Tz::Africa__Johannesburg),
+    (
+        (-35.0, -22.0, 16.0, 33.0),
+        chrono_tz::Tz::Africa__Johannesburg,
+    ),
     // East coast Africa.
     ((-12.0, 36.0, 27.0, 52.0), chrono_tz::Tz::Africa__Nairobi),
     // Philippines.

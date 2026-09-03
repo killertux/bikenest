@@ -32,26 +32,42 @@ impl VerificationRepository for SqlxVerificationRepository {
         signal: &NewVerification,
         now: DateTime<Utc>,
     ) -> Result<(), ContributionError> {
-        let (kind, result, attribute_code, expires_at): (&str, &str, Option<&str>, Option<DateTime<Utc>>) =
-            match signal {
-                NewVerification::Existence { location_id, user_id, result } => {
-                    let _ = (location_id, user_id);
-                    ("existence", result.as_code(), None, None)
-                }
-                NewVerification::Attribute { location_id, user_id, code, result } => {
-                    let _ = (location_id, user_id);
-                    ("attribute", result.as_code(), Some(code.as_str()), None)
-                }
-                NewVerification::ParkedHere { location_id, user_id } => {
-                    let _ = (location_id, user_id);
-                    (
-                        "parked_here",
-                        "parked_here",
-                        None,
-                        Some(now + chrono::Duration::days(PARKED_HERE_RETENTION_DAYS)),
-                    )
-                }
-            };
+        let (kind, result, attribute_code, expires_at): (
+            &str,
+            &str,
+            Option<&str>,
+            Option<DateTime<Utc>>,
+        ) = match signal {
+            NewVerification::Existence {
+                location_id,
+                user_id,
+                result,
+            } => {
+                let _ = (location_id, user_id);
+                ("existence", result.as_code(), None, None)
+            }
+            NewVerification::Attribute {
+                location_id,
+                user_id,
+                code,
+                result,
+            } => {
+                let _ = (location_id, user_id);
+                ("attribute", result.as_code(), Some(code.as_str()), None)
+            }
+            NewVerification::ParkedHere {
+                location_id,
+                user_id,
+            } => {
+                let _ = (location_id, user_id);
+                (
+                    "parked_here",
+                    "parked_here",
+                    None,
+                    Some(now + chrono::Duration::days(PARKED_HERE_RETENTION_DAYS)),
+                )
+            }
+        };
         sqlx::query(
             r#"
             INSERT INTO verification (location_id, user_id, kind, result, attribute_code, expires_at)
@@ -74,18 +90,21 @@ impl VerificationRepository for SqlxVerificationRepository {
         &self,
         location_id: i64,
     ) -> Result<Vec<ExistenceSignal>, ContributionError> {
-#[derive(sqlx::FromRow)]
+        #[derive(sqlx::FromRow)]
         struct SignalRow {
             user_id: Option<i64>,
             result: String,
             created_at: DateTime<Utc>,
         }
-        let rows = sqlx::query_as::<_, SignalRow>(r#"
+        let rows = sqlx::query_as::<_, SignalRow>(
+            r#"
             SELECT DISTINCT ON (user_id) user_id, result, created_at
             FROM verification
             WHERE location_id = $1 AND kind = 'existence' AND user_id IS NOT NULL
             ORDER BY user_id, created_at DESC
-            "#).bind(location_id)
+            "#,
+        )
+        .bind(location_id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -105,13 +124,14 @@ impl VerificationRepository for SqlxVerificationRepository {
         &self,
         location_id: i64,
     ) -> Result<Vec<AttributeSummary>, ContributionError> {
-#[derive(sqlx::FromRow)]
+        #[derive(sqlx::FromRow)]
         struct AttrRow {
             attribute_code: Option<String>,
             correct: Option<i64>,
             incorrect: Option<i64>,
         }
-        let rows = sqlx::query_as::<_, AttrRow>(r#"
+        let rows = sqlx::query_as::<_, AttrRow>(
+            r#"
             SELECT attribute_code,
                    COUNT(*) FILTER (WHERE result = 'correct') AS correct,
                    COUNT(*) FILTER (WHERE result = 'incorrect') AS incorrect
@@ -119,7 +139,9 @@ impl VerificationRepository for SqlxVerificationRepository {
             WHERE location_id = $1 AND kind = 'attribute'
             GROUP BY attribute_code
             ORDER BY attribute_code
-            "#).bind(location_id)
+            "#,
+        )
+        .bind(location_id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;

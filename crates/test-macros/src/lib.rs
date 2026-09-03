@@ -7,7 +7,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, FnArg, ItemFn, Pat, PatType};
+use syn::{FnArg, ItemFn, Pat, PatType, parse_macro_input};
 
 #[proc_macro_attribute]
 pub fn db_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -21,9 +21,10 @@ pub fn db_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut tx_ident: Option<proc_macro2::Ident> = None;
     for arg in &func.sig.inputs {
         if let FnArg::Typed(PatType { pat, .. }) = arg
-            && let Pat::Ident(pat_ident) = &**pat {
-                tx_ident = Some(pat_ident.ident.clone());
-            }
+            && let Pat::Ident(pat_ident) = &**pat
+        {
+            tx_ident = Some(pat_ident.ident.clone());
+        }
     }
 
     let Some(tx) = tx_ident else {

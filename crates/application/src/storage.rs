@@ -37,7 +37,6 @@ pub trait ObjectStorage: Send + Sync {
     /// hits the bucket). Async because the AWS SDK presigner is async.
     async fn presigned_get(&self, key: &str, ttl: Duration) -> Result<String, StorageError>;
 
-
     /// Remove an object. Missing objects are not an error (idempotent).
     async fn delete(&self, key: &str) -> Result<(), StorageError>;
 

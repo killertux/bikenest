@@ -4,7 +4,7 @@
 
 use axum::body::{Body, to_bytes};
 use axum::extract::{FromRequestParts, Request, State};
-use axum::http::{header, HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use bikenest_application::{AuthenticatedUser, TokenGenerator};
@@ -37,6 +37,7 @@ impl Auth {
 
     /// Returns the authenticated principal, or a redirect to `/login` when
     /// anonymous (302, with a `next` back to the requested path).
+    #[allow(clippy::result_large_err)]
     pub fn require_user(&self) -> Result<&AuthenticatedUser, Response> {
         self.user
             .as_ref()
@@ -44,7 +45,11 @@ impl Auth {
     }
 
     /// Returns the authenticated principal iff it has `role`, else 403.
-    pub fn require_role(&self, role: bikenest_domain::Role) -> Result<&AuthenticatedUser, Response> {
+    #[allow(clippy::result_large_err)]
+    pub fn require_role(
+        &self,
+        role: bikenest_domain::Role,
+    ) -> Result<&AuthenticatedUser, Response> {
         let user = self.require_user()?;
         if user.has_role(role) {
             Ok(user)
@@ -55,6 +60,7 @@ impl Auth {
 
     /// Returns the authenticated principal iff they are a moderator **or** an
     /// admin (the M4 moderation queue grants both — plan §7).
+    #[allow(clippy::result_large_err)]
     pub fn require_moderator(&self) -> Result<&AuthenticatedUser, Response> {
         let user = self.require_user()?;
         if user.has_role(bikenest_domain::Role::Moderator)
@@ -69,6 +75,7 @@ impl Auth {
     /// Returns the authenticated principal iff their email is verified (the
     /// §16 contribution gate), else 403 with the verification notice. Applies
     /// to add/edit/proposal/review/verify; favorites use [`Self::require_user`].
+    #[allow(clippy::result_large_err)]
     pub fn require_verified(&self) -> Result<&AuthenticatedUser, Response> {
         let user = self.require_user()?;
         if user.is_verified {
@@ -90,12 +97,11 @@ impl Auth {
 impl<S: Send + Sync> FromRequestParts<S> for Auth {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(parts: &mut axum::http::request::Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        Ok(parts
-            .extensions
-            .get::<Auth>()
-            .cloned()
-            .unwrap_or_default())
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(parts.extensions.get::<Auth>().cloned().unwrap_or_default())
     }
 }
 

@@ -111,7 +111,12 @@ impl TestTx {
         if let Some(tx) = self.tx.take() {
             tx.commit().await.expect("commit test fixture");
         }
-        self.tx = Some(self.pool.begin().await.expect("begin tx after fixture commit"));
+        self.tx = Some(
+            self.pool
+                .begin()
+                .await
+                .expect("begin tx after fixture commit"),
+        );
     }
 }
 
@@ -215,16 +220,14 @@ impl UserBuilder {
     where
         E: sqlx::Executor<'e, Database = Postgres>,
     {
-        let row: (i64,) = sqlx::query_as(
-            "INSERT INTO users (email, display_name) VALUES ($1, $2) RETURNING id",
-        )
-        .bind(&self.email)
-        .bind(&self.display_name)
-        .fetch_one(exec)
-        .await?;
+        let row: (i64,) =
+            sqlx::query_as("INSERT INTO users (email, display_name) VALUES ($1, $2) RETURNING id")
+                .bind(&self.email)
+                .bind(&self.display_name)
+                .fetch_one(exec)
+                .await?;
 
-        let email = bikenest_domain::UserEmail::parse(&self.email)
-            .expect("builder email is valid");
+        let email = bikenest_domain::UserEmail::parse(&self.email).expect("builder email is valid");
         Ok(bikenest_domain::User::new(
             bikenest_domain::UserId(row.0),
             email,
@@ -232,7 +235,6 @@ impl UserBuilder {
         ))
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Parking builder (M1)
@@ -404,9 +406,7 @@ impl ParkingBuilder {
             Cost::Free => ("free", None, None, None),
             Cost::Unknown => ("unknown", None, None, None),
             Cost::Paid { price: None } => ("paid", None, None, None),
-            Cost::Paid {
-                price: Some(p),
-            } => (
+            Cost::Paid { price: Some(p) } => (
                 "paid",
                 Some(p.cents()),
                 Some(p.currency().as_str().to_string()),
@@ -468,7 +468,16 @@ impl ParkingBuilder {
 
         // Every catalog feature is recorded: explicit values, or unknown (§28).
         let recorded: Vec<&str> = self.security.iter().map(|(c, _)| c.as_str()).collect();
-        for feature in ["dedicated_locking_point", "indoor", "cctv", "staffed", "security_guard", "controlled_access", "well_lit", "restricted_access"] {
+        for feature in [
+            "dedicated_locking_point",
+            "indoor",
+            "cctv",
+            "staffed",
+            "security_guard",
+            "controlled_access",
+            "well_lit",
+            "restricted_access",
+        ] {
             let state = self
                 .security
                 .iter()
@@ -507,7 +516,11 @@ impl ParkingBuilder {
                                 if *ad {
                                     TimeRange::all_day()
                                 } else {
-                                    TimeRange { opens_at: *o, closes_at: *c, all_day: false }
+                                    TimeRange {
+                                        opens_at: *o,
+                                        closes_at: *c,
+                                        all_day: false,
+                                    }
                                 },
                             )
                         })

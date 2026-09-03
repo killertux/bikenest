@@ -7,11 +7,11 @@ use axum::body::Body;
 use axum::http::Request;
 use bikenest_test_support::{db_test, pool};
 use std::sync::{Arc, Mutex};
+use tower::ServiceExt;
 use tracing::Subscriber;
 use tracing::field::{Field, Visit};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
-use tower::ServiceExt;
 
 use bikenest_infrastructure::Db;
 use bikenest_web::app_router;

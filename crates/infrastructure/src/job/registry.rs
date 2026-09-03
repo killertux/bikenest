@@ -1,0 +1,173 @@
+//! Job handler registry + the built-in handlers (plans/m9-background-jobs.md).
+
+use crate::Db;
+use crate::auth::{SqlxAuditLog, SystemClock};
+use crate::config::Config;
+use crate::job::repo::SqlxJobRepository;
+use crate::privacy::SqlxRetentionRepository;
+use async_trait::async_trait;
+use bikenest_application::{JOB_JOBS_GC, JOB_RETENTION, JobError, JobHandler, JobPayload};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+/// An always-on recurring job the worker bootstraps at startup (self-healing:
+/// `enqueue` with a stable `idempotency_key` is a no-op if the row already exists).
+pub struct RecurringKind {
+    pub job_kind: &'static str,
+    pub payload: JobPayload,
+    pub schedule: JobPayload,
+    pub idempotency_key: &'static str,
+    pub max_attempts: i32,
+}
+
+/// Maps a job `kind` → its handler, plus the always-on recurring kinds.
+pub struct JobRegistry {
+    handlers: HashMap<String, Box<dyn JobHandler>>,
+    recurring: Vec<RecurringKind>,
+}
+
+impl JobRegistry {
+    pub fn new(handlers: Vec<Box<dyn JobHandler>>, recurring: Vec<RecurringKind>) -> Self {
+        let map = handlers
+            .into_iter()
+            .map(|h| (h.kind().to_string(), h))
+            .collect();
+        Self {
+            handlers: map,
+            recurring,
+        }
+    }
+
+    pub fn get(&self, kind: &str) -> Option<&dyn JobHandler> {
+        self.handlers.get(kind).map(|b| b.as_ref())
+    }
+
+    pub fn recurring(&self) -> &[RecurringKind] {
+        &self.recurring
+    }
+}
+
+/// Everything the worker needs, plus the repo it shares with the GC handler.
+pub struct JobServices {
+    pub repo: SqlxJobRepository,
+    pub registry: Arc<JobRegistry>,
+}
+
+/// Build the built-in job handlers from the real infrastructure (like
+/// `storage_from_env`). Wires retention (backed by `RetentionJob`) and `jobs.gc`.
+pub fn job_services(
+    db: Db,
+    config: &Config,
+    storage: Arc<dyn bikenest_application::ObjectStorage>,
+) -> JobServices {
+    let repo = SqlxJobRepository::new(db.clone());
+    let handlers: Vec<Box<dyn JobHandler>> = vec![
+        Box::new(RetentionJobHandler::new(db.clone(), config, storage)),
+        Box::new(JobsGcHandler::new(
+            repo.clone(),
+            config.jobs.history_retention_days,
+        )),
+    ];
+    let recurring = vec![
+        RecurringKind {
+            job_kind: JOB_RETENTION,
+            payload: serde_json::json!({}),
+            schedule: serde_json::json!({ "every_seconds": 86_400 }),
+            idempotency_key: "recurring:retention",
+            max_attempts: config.jobs.max_attempts,
+        },
+        RecurringKind {
+            job_kind: JOB_JOBS_GC,
+            payload: serde_json::json!({}),
+            schedule: serde_json::json!({ "every_seconds": 86_400 }),
+            idempotency_key: "recurring:jobs.gc",
+            max_attempts: config.jobs.max_attempts,
+        },
+    ];
+    JobServices {
+        repo,
+        registry: Arc::new(JobRegistry::new(handlers, recurring)),
+    }
+}
+
+/// Runs the existing `RetentionJob` use case as a background job. Idempotent
+/// (every purge is `DELETE WHERE expires_at < now()`), so at-least-once is safe.
+pub struct RetentionJobHandler {
+    job: bikenest_application::RetentionJob,
+}
+
+impl RetentionJobHandler {
+    pub fn new(
+        db: Db,
+        config: &Config,
+        storage: Arc<dyn bikenest_application::ObjectStorage>,
+    ) -> Self {
+        // The media wardrobe is a filesystem path only used by the S3-less orphan
+        // sweep (a no-op for S3 — there is no local disk to walk). Default to the
+        // gitignored `media/` dir.
+        let media_root = std::env::var("MEDIA_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("media"));
+        let retention =
+            SqlxRetentionRepository::new(db.clone(), config.retention, storage.clone(), media_root);
+        let job = bikenest_application::RetentionJob::new(
+            Box::new(retention),
+            Box::new(SqlxAuditLog::new(db.clone())),
+            Box::new(SystemClock),
+            bikenest_application::RetentionConfig {
+                inactive_account_anonymize_after_days: config.inactive_account_anonymize_after_days,
+                deleted_account_purge_after_days: config.deleted_account_purge_after_days,
+            },
+        );
+        Self { job }
+    }
+}
+
+#[async_trait]
+impl JobHandler for RetentionJobHandler {
+    fn kind(&self) -> &'static str {
+        JOB_RETENTION
+    }
+
+    async fn run(&self, _payload: &JobPayload) -> Result<(), JobError> {
+        self.job
+            .run()
+            .await
+            .map(|_| ())
+            .map_err(|e| JobError::Failed(format!("retention failed: {e}")))
+    }
+}
+
+/// Deletes terminal job rows older than the configured retention window.
+pub struct JobsGcHandler {
+    repo: SqlxJobRepository,
+    retention_days: u32,
+}
+
+impl JobsGcHandler {
+    pub fn new(repo: SqlxJobRepository, retention_days: u32) -> Self {
+        Self {
+            repo,
+            retention_days,
+        }
+    }
+}
+
+#[async_trait]
+impl JobHandler for JobsGcHandler {
+    fn kind(&self) -> &'static str {
+        JOB_JOBS_GC
+    }
+
+    async fn run(&self, _payload: &JobPayload) -> Result<(), JobError> {
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(self.retention_days as i64);
+        let deleted = self
+            .repo
+            .gc(cutoff)
+            .await
+            .map_err(|e| JobError::Failed(format!("jobs.gc failed: {e}")))?;
+        tracing::debug!(deleted, "jobs.gc purged terminal rows");
+        Ok(())
+    }
+}

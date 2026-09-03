@@ -48,3 +48,65 @@ body {
   line-height: 1.6;
   text-rendering: optimizeLegibility;
 }
+
+/* Legal pages: policies/*.md rendered by crates/web/src/markdown.rs into
+   .policy-content (templates/pages/policy.html). Plain CSS on theme tokens —
+   no typography plugin. */
+.policy-content > * + * { margin-top: 0.85em; }
+.policy-content h2 {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-top: 1.75em;
+}
+.policy-content h3 {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-top: 1.4em;
+}
+.policy-content h2:first-child, .policy-content h3:first-child { margin-top: 0; }
+.policy-content ul, .policy-content ol { padding-left: 1.4em; }
+.policy-content ul { list-style: disc; }
+.policy-content ol { list-style: decimal; }
+.policy-content li + li { margin-top: 0.3em; }
+.policy-content a {
+  color: var(--color-accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.policy-content strong { font-weight: 600; }
+.policy-content code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--color-bg);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+}
+.policy-content table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.policy-content th, .policy-content td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.5em 0.75em;
+  border-bottom: 1px solid var(--color-border);
+}
+.policy-content th {
+  font-size: 0.78em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+.policy-content hr { border: 0; border-top: 1px solid var(--color-border); margin: 1.5em 0; }
+.policy-content blockquote {
+  border-left: 3px solid var(--color-border);
+  padding-left: 1em;
+  color: var(--color-muted);
+}

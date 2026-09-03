@@ -6,7 +6,9 @@
 use bikenest_test_support::{UserBuilder, db_test};
 
 #[db_test]
-async fn user_builder_inserts_and_reads_back_within_test_transaction(tx: &mut bikenest_test_support::TestTx) {
+async fn user_builder_inserts_and_reads_back_within_test_transaction(
+    tx: &mut bikenest_test_support::TestTx,
+) {
     let user = UserBuilder::new()
         .with_email("Ada@Example.com")
         .with_name("Ada")
@@ -17,13 +19,12 @@ async fn user_builder_inserts_and_reads_back_within_test_transaction(tx: &mut bi
     assert_eq!(user.email.as_str(), "ada@example.com");
     assert_eq!(user.display_name.as_deref(), Some("Ada"));
 
-    let stored: (String, Option<String>) = sqlx::query_as(
-        "SELECT email, display_name FROM users WHERE id = $1",
-    )
-    .bind(user.id.0)
-    .fetch_one(tx.executor())
-    .await
-    .expect("read back");
+    let stored: (String, Option<String>) =
+        sqlx::query_as("SELECT email, display_name FROM users WHERE id = $1")
+            .bind(user.id.0)
+            .fetch_one(tx.executor())
+            .await
+            .expect("read back");
 
     assert_eq!(stored.0, "ada@example.com");
     assert_eq!(stored.1.as_deref(), Some("Ada"));
@@ -31,7 +32,9 @@ async fn user_builder_inserts_and_reads_back_within_test_transaction(tx: &mut bi
 }
 
 #[db_test]
-async fn duplicate_email_across_case_is_rejected_by_unique_index(tx: &mut bikenest_test_support::TestTx) {
+async fn duplicate_email_across_case_is_rejected_by_unique_index(
+    tx: &mut bikenest_test_support::TestTx,
+) {
     UserBuilder::new()
         .with_email("duplicate@example.com")
         .create(tx.executor())
@@ -43,8 +46,7 @@ async fn duplicate_email_across_case_is_rejected_by_unique_index(tx: &mut bikene
         .create(tx.executor())
         .await;
 
-    let err =
-        second.expect_err("unique index must reject case-insensitive duplicate");
+    let err = second.expect_err("unique index must reject case-insensitive duplicate");
     assert!(
         err.as_database_error()
             .map(|e| e.is_unique_violation())
@@ -54,7 +56,9 @@ async fn duplicate_email_across_case_is_rejected_by_unique_index(tx: &mut bikene
 }
 
 #[db_test]
-async fn savepoint_allows_nested_transaction_with_inner_rollback(tx: &mut bikenest_test_support::TestTx) {
+async fn savepoint_allows_nested_transaction_with_inner_rollback(
+    tx: &mut bikenest_test_support::TestTx,
+) {
     // Outer insert survives.
     UserBuilder::new()
         .with_email("outer@example.com")
@@ -73,20 +77,16 @@ async fn savepoint_allows_nested_transaction_with_inner_rollback(tx: &mut bikene
         sp.rollback().await; // undo inner insert (§51)
     }
 
-    let (inner_gone,): (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM users WHERE email = $1",
-    )
-    .bind("inner@example.com")
-    .fetch_one(tx.executor())
-    .await
-    .unwrap();
-    let (outer_stays,): (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM users WHERE email = $1",
-    )
-    .bind("outer@example.com")
-    .fetch_one(tx.executor())
-    .await
-    .unwrap();
+    let (inner_gone,): (i64,) = sqlx::query_as("SELECT count(*) FROM users WHERE email = $1")
+        .bind("inner@example.com")
+        .fetch_one(tx.executor())
+        .await
+        .unwrap();
+    let (outer_stays,): (i64,) = sqlx::query_as("SELECT count(*) FROM users WHERE email = $1")
+        .bind("outer@example.com")
+        .fetch_one(tx.executor())
+        .await
+        .unwrap();
 
     assert_eq!(inner_gone, 0, "savepoint rollback must undo inner insert");
     assert_eq!(outer_stays, 1, "outer transaction must keep its insert");
@@ -104,12 +104,10 @@ async fn savepoint_inner_commit_releases_savepoint(tx: &mut bikenest_test_suppor
         sp.commit().await; // release savepoint
     }
 
-    let (kept,): (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM users WHERE email = $1",
-    )
-    .bind("committed@example.com")
-    .fetch_one(tx.executor())
-    .await
-    .unwrap();
+    let (kept,): (i64,) = sqlx::query_as("SELECT count(*) FROM users WHERE email = $1")
+        .bind("committed@example.com")
+        .fetch_one(tx.executor())
+        .await
+        .unwrap();
     assert_eq!(kept, 1, "inner commit must keep the row within the test tx");
 }

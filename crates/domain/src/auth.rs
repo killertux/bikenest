@@ -50,7 +50,10 @@ impl AccountState {
 
     /// May this account use the authenticated settings pages (C1–C3)?
     pub fn can_access_account(self) -> bool {
-        matches!(self, AccountState::PendingEmailVerification | AccountState::Active)
+        matches!(
+            self,
+            AccountState::PendingEmailVerification | AccountState::Active
+        )
     }
 
     /// May this account contribute (add/review/verify) — the M2 contract is the
@@ -217,7 +220,9 @@ impl CsrfToken {
 
     pub fn from_base64url(s: &str) -> Option<Self> {
         use base64::Engine as _;
-        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).ok()?;
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(s)
+            .ok()?;
         if bytes.len() != 32 {
             return None;
         }
@@ -276,7 +281,9 @@ impl VerificationToken {
 
     pub fn from_base64url(s: &str) -> Option<Self> {
         use base64::Engine as _;
-        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).ok()?;
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(s)
+            .ok()?;
         if bytes.len() != 32 {
             return None;
         }
@@ -386,7 +393,10 @@ mod tests {
 
     #[test]
     fn provider_codes_round_trip() {
-        for provider in [AuthenticationProvider::Password, AuthenticationProvider::Google] {
+        for provider in [
+            AuthenticationProvider::Password,
+            AuthenticationProvider::Google,
+        ] {
             assert_eq!(
                 AuthenticationProvider::from_code(provider.as_code()),
                 Some(provider)
@@ -423,7 +433,10 @@ mod tests {
         assert_eq!(&token.as_bytes()[..], &raw[..]);
         assert_eq!(session.to_hex(), "00".repeat(32));
         use base64::Engine as _;
-        assert_eq!(token.to_base64url(), base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw));
+        assert_eq!(
+            token.to_base64url(),
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw)
+        );
     }
 
     #[test]

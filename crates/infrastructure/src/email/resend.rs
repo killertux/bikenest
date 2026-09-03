@@ -66,7 +66,9 @@ impl EmailProvider for ResendEmailProvider {
         } else {
             let status = res.status();
             let text = res.text().await.unwrap_or_default();
-            Err(EmailError::Unexpected(format!("resend API {status}: {text}")))
+            Err(EmailError::Unexpected(format!(
+                "resend API {status}: {text}"
+            )))
         }
     }
 }

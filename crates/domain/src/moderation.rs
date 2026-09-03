@@ -134,7 +134,8 @@ pub fn is_known_report_reason(code: &str) -> bool {
 ///   duplicate listing).
 /// - Everything else is allowed on any target type.
 pub fn reason_allowed_for(target: ReportTargetType, reason: &str) -> bool {
-    let is_photo = target == ReportTargetType::ParkingPhoto || target == ReportTargetType::ReviewPhoto;
+    let is_photo =
+        target == ReportTargetType::ParkingPhoto || target == ReportTargetType::ReviewPhoto;
     let is_review = target == ReportTargetType::Review || target == ReportTargetType::ReviewPhoto;
     match reason {
         "inappropriate_photo" => is_photo,

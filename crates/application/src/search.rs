@@ -1,7 +1,7 @@
 //! Search use cases: `SearchParking` (§21/§31–§34) and `GetParkingDetails` (§24).
 
 use crate::ports::{
-    FreshnessConfig, GeocodeError, GeoHit, Geocoder, ParkingDetailsReader, ParkingSearchReader,
+    FreshnessConfig, GeoHit, GeocodeError, Geocoder, ParkingDetailsReader, ParkingSearchReader,
     ReaderError, SearchInput, SearchPage, SearchRequest,
 };
 use bikenest_domain::{FreshnessCategory, GeoPoint};
@@ -114,7 +114,10 @@ impl SearchParking {
     /// Executes the search. Returns the result page plus the geocode hit when
     /// the origin came from resolving a query (the web layer shows the
     /// resolved label; the coordinates are never persisted — §22).
-    pub async fn execute(&self, input: SearchInput) -> Result<(SearchPage, Option<GeoHit>), SearchError> {
+    pub async fn execute(
+        &self,
+        input: SearchInput,
+    ) -> Result<(SearchPage, Option<GeoHit>), SearchError> {
         let (request, geohit) = self.resolve(input).await?;
         let page = if request.sort == crate::ports::Sort::Recommended {
             self.recommended_page(&request).await?
@@ -126,7 +129,10 @@ impl SearchParking {
 
     /// Origin resolution (§21/§22): explicit coordinates win over the query;
     /// otherwise geocode the query. Nothing is persisted here.
-    async fn resolve(&self, input: SearchInput) -> Result<(SearchRequest, Option<GeoHit>), SearchError> {
+    async fn resolve(
+        &self,
+        input: SearchInput,
+    ) -> Result<(SearchRequest, Option<GeoHit>), SearchError> {
         let query = input
             .query
             .as_deref()
@@ -134,8 +140,7 @@ impl SearchParking {
             .filter(|q| !q.is_empty());
 
         let origin = if let (Some(lat), Some(lon)) = (input.lat, input.lon) {
-            let point =
-                GeoPoint::new(lat, lon).map_err(|_| SearchError::InvalidOrigin)?;
+            let point = GeoPoint::new(lat, lon).map_err(|_| SearchError::InvalidOrigin)?;
             (point, None)
         } else {
             let Some(q) = query else {
@@ -150,7 +155,10 @@ impl SearchParking {
 
         let request = SearchRequest::new(
             point,
-            geohit.as_ref().map(|h| h.label.clone()).or_else(|| query.map(str::to_string)),
+            geohit
+                .as_ref()
+                .map(|h| h.label.clone())
+                .or_else(|| query.map(str::to_string)),
             input.radius_m.unwrap_or(crate::ports::DEFAULT_RADIUS_M),
             input.filters(),
             input
@@ -175,7 +183,9 @@ impl SearchParking {
             let last = page.items.last().expect("non-empty");
             Some(crate::ports::Cursor {
                 sort: request.sort,
-                v: last.sort_key(request.sort).expect("SQL sorts always have a key"),
+                v: last
+                    .sort_key(request.sort)
+                    .expect("SQL sorts always have a key"),
                 id: last.id,
             })
         } else {
@@ -226,11 +236,13 @@ impl SearchParking {
         let mut scored_items = scored;
         scored_items.truncate(request.page_size);
         let next_cursor = if has_more {
-            scored_items.last().map(|(score, last)| crate::ports::Cursor {
-                sort: request.sort,
-                v: *score,
-                id: last.id,
-            })
+            scored_items
+                .last()
+                .map(|(score, last)| crate::ports::Cursor {
+                    sort: request.sort,
+                    v: *score,
+                    id: last.id,
+                })
         } else {
             None
         };

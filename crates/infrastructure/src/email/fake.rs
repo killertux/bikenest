@@ -29,9 +29,15 @@ impl FakeEmailProvider {
     /// `MEDIA_ROOT` (defaults to `<repo>/media`).
     pub fn new() -> Self {
         Self::with_root(
-            std::env::var("MEDIA_ROOT").ok().map(PathBuf::from).or_else(|| {
-                Some(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../media")))
-            }),
+            std::env::var("MEDIA_ROOT")
+                .ok()
+                .map(PathBuf::from)
+                .or_else(|| {
+                    Some(PathBuf::from(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../../media"
+                    )))
+                }),
         )
     }
 
@@ -69,7 +75,10 @@ impl FakeEmailProvider {
             static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let dir = root.join("outbox");
-            let file = dir.join(format!("{}-{n}.txt", chrono::Utc::now().format("%Y%m%d%H%M%S")));
+            let file = dir.join(format!(
+                "{}-{n}.txt",
+                chrono::Utc::now().format("%Y%m%d%H%M%S")
+            ));
             let body = format!(
                 "To: {}\nSubject: {}\n\n{}\n",
                 email.to, email.subject, email.text
@@ -107,7 +116,8 @@ fn token_from(text: &str, path: &str) -> Option<String> {
     let token_at = rest.find("token=")? + "token=".len();
     let mut end = token_at;
     for (i, b) in rest[token_at..].bytes().enumerate() {
-        let is_token_char = matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.');
+        let is_token_char =
+            matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.');
         if !is_token_char {
             end = token_at + i;
             break;
@@ -135,7 +145,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(fake.emails().len(), 1);
-        assert_eq!(fake.token_for("/verify-email").as_deref(), Some("abc-123_XYZ"));
+        assert_eq!(
+            fake.token_for("/verify-email").as_deref(),
+            Some("abc-123_XYZ")
+        );
         assert_eq!(fake.token_for("/password-reset/new"), None);
     }
 }

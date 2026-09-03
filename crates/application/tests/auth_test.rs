@@ -47,10 +47,24 @@ impl FakeRepo {
 #[async_trait]
 impl AccountRepository for FakeRepo {
     async fn find_by_email(&self, email: &UserEmail) -> Result<Option<User>, AuthError> {
-        Ok(self.db.lock().unwrap().users.iter().find(|u| u.email == *email).cloned())
+        Ok(self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter()
+            .find(|u| u.email == *email)
+            .cloned())
     }
     async fn find_by_id(&self, id: UserId) -> Result<Option<User>, AuthError> {
-        Ok(self.db.lock().unwrap().users.iter().find(|u| u.id == id).cloned())
+        Ok(self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter()
+            .find(|u| u.id == id)
+            .cloned())
     }
     async fn create(&self, new: NewAccount<'_>) -> Result<UserId, AuthError> {
         let mut db = self.db.lock().unwrap();
@@ -71,13 +85,27 @@ impl AccountRepository for FakeRepo {
         Ok(id)
     }
     async fn set_state(&self, id: UserId, state: AccountState) -> Result<(), AuthError> {
-        if let Some(u) = self.db.lock().unwrap().users.iter_mut().find(|u| u.id == id) {
+        if let Some(u) = self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter_mut()
+            .find(|u| u.id == id)
+        {
             u.account_state = state;
         }
         Ok(())
     }
     async fn mark_email_verified(&self, id: UserId, at: DateTime<Utc>) -> Result<(), AuthError> {
-        if let Some(u) = self.db.lock().unwrap().users.iter_mut().find(|u| u.id == id) {
+        if let Some(u) = self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter_mut()
+            .find(|u| u.id == id)
+        {
             u.email_verified_at = Some(at);
         }
         Ok(())
@@ -103,7 +131,12 @@ impl AccountRepository for FakeRepo {
         }
         Ok(())
     }
-    async fn confirm_email(&self, id: UserId, at: DateTime<Utc>, email: &UserEmail) -> Result<(), AuthError> {
+    async fn confirm_email(
+        &self,
+        id: UserId,
+        at: DateTime<Utc>,
+        email: &UserEmail,
+    ) -> Result<(), AuthError> {
         let mut db = self.db.lock().unwrap();
         if let Some(u) = db.users.iter_mut().find(|u| u.id == id) {
             u.email = email.clone();
@@ -125,7 +158,11 @@ impl AccountRepository for FakeRepo {
         hash: Option<&str>,
     ) -> Result<(), AuthError> {
         let mut db = self.db.lock().unwrap();
-        if let Some(i) = db.identities.iter_mut().find(|i| i.user_id == user_id && i.provider == provider) {
+        if let Some(i) = db
+            .identities
+            .iter_mut()
+            .find(|i| i.user_id == user_id && i.provider == provider)
+        {
             i.provider_subject = subject.to_string();
             i.credential_hash = hash.map(str::to_string);
         } else {
@@ -155,13 +192,27 @@ impl AccountRepository for FakeRepo {
             .cloned())
     }
     async fn roles(&self, id: UserId) -> Result<Vec<Role>, AuthError> {
-        Ok(self.db.lock().unwrap().users.iter().find(|u| u.id == id).map(|u| u.roles.clone()).unwrap_or_default())
+        Ok(self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter()
+            .find(|u| u.id == id)
+            .map(|u| u.roles.clone())
+            .unwrap_or_default())
     }
     async fn grant_role(&self, id: UserId, role: Role, _by: UserId) -> Result<(), AuthError> {
-        if let Some(u) = self.db.lock().unwrap().users.iter_mut().find(|u| u.id == id) {
-            if !u.roles.contains(&role) {
-                u.roles.push(role);
-            }
+        if let Some(u) = self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter_mut()
+            .find(|u| u.id == id)
+            && !u.roles.contains(&role)
+        {
+            u.roles.push(role);
         }
         Ok(())
     }
@@ -183,7 +234,13 @@ impl AccountRepository for FakeRepo {
 // --- SessionStore ---
 #[async_trait]
 impl SessionStore for FakeRepo {
-    async fn create(&self, user_id: UserId, raw: &SessionId, csrf: &CsrfToken, now: DateTime<Utc>) -> Result<(), AuthError> {
+    async fn create(
+        &self,
+        user_id: UserId,
+        raw: &SessionId,
+        csrf: &CsrfToken,
+        now: DateTime<Utc>,
+    ) -> Result<(), AuthError> {
         self.db.lock().unwrap().sessions.push((
             raw.to_hex(),
             Session {
@@ -197,11 +254,18 @@ impl SessionStore for FakeRepo {
         ));
         Ok(())
     }
-    async fn resolve(&self, raw: &SessionId, now: DateTime<Utc>) -> Result<Option<Session>, AuthError> {
+    async fn resolve(
+        &self,
+        raw: &SessionId,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Session>, AuthError> {
         let mut db = self.db.lock().unwrap();
         let key = raw.to_hex();
         if let Some((_, s)) = db.sessions.iter_mut().find(|(k, _)| *k == key) {
-            if s.revoked_at.is_some() || now > s.expires_at || now - s.last_seen_at > chrono::Duration::days(30) {
+            if s.revoked_at.is_some()
+                || now > s.expires_at
+                || now - s.last_seen_at > chrono::Duration::days(30)
+            {
                 return Ok(None);
             }
             s.last_seen_at = now;
@@ -217,7 +281,11 @@ impl SessionStore for FakeRepo {
         }
         Ok(())
     }
-    async fn revoke_all_for_user_except(&self, user_id: UserId, keep: &SessionId) -> Result<(), AuthError> {
+    async fn revoke_all_for_user_except(
+        &self,
+        user_id: UserId,
+        keep: &SessionId,
+    ) -> Result<(), AuthError> {
         let mut db = self.db.lock().unwrap();
         let keep = keep.to_hex();
         for (k, s) in db.sessions.iter_mut() {
@@ -241,24 +309,56 @@ impl SessionStore for FakeRepo {
 // --- TokenStore ---
 #[async_trait]
 impl TokenStore for FakeRepo {
-    async fn issue_verification(&self, user_id: UserId, email: &str, raw: &VerificationToken, _now: DateTime<Utc>) -> Result<(), AuthError> {
-        self.db.lock().unwrap().verification.push((raw.to_hex(), user_id, email.to_string(), false));
+    async fn issue_verification(
+        &self,
+        user_id: UserId,
+        email: &str,
+        raw: &VerificationToken,
+        _now: DateTime<Utc>,
+    ) -> Result<(), AuthError> {
+        self.db.lock().unwrap().verification.push((
+            raw.to_hex(),
+            user_id,
+            email.to_string(),
+            false,
+        ));
         Ok(())
     }
-    async fn consume_verification(&self, raw: &VerificationToken, _now: DateTime<Utc>) -> Result<Option<(UserId, String)>, AuthError> {
+    async fn consume_verification(
+        &self,
+        raw: &VerificationToken,
+        _now: DateTime<Utc>,
+    ) -> Result<Option<(UserId, String)>, AuthError> {
         let mut db = self.db.lock().unwrap();
         let key = raw.to_hex();
-        if let Some((_, u, e, used)) = db.verification.iter_mut().find(|(k, _, _, used)| *k == key && !*used) {
+        if let Some((_, u, e, used)) = db
+            .verification
+            .iter_mut()
+            .find(|(k, _, _, used)| *k == key && !*used)
+        {
             *used = true;
             return Ok(Some((*u, e.clone())));
         }
         Ok(None)
     }
-    async fn issue_reset(&self, user_id: UserId, raw: &VerificationToken, _now: DateTime<Utc>) -> Result<(), AuthError> {
-        self.db.lock().unwrap().reset.push((raw.to_hex(), user_id, false));
+    async fn issue_reset(
+        &self,
+        user_id: UserId,
+        raw: &VerificationToken,
+        _now: DateTime<Utc>,
+    ) -> Result<(), AuthError> {
+        self.db
+            .lock()
+            .unwrap()
+            .reset
+            .push((raw.to_hex(), user_id, false));
         Ok(())
     }
-    async fn consume_reset(&self, raw: &VerificationToken, _now: DateTime<Utc>) -> Result<Option<UserId>, AuthError> {
+    async fn consume_reset(
+        &self,
+        raw: &VerificationToken,
+        _now: DateTime<Utc>,
+    ) -> Result<Option<UserId>, AuthError> {
         let mut db = self.db.lock().unwrap();
         let key = raw.to_hex();
         if let Some((_, u, used)) = db.reset.iter_mut().find(|(k, _, used)| *k == key && !*used) {
@@ -302,7 +402,9 @@ struct FakeClock {
 }
 impl FakeClock {
     fn new(t: DateTime<Utc>) -> Self {
-        Self { t: Arc::new(Mutex::new(t)) }
+        Self {
+            t: Arc::new(Mutex::new(t)),
+        }
     }
 }
 impl Clock for FakeClock {
@@ -354,7 +456,10 @@ struct FakeRate {
 impl RateLimiter for FakeRate {
     async fn check(&self, key: &str, limit: u32, window: Duration) -> Result<bool, RateLimitError> {
         let now = Instant::now();
-        let mut buckets = self.buckets.lock().map_err(|_| RateLimitError::Unavailable)?;
+        let mut buckets = self
+            .buckets
+            .lock()
+            .map_err(|_| RateLimitError::Unavailable)?;
         let q = buckets.entry(key.to_string()).or_default();
         while let Some(&front) = q.first() {
             if now.duration_since(front) >= window {
@@ -394,11 +499,18 @@ fn make_service(db: Arc<Mutex<FakeDb>>) -> AuthService {
         Box::new(repo.clone()),
         Box::new(repo.clone()),
         Box::new(FakeHasher),
-        Box::new(FakeTokens { n: Arc::new(Mutex::new(0)) }),
+        Box::new(FakeTokens {
+            n: Arc::new(Mutex::new(0)),
+        }),
         Box::new(FakeClock::new(Utc::now())),
         Box::new(FakeEmail { db: db.clone() }),
-        Box::new(FakeOauth { email: "oauth.user@example.com".into(), subject: "sub-1".into() }),
-        Box::new(FakeRate { buckets: Arc::new(Mutex::new(HashMap::new())) }),
+        Box::new(FakeOauth {
+            email: "oauth.user@example.com".into(),
+            subject: "sub-1".into(),
+        }),
+        Box::new(FakeRate {
+            buckets: Arc::new(Mutex::new(HashMap::new())),
+        }),
         Box::new(FakeAudit),
         BASE.to_string(),
     )
@@ -413,9 +525,15 @@ async fn login_success_creates_session_and_csrf() {
     let db = Arc::new(Mutex::new(FakeDb::default()));
     seed_active_user(&db, "a@example.com", "correct-horse");
     let auth = make_service(db);
-    let outcome = auth.login("1.2.3.4", "a@example.com", "correct-horse").await;
+    let outcome = auth
+        .login("1.2.3.4", "a@example.com", "correct-horse")
+        .await;
     assert!(outcome.is_ok(), "login should succeed");
-    let LoginOutcome { session, csrf, user } = outcome.unwrap();
+    let LoginOutcome {
+        session,
+        csrf,
+        user,
+    } = outcome.unwrap();
     assert_eq!(user.id, UserId(1));
     assert!(!session.to_hex().is_empty());
     assert!(!csrf.to_base64url().is_empty());
@@ -437,9 +555,17 @@ async fn login_bad_credentials_and_suspended_share_one_generic_error() {
     {
         let db = Arc::new(Mutex::new(FakeDb::default()));
         let id = seed_active_user(&db, "a@example.com", "correct-horse");
-        db.lock().unwrap().users.iter_mut().find(|u| u.id == id).unwrap().account_state = AccountState::Suspended;
+        db.lock()
+            .unwrap()
+            .users
+            .iter_mut()
+            .find(|u| u.id == id)
+            .unwrap()
+            .account_state = AccountState::Suspended;
         let auth = make_service(db);
-        let err = auth.login("1.1.1.1", "a@example.com", "correct-horse").await;
+        let err = auth
+            .login("1.1.1.1", "a@example.com", "correct-horse")
+            .await;
         assert_eq!(err.unwrap_err(), AuthError::InvalidCredentials);
     }
     // Unknown email → generic.
@@ -470,8 +596,13 @@ async fn register_email_taken_is_leak_free() {
     let db = Arc::new(Mutex::new(FakeDb::default()));
     seed_active_user(&db, "taken@example.com", "x");
     let auth = make_service(db.clone());
-    let result = auth.register("1.1.1.1", "taken@example.com", None, "password123").await;
-    assert!(result.is_ok(), "taken email returns Ok (no-existence-leak §45)");
+    let result = auth
+        .register("1.1.1.1", "taken@example.com", None, "password123")
+        .await;
+    assert!(
+        result.is_ok(),
+        "taken email returns Ok (no-existence-leak §45)"
+    );
     // No verification email was sent.
     assert!(db.lock().unwrap().emails.is_empty());
     // No new user was created.
@@ -481,15 +612,20 @@ async fn register_email_taken_is_leak_free() {
 #[tokio::test]
 async fn register_rejects_weak_password() {
     let auth = make_service(Arc::new(Mutex::new(FakeDb::default())));
-    let err = auth.register("1.1.1.1", "a@example.com", None, "short").await;
+    let err = auth
+        .register("1.1.1.1", "a@example.com", None, "short")
+        .await;
     assert_eq!(err.unwrap_err(), AuthError::WeakPassword);
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn verify_email_consumes_token_single_use() {
     let db = Arc::new(Mutex::new(FakeDb::default()));
     let auth = make_service(db.clone());
-    auth.register("1.1.1.1", "a@example.com", None, "password123").await.unwrap();
+    auth.register("1.1.1.1", "a@example.com", None, "password123")
+        .await
+        .unwrap();
     let user_id = db.lock().unwrap().users[0].id;
     assert!(db.lock().unwrap().users[0].email_verified_at.is_none());
 
@@ -503,7 +639,10 @@ async fn verify_email_consumes_token_single_use() {
     drop(users);
 
     // Second use of the same token fails (single-use).
-    assert!(matches!(auth.verify_email(&token).await, Err(AuthError::TokenInvalid)));
+    assert!(matches!(
+        auth.verify_email(&token).await,
+        Err(AuthError::TokenInvalid)
+    ));
 }
 
 #[tokio::test]
@@ -511,14 +650,22 @@ async fn reset_password_revokes_all_sessions() {
     let db = Arc::new(Mutex::new(FakeDb::default()));
     seed_active_user(&db, "a@example.com", "correct");
     let auth = make_service(db.clone());
-    let outcome = auth.login("1.1.1.1", "a@example.com", "correct").await.unwrap();
+    let outcome = auth
+        .login("1.1.1.1", "a@example.com", "correct")
+        .await
+        .unwrap();
     let session = outcome.session;
 
-    auth.request_password_reset("1.1.1.1", &UserEmail::parse("a@example.com").unwrap()).await.unwrap();
+    auth.request_password_reset("1.1.1.1", &UserEmail::parse("a@example.com").unwrap())
+        .await
+        .unwrap();
     let token = find_token(&db, "/password-reset/new");
     auth.reset_password(&token, "newpassword").await.unwrap();
 
-    assert!(auth.resolve_session(&session).await.unwrap().is_none(), "old session revoked after reset");
+    assert!(
+        auth.resolve_session(&session).await.unwrap().is_none(),
+        "old session revoked after reset"
+    );
 }
 
 #[tokio::test]
@@ -536,15 +683,23 @@ async fn grant_role_requires_admin_and_refuses_last_admin_self_revoke() {
     }
     let auth = make_service(db.clone());
 
-    let admin = { let g = db.lock().unwrap(); AuthenticatedUser::from_user(&g.users[1]) };
-    let plain = { let g = db.lock().unwrap(); AuthenticatedUser::from_user(&g.users[0]) };
+    let admin = {
+        let g = db.lock().unwrap();
+        AuthenticatedUser::from_user(&g.users[1])
+    };
+    let plain = {
+        let g = db.lock().unwrap();
+        AuthenticatedUser::from_user(&g.users[0])
+    };
 
     // Non-admin actor denied.
     let err = auth.grant_role(&plain, UserId(2), Role::Moderator).await;
     assert_eq!(err.unwrap_err(), AuthError::Unauthorized);
 
     // Admin grants Moderator to the plain user.
-    auth.grant_role(&admin, UserId(1), Role::Moderator).await.unwrap();
+    auth.grant_role(&admin, UserId(1), Role::Moderator)
+        .await
+        .unwrap();
 
     // Admin refuses to revoke own last Admin.
     let err = auth.revoke_role(&admin, UserId(2), Role::Admin).await;
@@ -602,21 +757,28 @@ async fn oauth_callback_links_to_existing_verified_email() {
     // Seed an account whose email matches the fake OAuth identity, Active + verified.
     {
         let mut g = db.lock().unwrap();
-        let mut u = User::new(UserId(1), UserEmail::parse("oauth.user@example.com").unwrap(), None);
+        let mut u = User::new(
+            UserId(1),
+            UserEmail::parse("oauth.user@example.com").unwrap(),
+            None,
+        );
         u.account_state = AccountState::Active;
         u.email_verified_at = Some(Utc::now());
         g.users.push(u);
     }
     let auth = make_service(db.clone());
     let outcome = auth.oauth_callback("any-code").await.unwrap();
-    assert_eq!(outcome.user.id, UserId(1), "login via the verified-email link path");
+    assert_eq!(
+        outcome.user.id,
+        UserId(1),
+        "login via the verified-email link path"
+    );
     // A Google identity was linked to the existing account.
-    let linked = db
-        .lock()
-        .unwrap()
-        .identities
-        .iter()
-        .any(|i| i.user_id == UserId(1) && i.provider == AuthenticationProvider::Google && i.provider_subject == "sub-1");
+    let linked = db.lock().unwrap().identities.iter().any(|i| {
+        i.user_id == UserId(1)
+            && i.provider == AuthenticationProvider::Google
+            && i.provider_subject == "sub-1"
+    });
     assert!(linked, "google identity linked");
 }
 
@@ -626,7 +788,13 @@ async fn oauth_callback_creates_new_account_for_unmatched_email() {
     // No existing user — the OAuth identity should create a fresh Active account.
     let auth = make_service(db.clone());
     let outcome = auth.oauth_callback("any-code").await.unwrap();
-    assert!(outcome.user.email.as_str().starts_with("oauth.user@example.com"));
+    assert!(
+        outcome
+            .user
+            .email
+            .as_str()
+            .starts_with("oauth.user@example.com")
+    );
     let db = db.lock().unwrap();
     assert_eq!(db.users.len(), 1);
     assert_eq!(db.users[0].account_state, AccountState::Active); // provider asserts a verified email
@@ -637,23 +805,36 @@ async fn change_password_requires_current_and_verifies_new() {
     let db = Arc::new(Mutex::new(FakeDb::default()));
     seed_active_user(&db, "a@example.com", "correct-horse");
     let auth = make_service(db.clone());
-    let outcome = auth.login("1.1.1.1", "a@example.com", "correct-horse").await.unwrap();
+    let outcome = auth
+        .login("1.1.1.1", "a@example.com", "correct-horse")
+        .await
+        .unwrap();
     let session = outcome.session;
 
     // Wrong current password is rejected.
     assert_eq!(
-        auth.change_password(UserId(1), "wrong", "new-password", &session).await.unwrap_err(),
+        auth.change_password(UserId(1), "wrong", "new-password", &session)
+            .await
+            .unwrap_err(),
         AuthError::InvalidCredentials
     );
     // Correct current password succeeds.
-    auth.change_password(UserId(1), "correct-horse", "new-password", &session).await.unwrap();
+    auth.change_password(UserId(1), "correct-horse", "new-password", &session)
+        .await
+        .unwrap();
 
     // The stored hash is updated → old password fails, new password logs in.
     assert_eq!(
-        auth.login("1.1.1.1", "a@example.com", "correct-horse").await.unwrap_err(),
+        auth.login("1.1.1.1", "a@example.com", "correct-horse")
+            .await
+            .unwrap_err(),
         AuthError::InvalidCredentials
     );
-    assert!(auth.login("1.1.1.1", "a@example.com", "new-password").await.is_ok());
+    assert!(
+        auth.login("1.1.1.1", "a@example.com", "new-password")
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -661,18 +842,32 @@ async fn change_email_switches_address_and_revokes_sessions() {
     let db = Arc::new(Mutex::new(FakeDb::default()));
     seed_active_user(&db, "old@example.com", "correct-horse");
     let auth = make_service(db.clone());
-    let outcome = auth.login("1.1.1.1", "old@example.com", "correct-horse").await.unwrap();
+    let outcome = auth
+        .login("1.1.1.1", "old@example.com", "correct-horse")
+        .await
+        .unwrap();
     let session = outcome.session;
 
     let new_email = UserEmail::parse("new@example.com").unwrap();
-    auth.change_email(UserId(1), "correct-horse", &new_email).await.unwrap();
+    auth.change_email(UserId(1), "correct-horse", &new_email)
+        .await
+        .unwrap();
 
     // A verification email to the new address was captured; following it switches
     // the canonical email AND revokes the prior session (a security event).
     let token = find_token(&db, "/verify-email");
-    assert!(!token.is_empty(), "verification token sent to the new email");
+    assert!(
+        !token.is_empty(),
+        "verification token sent to the new email"
+    );
     auth.verify_email(&token).await.unwrap();
 
-    assert_eq!(db.lock().unwrap().users[0].email.as_str(), "new@example.com");
-    assert!(auth.resolve_session(&session).await.unwrap().is_none(), "old session revoked after email change");
+    assert_eq!(
+        db.lock().unwrap().users[0].email.as_str(),
+        "new@example.com"
+    );
+    assert!(
+        auth.resolve_session(&session).await.unwrap().is_none(),
+        "old session revoked after email change"
+    );
 }

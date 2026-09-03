@@ -18,7 +18,7 @@
 //! maps it to a no-results page, never a 500).
 
 use async_trait::async_trait;
-use bikenest_application::{GeocodeError, GeoHit, Geocoder};
+use bikenest_application::{GeoHit, GeocodeError, Geocoder};
 use bikenest_domain::GeoPoint;
 
 // ---------------------------------------------------------------------------
@@ -136,15 +136,15 @@ fn parse_mapbox_response(bytes: &[u8]) -> Result<Option<GeoHit>, GeocodeError> {
     let resp: MapboxResponse = serde_json::from_slice(bytes)
         .map_err(|e| GeocodeError::Unexpected(format!("bad Mapbox response: {e}")))?;
     for f in resp.features {
-        if let Some([lon, lat]) = f.center {
-            if let Ok(point) = GeoPoint::new(lat, lon) {
-                let label = f
-                    .place_name
-                    .clone()
-                    .or_else(|| f.text.clone())
-                    .unwrap_or_else(|| format!("{lat}, {lon}"));
-                return Ok(Some(GeoHit { label, point }));
-            }
+        if let Some([lon, lat]) = f.center
+            && let Ok(point) = GeoPoint::new(lat, lon)
+        {
+            let label = f
+                .place_name
+                .clone()
+                .or_else(|| f.text.clone())
+                .unwrap_or_else(|| format!("{lat}, {lon}"));
+            return Ok(Some(GeoHit { label, point }));
         }
     }
     Ok(None)
@@ -234,8 +234,7 @@ pub fn geocoder_from(provider: &str, token: Option<&str>) -> Box<dyn Geocoder> {
 /// Build the geocoder selected by `GEOCODER` (`mapbox` | `fake`, default `fake`),
 /// so `cargo run` and the test harness always work without credentials.
 pub fn geocoder_from_env() -> Box<dyn Geocoder> {
-    let provider =
-        std::env::var("GEOCODER").unwrap_or_else(|_| "fake".to_string());
+    let provider = std::env::var("GEOCODER").unwrap_or_else(|_| "fake".to_string());
     let token = std::env::var("MAPBOX_ACCESS_TOKEN").ok();
     geocoder_from(&provider, token.as_deref())
 }
@@ -256,8 +255,18 @@ mod tests {
     #[tokio::test]
     async fn unknown_queries_are_deterministic() {
         let geo = FakeGeocoder;
-        let a = geo.geocode("rua sem fim, 123").await.unwrap().unwrap().point;
-        let b = geo.geocode("rua sem fim, 123").await.unwrap().unwrap().point;
+        let a = geo
+            .geocode("rua sem fim, 123")
+            .await
+            .unwrap()
+            .unwrap()
+            .point;
+        let b = geo
+            .geocode("rua sem fim, 123")
+            .await
+            .unwrap()
+            .unwrap()
+            .point;
         assert_eq!(a, b);
         let c = geo.geocode("outra rua, 9").await.unwrap().unwrap().point;
         assert_ne!(a, c);
@@ -287,13 +296,22 @@ mod tests {
 
     #[test]
     fn empty_features_mean_not_found() {
-        assert!(parse_mapbox_response(br#"{"features":[]}"#).unwrap().is_none());
-        assert!(parse_mapbox_response(br#"{"query":["x"]}"#).unwrap().is_none());
+        assert!(
+            parse_mapbox_response(br#"{"features":[]}"#)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            parse_mapbox_response(br#"{"query":["x"]}"#)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn falls_back_to_text_when_no_place_name() {
-        let body = br#"{ "features": [ { "center": [-49.2733, -25.4284], "text": "Only text" } ] }"#;
+        let body =
+            br#"{ "features": [ { "center": [-49.2733, -25.4284], "text": "Only text" } ] }"#;
         let hit = parse_mapbox_response(body).unwrap().unwrap();
         assert_eq!(hit.label, "Only text");
     }
@@ -308,7 +326,10 @@ mod tests {
 
     #[test]
     fn encodes_query_for_path_segment() {
-        assert_eq!(encode_path_segment("Rua XV de Novembro, 123"), "Rua%20XV%20de%20Novembro%2C%20123");
+        assert_eq!(
+            encode_path_segment("Rua XV de Novembro, 123"),
+            "Rua%20XV%20de%20Novembro%2C%20123"
+        );
         assert_eq!(encode_path_segment("A & B / C"), "A%20%26%20B%20%2F%20C");
     }
 

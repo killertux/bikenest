@@ -111,16 +111,17 @@ pub async fn security_headers(
     }
     // Private data must never be indexed (§110). Also enforced in robots.txt.
     if path_is_private {
-        head.insert("X-Robots-Tag", HeaderValue::from_static("noindex, nofollow"));
+        head.insert(
+            "X-Robots-Tag",
+            HeaderValue::from_static("noindex, nofollow"),
+        );
     }
     res
 }
 
 /// Private (account/admin/moderation) paths — never indexable (§110).
 fn is_private_path(path: &str) -> bool {
-    path.starts_with("/account")
-        || path.starts_with("/admin")
-        || path.starts_with("/moderation")
+    path.starts_with("/account") || path.starts_with("/admin") || path.starts_with("/moderation")
 }
 
 fn env_flag(key: &str) -> bool {
@@ -143,11 +144,7 @@ fn env_hosts(key: &str) -> Option<Vec<String>> {
 mod tests {
     use super::*;
 
-    fn headers(
-        tls_on: bool,
-        tile_hosts: &[&str],
-        geocode_hosts: &[&str],
-    ) -> SecurityHeaders {
+    fn headers(tls_on: bool, tile_hosts: &[&str], geocode_hosts: &[&str]) -> SecurityHeaders {
         SecurityHeaders {
             tls_on,
             tile_hosts: tile_hosts.iter().map(|s| s.to_string()).collect(),
@@ -157,7 +154,12 @@ mod tests {
 
     #[test]
     fn csp_is_strict_no_unsafe_eval() {
-        let csp = headers(false, &["https://tiles.example.com"], &["https://geo.example.com"]).csp();
+        let csp = headers(
+            false,
+            &["https://tiles.example.com"],
+            &["https://geo.example.com"],
+        )
+        .csp();
         assert!(csp.contains("script-src 'self'"));
         assert!(!csp.contains("unsafe-eval"));
         assert!(csp.contains("object-src 'none'"));
@@ -180,7 +182,11 @@ mod tests {
     #[test]
     fn dev_defaults_to_demo_tiles() {
         let h = SecurityHeaders::from_env();
-        assert!(h.tile_hosts.iter().any(|h| h == "https://demotiles.maplibre.org"));
+        assert!(
+            h.tile_hosts
+                .iter()
+                .any(|h| h == "https://demotiles.maplibre.org")
+        );
         assert!(h.geocode_hosts.is_empty() || !h.tls_on);
     }
 
@@ -190,4 +196,3 @@ mod tests {
         assert!(headers(true, &[], &[]).tls_on);
     }
 }
-

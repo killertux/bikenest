@@ -5,9 +5,7 @@
 //! against readers, deletes the user (cascading to identities/sessions/tokens/
 //! roles), and never leaks rows.
 
-use bikenest_application::{
-    AccountRepository, AuditEvent, AuditLog, SessionStore, TokenStore,
-};
+use bikenest_application::{AccountRepository, AuditEvent, AuditLog, SessionStore, TokenStore};
 use bikenest_domain::{
     AccountState, AuthenticationProvider, CsrfToken, Role, SessionId, UserEmail, VerificationToken,
 };
@@ -107,7 +105,12 @@ async fn update_canonical_email_keeps_identity_in_sync(_tx: &mut bikenest_test_s
     repo.update_canonical_email(id, &new_email).await.unwrap();
 
     // Login lookup key (password subject) is now the new email; old subject gone.
-    assert!(repo.find_identity(AuthenticationProvider::Password, email.as_str()).await.unwrap().is_none());
+    assert!(
+        repo.find_identity(AuthenticationProvider::Password, email.as_str())
+            .await
+            .unwrap()
+            .is_none()
+    );
     let idrec = repo
         .find_identity(AuthenticationProvider::Password, new_email.as_str())
         .await
@@ -143,9 +146,21 @@ async fn session_store_create_resolve_expire_revoke(_tx: &mut bikenest_test_supp
     assert_eq!(s.csrf_token.to_base64url(), csrf.to_base64url());
 
     // Absolute expiry: past the 90-day cap.
-    assert!(store.resolve(&raw, now + Duration::days(91)).await.unwrap().is_none());
+    assert!(
+        store
+            .resolve(&raw, now + Duration::days(91))
+            .await
+            .unwrap()
+            .is_none()
+    );
     // Idle expiry: 31 days without use.
-    assert!(store.resolve(&raw, now + Duration::days(31)).await.unwrap().is_none());
+    assert!(
+        store
+            .resolve(&raw, now + Duration::days(31))
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Revoke.
     store.revoke(&raw).await.unwrap();
@@ -169,7 +184,10 @@ async fn token_store_single_use_is_atomic(_tx: &mut bikenest_test_support::TestT
     let now = Utc::now();
 
     let raw = VerificationToken::new([42u8; 32]);
-    store.issue_verification(user_id, &email, &raw, now).await.unwrap();
+    store
+        .issue_verification(user_id, &email, &raw, now)
+        .await
+        .unwrap();
 
     // Two concurrent consumes: exactly one wins (atomic used_at guard).
     let (a, b) = tokio::join!(
@@ -180,7 +198,13 @@ async fn token_store_single_use_is_atomic(_tx: &mut bikenest_test_support::TestT
     assert_eq!(hits, 1, "single-use guard must allow exactly one consume");
 
     // The consumed token is no longer usable.
-    assert!(store.consume_verification(&raw, now).await.unwrap().is_none());
+    assert!(
+        store
+            .consume_verification(&raw, now)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Reset token similarly single-use and short-lived.
     store.issue_reset(user_id, &raw, now).await.unwrap();
@@ -206,12 +230,27 @@ async fn token_expiry_blocks_consumption_after_ttl(_tx: &mut bikenest_test_suppo
     let raw = VerificationToken::new([5u8; 32]);
 
     // Verification token: issued at `now`, TTL 24h — a consume at +25h is expired.
-    store.issue_verification(user_id, &email, &raw, now).await.unwrap();
-    assert!(store.consume_verification(&raw, now + Duration::hours(25)).await.unwrap().is_none());
+    store
+        .issue_verification(user_id, &email, &raw, now)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .consume_verification(&raw, now + Duration::hours(25))
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // Reset token: TTL 1h — a consume at +2h is expired.
     store.issue_reset(user_id, &raw, now).await.unwrap();
-    assert!(store.consume_reset(&raw, now + Duration::hours(2)).await.unwrap().is_none());
+    assert!(
+        store
+            .consume_reset(&raw, now + Duration::hours(2))
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     cleanup_user(&email).await;
 }
@@ -238,11 +277,13 @@ async fn audit_insert_round_trip(_tx: &mut bikenest_test_support::TestTx) {
         .await
         .unwrap();
 
-    let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM audit_events WHERE actor_user_id = $1 AND action = 'auth.login'")
-        .bind(user_id)
-        .fetch_one(&pool().await)
-        .await
-        .unwrap();
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM audit_events WHERE actor_user_id = $1 AND action = 'auth.login'",
+    )
+    .bind(user_id)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
     assert_eq!(count, 1);
 
     cleanup_user(&email).await;

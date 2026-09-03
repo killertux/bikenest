@@ -99,6 +99,9 @@ mod tests {
     #[test]
     fn never_verified_is_its_own_category() {
         let now = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
-        assert_eq!(categorize(None, now, &DEFAULT_THRESHOLDS), FreshnessCategory::Never);
+        assert_eq!(
+            categorize(None, now, &DEFAULT_THRESHOLDS),
+            FreshnessCategory::Never
+        );
     }
 }

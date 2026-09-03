@@ -38,6 +38,10 @@ impl TestObjectStorage {
         self.store.lock().unwrap().len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn contains(&self, key: &str) -> bool {
         self.store.lock().unwrap().contains_key(key)
     }

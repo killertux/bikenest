@@ -13,9 +13,8 @@ use bikenest_application::{
     TimezoneError, TimezoneResolver, VerificationRepository,
 };
 use bikenest_domain::{
-    AccountState, Confidence, Cost, ExistenceResult, ExistenceSignal, GeoPoint,
-    OpeningHours, ParkingLocation, ParkingType, ReviewBody, SecurityFeature, SecurityState,
-    StarRating, UserId,
+    AccountState, Confidence, Cost, ExistenceResult, ExistenceSignal, GeoPoint, OpeningHours,
+    ParkingLocation, ParkingType, ReviewBody, SecurityFeature, SecurityState, StarRating, UserId,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -80,7 +79,12 @@ impl Clock for FakeClock {
 struct AllowRateLimiter;
 #[async_trait]
 impl bikenest_application::RateLimiter for AllowRateLimiter {
-    async fn check(&self, _k: &str, _l: u32, _w: Duration) -> Result<bool, bikenest_application::RateLimitError> {
+    async fn check(
+        &self,
+        _k: &str,
+        _l: u32,
+        _w: Duration,
+    ) -> Result<bool, bikenest_application::RateLimitError> {
         Ok(true)
     }
 }
@@ -88,7 +92,12 @@ impl bikenest_application::RateLimiter for AllowRateLimiter {
 struct DenyRateLimiter;
 #[async_trait]
 impl bikenest_application::RateLimiter for DenyRateLimiter {
-    async fn check(&self, _k: &str, _l: u32, _w: Duration) -> Result<bool, bikenest_application::RateLimitError> {
+    async fn check(
+        &self,
+        _k: &str,
+        _l: u32,
+        _w: Duration,
+    ) -> Result<bool, bikenest_application::RateLimitError> {
         Ok(false)
     }
 }
@@ -98,7 +107,10 @@ struct RecordingAudit {
 }
 #[async_trait]
 impl bikenest_application::AuditLog for RecordingAudit {
-    async fn record(&self, e: bikenest_application::AuditEvent) -> Result<(), bikenest_application::AuditError> {
+    async fn record(
+        &self,
+        e: bikenest_application::AuditEvent,
+    ) -> Result<(), bikenest_application::AuditError> {
         self.events.lock().unwrap().push(e.action.clone());
         Ok(())
     }
@@ -175,7 +187,7 @@ impl ParkingContributionRepository for FakeContributionRepo {
 }
 
 fn location_at(id: i64, version: i64) -> Result<ParkingLocation, ContributionError> {
-    Ok(ParkingLocation::new(
+    ParkingLocation::new(
         id,
         "Estação Centro",
         "Rua Teste, 10",
@@ -194,7 +206,7 @@ fn location_at(id: i64, version: i64) -> Result<ParkingLocation, ContributionErr
         None,
         version,
     )
-    .map_err(|e| ContributionError::InvalidField(e.to_string()))?)
+    .map_err(|e| ContributionError::InvalidField(e.to_string()))
 }
 
 struct FakeReviewRepo {
@@ -220,11 +232,7 @@ impl ReviewRepository for FakeReviewRepo {
     ) -> Result<(), ContributionError> {
         Ok(())
     }
-    async fn find_own(
-        &self,
-        _l: i64,
-        _a: UserId,
-    ) -> Result<Option<Review>, ContributionError> {
+    async fn find_own(&self, _l: i64, _a: UserId) -> Result<Option<Review>, ContributionError> {
         Ok(self.own.lock().unwrap().clone())
     }
     async fn list_active(&self, _l: i64) -> Result<Vec<Review>, ContributionError> {
@@ -258,13 +266,27 @@ impl VerificationRepository for FakeVerificationRepo {
         s: &NewVerification,
         _now: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), ContributionError> {
-        self.state.recorded.lock().unwrap().push(format!("{:?}", s.is_still_exists()));
-        if let NewVerification::Existence { user_id, result, .. } = s {
-            self.state.signals.lock().unwrap().push(ExistenceSignal::new(*user_id, *result, chrono::Utc::now()));
+        self.state
+            .recorded
+            .lock()
+            .unwrap()
+            .push(format!("{:?}", s.is_still_exists()));
+        if let NewVerification::Existence {
+            user_id, result, ..
+        } = s
+        {
+            self.state
+                .signals
+                .lock()
+                .unwrap()
+                .push(ExistenceSignal::new(*user_id, *result, chrono::Utc::now()));
         }
         Ok(())
     }
-    async fn latest_existence_per_user(&self, _l: i64) -> Result<Vec<ExistenceSignal>, ContributionError> {
+    async fn latest_existence_per_user(
+        &self,
+        _l: i64,
+    ) -> Result<Vec<ExistenceSignal>, ContributionError> {
         Ok(self.state.signals.lock().unwrap().clone())
     }
     async fn attribute_summary(&self, _l: i64) -> Result<Vec<AttributeSummary>, ContributionError> {
@@ -273,7 +295,11 @@ impl VerificationRepository for FakeVerificationRepo {
     async fn parked_here_count(&self, _l: i64) -> Result<i64, ContributionError> {
         Ok(0)
     }
-    async fn mark_verified_at(&self, location_id: i64, _at: chrono::DateTime<chrono::Utc>) -> Result<(), ContributionError> {
+    async fn mark_verified_at(
+        &self,
+        location_id: i64,
+        _at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), ContributionError> {
         self.state.marked.lock().unwrap().push(location_id);
         Ok(())
     }
@@ -306,7 +332,10 @@ impl ContributionHistoryReader for FakeHistory {
 struct FakeReviewPhotos;
 #[async_trait]
 impl bikenest_application::ReviewPhotosReader for FakeReviewPhotos {
-    async fn photos(&self, _id: i64) -> Result<Vec<bikenest_application::StoredPhoto>, bikenest_application::ReaderError> {
+    async fn photos(
+        &self,
+        _id: i64,
+    ) -> Result<Vec<bikenest_application::StoredPhoto>, bikenest_application::ReaderError> {
         Ok(vec![])
     }
 }
@@ -314,7 +343,10 @@ impl bikenest_application::ReviewPhotosReader for FakeReviewPhotos {
 struct FakeDetails(Option<ParkingLocation>);
 #[async_trait]
 impl ParkingDetailsReader for FakeDetails {
-    async fn details(&self, _id: i64) -> Result<Option<ParkingLocation>, bikenest_application::ReaderError> {
+    async fn details(
+        &self,
+        _id: i64,
+    ) -> Result<Option<ParkingLocation>, bikenest_application::ReaderError> {
         Ok(self.0.clone())
     }
 }
@@ -326,16 +358,7 @@ fn service(
     verification: FakeVerificationRepo,
     favorite: FakeFavoriteRepo,
 ) -> ContributionService {
-    let clock = chrono::TimeZone::with_ymd_and_hms(
-        &chrono::Utc,
-        2026,
-        6,
-        1,
-        12,
-        0,
-        0,
-    )
-    .unwrap();
+    let clock = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 6, 1, 12, 0, 0).unwrap();
     ContributionService::new(ContributionDeps {
         tz: Box::new(FakeTz),
         details: Box::new(FakeDetails(details)),
@@ -346,7 +369,9 @@ fn service(
         history: Box::new(FakeHistory),
         review_photos: Box::new(FakeReviewPhotos),
         rate_limiter: Box::new(AllowRateLimiter),
-        audit: Box::new(RecordingAudit { events: Mutex::new(vec![]) }),
+        audit: Box::new(RecordingAudit {
+            events: Mutex::new(vec![]),
+        }),
         clock: Box::new(FakeClock(clock)),
         freshness: Default::default(),
     })
@@ -405,7 +430,9 @@ async fn add_location_is_rate_limited() {
         history: Box::new(FakeHistory),
         review_photos: Box::new(FakeReviewPhotos),
         rate_limiter: Box::new(DenyRateLimiter),
-        audit: Box::new(RecordingAudit { events: Mutex::new(vec![]) }),
+        audit: Box::new(RecordingAudit {
+            events: Mutex::new(vec![]),
+        }),
         clock: Box::new(FakeClock(chrono::Utc::now())),
         freshness: Default::default(),
     });

@@ -5,7 +5,7 @@
 //! The report state machine, the self-resolve guard, the parking invalidation
 //! invariant and the proposal-apply correctness all live here.
 
-use crate::audit::{AuditEvent, AuditLog, AuditFilter, AuditLogReader, AuditPage};
+use crate::audit::{AuditEvent, AuditFilter, AuditLog, AuditLogReader, AuditPage};
 use crate::photo::PhotoKind;
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use async_trait::async_trait;
@@ -131,7 +131,10 @@ pub enum ProposalApplication {
 
 impl ProposalApplication {
     /// Parse a proposal's stored `proposed` JSONB into the typed application.
-    pub fn from_proposed(kind: ProposalKind, proposed: &serde_json::Value) -> Result<Self, ModerationError> {
+    pub fn from_proposed(
+        kind: ProposalKind,
+        proposed: &serde_json::Value,
+    ) -> Result<Self, ModerationError> {
         match kind {
             ProposalKind::MoveLocation => {
                 let lat = proposed
@@ -145,15 +148,13 @@ impl ProposalApplication {
                 let tz_raw = proposed
                     .get("timezone")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| ModerationError::InvalidField("timezone is required".to_string()))?;
+                    .ok_or_else(|| {
+                        ModerationError::InvalidField("timezone is required".to_string())
+                    })?;
                 let timezone = tz_raw
                     .parse()
                     .map_err(|_| ModerationError::InvalidField("invalid timezone".to_string()))?;
-                Ok(ProposalApplication::MoveLocation {
-                    lat,
-                    lon,
-                    timezone,
-                })
+                Ok(ProposalApplication::MoveLocation { lat, lon, timezone })
             }
             ProposalKind::ChangeExistence => {
                 let exists = match proposed.get("existence").and_then(|v| v.as_str()) {
@@ -164,7 +165,11 @@ impl ProposalApplication {
                             "unknown existence: {other}"
                         )));
                     }
-                    None => return Err(ModerationError::InvalidField("existence is required".to_string())),
+                    None => {
+                        return Err(ModerationError::InvalidField(
+                            "existence is required".to_string(),
+                        ));
+                    }
                 };
                 Ok(ProposalApplication::ChangeExistence { exists })
             }
@@ -207,15 +212,29 @@ pub trait ReportRepository: Send + Sync {
 #[async_trait]
 pub trait ModerationRepository: Send + Sync {
     /// One lookup across the four target tables (polymorphic `report.target_id`).
-    async fn target_exists(&self, target_type: ReportTargetType, target_id: i64) -> Result<bool, ModerationError>;
+    async fn target_exists(
+        &self,
+        target_type: ReportTargetType,
+        target_id: i64,
+    ) -> Result<bool, ModerationError>;
     /// `ACTIVE → HIDDEN` an existing review. 0 rows → `InvalidState`.
     async fn hide_review(&self, id: i64, moderator: UserId) -> Result<(), ModerationError>;
     /// `HIDDEN → ACTIVE` a review. 0 rows → `InvalidState`.
     async fn restore_review(&self, id: i64, moderator: UserId) -> Result<(), ModerationError>;
     /// `APPROVED → HIDDEN` a photo (§44). 0 rows → `InvalidState`.
-    async fn hide_photo(&self, kind: PhotoKind, id: i64, moderator: UserId) -> Result<(), ModerationError>;
+    async fn hide_photo(
+        &self,
+        kind: PhotoKind,
+        id: i64,
+        moderator: UserId,
+    ) -> Result<(), ModerationError>;
     /// `HIDDEN → APPROVED` a photo. 0 rows → `InvalidState`.
-    async fn restore_photo(&self, kind: PhotoKind, id: i64, moderator: UserId) -> Result<(), ModerationError>;
+    async fn restore_photo(
+        &self,
+        kind: PhotoKind,
+        id: i64,
+        moderator: UserId,
+    ) -> Result<(), ModerationError>;
     /// Set a parking location's moderation state (only from the allowed `from`
     /// states), bump `version`, append a ``moderation`` revision — one tx.
     async fn set_parking_state(
@@ -237,7 +256,12 @@ pub trait ModerationRepository: Send + Sync {
         applied: ProposalApplication,
     ) -> Result<(), ModerationError>;
     /// Set a proposal to `REJECTED` with a reason; no live change.
-    async fn reject_proposal(&self, id: i64, moderator: UserId, reason: &str) -> Result<(), ModerationError>;
+    async fn reject_proposal(
+        &self,
+        id: i64,
+        moderator: UserId,
+        reason: &str,
+    ) -> Result<(), ModerationError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +297,10 @@ impl ModerationService {
         Self { deps }
     }
 
-    fn require_moderator(&self, user: &crate::auth::AuthenticatedUser) -> Result<(), ModerationError> {
+    fn require_moderator(
+        &self,
+        user: &crate::auth::AuthenticatedUser,
+    ) -> Result<(), ModerationError> {
         if user.has_role(Role::Moderator) || user.has_role(Role::Admin) {
             Ok(())
         } else {
@@ -340,14 +367,18 @@ impl ModerationService {
             return Err(ModerationError::InvalidReason);
         }
         let description = match description {
-            Some(raw) if !raw.trim().is_empty() => ReportDescription::new_with_len(
-                &raw,
-                self.deps.limits.report_description_max_len,
-            )?,
+            Some(raw) if !raw.trim().is_empty() => {
+                ReportDescription::new_with_len(&raw, self.deps.limits.report_description_max_len)?
+            }
             _ => ReportDescription::new_with_len("", self.deps.limits.report_description_max_len)?,
         };
 
-        if !self.deps.moderation.target_exists(target_type, target_id).await? {
+        if !self
+            .deps
+            .moderation
+            .target_exists(target_type, target_id)
+            .await?
+        {
             return Err(ModerationError::TargetNotFound);
         }
 
@@ -460,22 +491,33 @@ impl ModerationService {
     ) -> Result<(), ModerationError> {
         let res = match report.target_type {
             ReportTargetType::Review => {
-                self.deps.moderation.hide_review(report.target_id, moderator).await
+                self.deps
+                    .moderation
+                    .hide_review(report.target_id, moderator)
+                    .await
             }
             ReportTargetType::ParkingPhoto => {
-                self.deps.moderation.hide_photo(PhotoKind::Parking, report.target_id, moderator).await
+                self.deps
+                    .moderation
+                    .hide_photo(PhotoKind::Parking, report.target_id, moderator)
+                    .await
             }
             ReportTargetType::ReviewPhoto => {
-                self.deps.moderation.hide_photo(PhotoKind::Review, report.target_id, moderator).await
+                self.deps
+                    .moderation
+                    .hide_photo(PhotoKind::Review, report.target_id, moderator)
+                    .await
             }
             ReportTargetType::Parking => {
-                self.deps.moderation.set_parking_state(
-                    report.target_id,
-                    &[ModerationState::Active],
-                    ModerationState::Invalid,
-                    moderator,
-                )
-                .await
+                self.deps
+                    .moderation
+                    .set_parking_state(
+                        report.target_id,
+                        &[ModerationState::Active],
+                        ModerationState::Invalid,
+                        moderator,
+                    )
+                    .await
             }
         };
         match res {
@@ -516,7 +558,10 @@ impl ModerationService {
         id: i64,
     ) -> Result<(), ModerationError> {
         self.require_moderator(moderator)?;
-        self.deps.moderation.restore_review(id, moderator.id).await?;
+        self.deps
+            .moderation
+            .restore_review(id, moderator.id)
+            .await?;
         self.audit(
             Some(moderator.id),
             "review.restored",
@@ -535,7 +580,10 @@ impl ModerationService {
         id: i64,
     ) -> Result<(), ModerationError> {
         self.require_moderator(moderator)?;
-        self.deps.moderation.hide_photo(kind, id, moderator.id).await?;
+        self.deps
+            .moderation
+            .hide_photo(kind, id, moderator.id)
+            .await?;
         self.audit(
             Some(moderator.id),
             "photo.hidden",
@@ -554,7 +602,10 @@ impl ModerationService {
         id: i64,
     ) -> Result<(), ModerationError> {
         self.require_moderator(moderator)?;
-        self.deps.moderation.restore_photo(kind, id, moderator.id).await?;
+        self.deps
+            .moderation
+            .restore_photo(kind, id, moderator.id)
+            .await?;
         self.audit(
             Some(moderator.id),
             "photo.restored",
@@ -575,7 +626,12 @@ impl ModerationService {
         self.require_moderator(moderator)?;
         self.deps
             .moderation
-            .set_parking_state(id, &[ModerationState::Active], ModerationState::Invalid, moderator.id)
+            .set_parking_state(
+                id,
+                &[ModerationState::Active],
+                ModerationState::Invalid,
+                moderator.id,
+            )
             .await?;
         self.audit(
             Some(moderator.id),
@@ -695,7 +751,11 @@ impl ModerationService {
         filter: AuditFilter,
     ) -> Result<AuditPage, ModerationError> {
         self.require_admin(admin)?;
-        self.deps.audit_reader.list(filter).await.map_err(ModerationError::from)
+        self.deps
+            .audit_reader
+            .list(filter)
+            .await
+            .map_err(ModerationError::from)
     }
 
     /// Inspect a target user's contribution history (MODERATOR/ADMIN) — the C5
@@ -710,7 +770,6 @@ impl ModerationService {
             .history
             .history(target)
             .await
-            .map_err(crate::community::ContributionError::from)
             .map_err(|_| ModerationError::Internal)
     }
 

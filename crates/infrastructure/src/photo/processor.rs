@@ -22,7 +22,10 @@ impl LocalImageProcessor {
     }
 
     fn is_allowed(format: ImageFormat) -> bool {
-        matches!(format, ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::WebP)
+        matches!(
+            format,
+            ImageFormat::Jpeg | ImageFormat::Png | ImageFormat::WebP
+        )
     }
 
     /// Map an EXIF orientation to the matching geometric transform.
@@ -49,21 +52,22 @@ impl bikenest_application::ImageProcessor for LocalImageProcessor {
             .with_guessed_format()
             .map_err(|_| PhotoError::Undecodable)?;
 
-        if let Some(format) = reader.format() {
-            if !Self::is_allowed(format) {
-                return Err(PhotoError::UnsupportedFormat);
-            }
+        if let Some(format) = reader.format()
+            && !Self::is_allowed(format)
+        {
+            return Err(PhotoError::UnsupportedFormat);
         }
 
         let mut decoder = reader.into_decoder().map_err(|_| PhotoError::Undecodable)?;
         let (raw_w, raw_h) = decoder.dimensions();
-        let dims = PhotoDimensions { width: raw_w, height: raw_h };
+        let dims = PhotoDimensions {
+            width: raw_w,
+            height: raw_h,
+        };
         if !dims.within_limit(self.limits.max_megapixels) {
             return Err(PhotoError::TooManyPixels);
         }
-        let orientation = decoder
-            .orientation()
-            .unwrap_or(Orientation::NoTransforms);
+        let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
 
         // Decode, then flatten to RGB8 so every input color type encodes uniformly.
         let decoded = DynamicImage::from_decoder(decoder).map_err(|_| PhotoError::Undecodable)?;

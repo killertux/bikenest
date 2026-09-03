@@ -7,9 +7,7 @@
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{
-    CostFilter, ParkingSummary, ReaderError, SearchPage, SearchRequest,
-};
+use bikenest_application::{CostFilter, ParkingSummary, ReaderError, SearchPage, SearchRequest};
 use bikenest_domain::{Cost, CurrencyCode, GeoPoint, Money, ParkingType, PricingUnit, Rating};
 
 pub struct SqlxParkingSearchReader {
@@ -58,7 +56,8 @@ fn cost_of(row: &SearchRow) -> Result<Cost, ReaderError> {
         )),
         _ => None,
     };
-    Cost::from_kind_and_price(&row.cost_kind, price).map_err(|e| ReaderError::Unexpected(e.to_string()))
+    Cost::from_kind_and_price(&row.cost_kind, price)
+        .map_err(|e| ReaderError::Unexpected(e.to_string()))
 }
 
 fn summary_of(row: SearchRow) -> Result<ParkingSummary, ReaderError> {
@@ -110,7 +109,14 @@ impl bikenest_application::ParkingSearchReader for SqlxParkingSearchReader {
         let types: Option<Vec<String>> = if request.filters.types.is_empty() {
             None
         } else {
-            Some(request.filters.types.iter().map(|t| t.as_code().to_string()).collect())
+            Some(
+                request
+                    .filters
+                    .types
+                    .iter()
+                    .map(|t| t.as_code().to_string())
+                    .collect(),
+            )
         };
         let security_all: Option<Vec<String>> = if request.filters.security_all.is_empty() {
             None
@@ -118,7 +124,9 @@ impl bikenest_application::ParkingSearchReader for SqlxParkingSearchReader {
             Some(request.filters.security_all.clone())
         };
         let sort = match request.sort {
-            bikenest_application::Sort::Recommended | bikenest_application::Sort::Distance => "distance",
+            bikenest_application::Sort::Recommended | bikenest_application::Sort::Distance => {
+                "distance"
+            }
             bikenest_application::Sort::Security => "security",
             bikenest_application::Sort::Rating => "rating",
             bikenest_application::Sort::RecentlyVerified => "recently_verified",
@@ -216,10 +224,8 @@ impl bikenest_application::ParkingSearchReader for SqlxParkingSearchReader {
         .map_err(map_db_err)?;
 
         let total = rows.first().and_then(|r| r.total).unwrap_or(0);
-        let items: Vec<ParkingSummary> = rows
-            .into_iter()
-            .map(summary_of)
-            .collect::<Result<_, _>>()?;
+        let items: Vec<ParkingSummary> =
+            rows.into_iter().map(summary_of).collect::<Result<_, _>>()?;
         Ok(SearchPage {
             items,
             total,
@@ -230,9 +236,9 @@ impl bikenest_application::ParkingSearchReader for SqlxParkingSearchReader {
 
 pub(crate) fn map_db_err(e: sqlx::Error) -> ReaderError {
     match e {
-        sqlx::Error::Io(_)
-        | sqlx::Error::PoolTimedOut
-        | sqlx::Error::PoolClosed => ReaderError::Unavailable,
+        sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => {
+            ReaderError::Unavailable
+        }
         _ => ReaderError::Unexpected(e.to_string()),
     }
 }

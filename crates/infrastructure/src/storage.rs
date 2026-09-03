@@ -17,9 +17,9 @@
 //! Path-style addressing is always on (required for MinIO; also fine for AWS/R2).
 
 use async_trait::async_trait;
+use aws_sdk_s3::Config;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::presigning::PresigningConfig;
-use aws_sdk_s3::Config;
 use aws_smithy_types::byte_stream::ByteStream;
 use bikenest_application::{ObjectStorage, PutObject, StorageError};
 use std::sync::Arc;
@@ -48,11 +48,7 @@ impl S3ObjectStorage {
             .behavior_version(BehaviorVersion::latest())
             .region(Region::new(region))
             .credentials_provider(Credentials::new(
-                access_key,
-                secret_key,
-                None,
-                None,
-                "bikenest",
+                access_key, secret_key, None, None, "bikenest",
             ))
             .force_path_style(true);
         if let Some(endpoint) = endpoint {
@@ -73,8 +69,7 @@ impl S3ObjectStorage {
             .or_else(|| Some(DEV_S3_ENDPOINT.to_string()));
         let region = std::env::var("S3_REGION").unwrap_or_else(|_| DEFAULT_S3_REGION.to_string());
         let bucket = std::env::var("S3_BUCKET").unwrap_or_else(|_| DEFAULT_S3_BUCKET.to_string());
-        let access =
-            std::env::var("S3_ACCESS_KEY_ID").unwrap_or_else(|_| "minioadmin".to_string());
+        let access = std::env::var("S3_ACCESS_KEY_ID").unwrap_or_else(|_| "minioadmin".to_string());
         let secret =
             std::env::var("S3_SECRET_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".to_string());
         Self::new(endpoint, region, bucket, access, secret)
@@ -209,18 +204,27 @@ mod tests {
             .await
             .expect("presign is local crypto, no network");
         // Points at the endpoint/bucket and carries SigV4 query params.
-        assert!(url.contains("localhost:9000"), "should point at the S3 endpoint: {url}");
-        assert!(url.contains("X-Amz-Signature="), "should carry a signature: {url}");
-        assert!(url.contains("X-Amz-Expires=60"), "should carry the TTL: {url}");
+        assert!(
+            url.contains("localhost:9000"),
+            "should point at the S3 endpoint: {url}"
+        );
+        assert!(
+            url.contains("X-Amz-Signature="),
+            "should carry a signature: {url}"
+        );
+        assert!(
+            url.contains("X-Amz-Expires=60"),
+            "should carry the TTL: {url}"
+        );
     }
 
     #[tokio::test]
     async fn get_is_unsupported_for_direct_presign_model() {
         let s = store();
-        assert!(matches!(
-            s.get("seed/x.jpg").await,
-            Err(StorageError::Unexpected(_))
-        ), "S3 storage must not proxy media");
+        assert!(
+            matches!(s.get("seed/x.jpg").await, Err(StorageError::Unexpected(_))),
+            "S3 storage must not proxy media"
+        );
     }
 
     #[test]

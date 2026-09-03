@@ -131,7 +131,9 @@ impl Cursor {
     /// than erroring (defensive against tampered URLs).
     pub fn decode(raw: &str) -> Option<Self> {
         use base64::Engine as _;
-        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(raw).ok()?;
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(raw)
+            .ok()?;
         let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
         let sort = Sort::from_code(json.get("s")?.as_str()?)?;
         let v = json.get("v")?.as_f64()?;
@@ -222,7 +224,9 @@ impl SearchRequest {
             DEFAULT_RADIUS_M
         };
         let page_size = page_size.clamp(1, MAX_PAGE_SIZE);
-        let cursor = cursor_raw.and_then(Cursor::decode).filter(|c| c.sort == sort);
+        let cursor = cursor_raw
+            .and_then(Cursor::decode)
+            .filter(|c| c.sort == sort);
         // Deduplicate + validate type codes; drop unknown security codes.
         let mut types = filters.types.clone();
         types.sort_by_key(|t| t.as_code());
@@ -283,10 +287,12 @@ impl ParkingSummary {
             Sort::Distance => Some(self.distance_m),
             Sort::Security => Some(-(self.security_yes.len() as f64)),
             Sort::Rating => Some(-self.rating.avg().unwrap_or(2.5)),
-            Sort::RecentlyVerified => Some(-self
-                .last_verified_at
-                .map(|t| t.timestamp_millis() as f64)
-                .unwrap_or(0.0)),
+            Sort::RecentlyVerified => Some(
+                -self
+                    .last_verified_at
+                    .map(|t| t.timestamp_millis() as f64)
+                    .unwrap_or(0.0),
+            ),
         }
     }
 }

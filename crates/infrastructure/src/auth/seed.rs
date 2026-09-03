@@ -3,10 +3,8 @@
 //! ACTIVE + verified with a password login and USER + ADMIN roles. Never
 //! reachable over HTTP.
 
-use crate::auth::{
-    Argon2PasswordHasher, SqlxAccountRepository, SqlxAuditLog, SystemClock,
-};
 use crate::Db;
+use crate::auth::{Argon2PasswordHasher, SqlxAccountRepository, SqlxAuditLog, SystemClock};
 use bikenest_application::{
     AccountRepository, AuditEvent, AuditLog, AuthError, Clock, PasswordHasher,
 };
@@ -35,7 +33,8 @@ pub enum SeedAdminError {
 pub async fn seed_admin(db: &Db) -> Result<SeedOutcome, SeedAdminError> {
     let email_raw = std::env::var("ADMIN_EMAIL").map_err(|_| SeedAdminError::MissingEmail)?;
     let email = UserEmail::parse(&email_raw).map_err(|_| SeedAdminError::MissingEmail)?;
-    let password_raw = std::env::var("ADMIN_PASSWORD").map_err(|_| SeedAdminError::MissingPassword)?;
+    let password_raw =
+        std::env::var("ADMIN_PASSWORD").map_err(|_| SeedAdminError::MissingPassword)?;
     bikenest_domain::PasswordPolicy::default()
         .validate(&password_raw)
         .map_err(|_| SeedAdminError::MissingPassword)?;
@@ -86,7 +85,10 @@ pub async fn seed_admin(db: &Db) -> Result<SeedOutcome, SeedAdminError> {
         SeedOutcome::Created
     };
 
-    let user = repo.find_by_email(&email).await?.ok_or(SeedAdminError::MissingEmail)?;
+    let user = repo
+        .find_by_email(&email)
+        .await?
+        .ok_or(SeedAdminError::MissingEmail)?;
     audit
         .record(AuditEvent::success(
             Some(user.id),

@@ -17,9 +17,7 @@ pub struct GeoPoint {
 impl GeoPoint {
     pub fn new(lat: f64, lon: f64) -> Result<Self, DomainError> {
         if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
-            return Err(DomainError::Invalid(
-                "coordinates out of range".to_string(),
-            ));
+            return Err(DomainError::Invalid("coordinates out of range".to_string()));
         }
         Ok(Self { lat, lon })
     }
@@ -336,9 +334,10 @@ pub struct Rating {
 impl Rating {
     pub fn new(avg: Option<f64>, count: i64) -> Result<Self, DomainError> {
         if let Some(avg) = avg
-            && !(0.0..=5.0).contains(&avg) {
-                return Err(DomainError::Invalid("rating avg out of range".to_string()));
-            }
+            && !(0.0..=5.0).contains(&avg)
+        {
+            return Err(DomainError::Invalid("rating avg out of range".to_string()));
+        }
         if count < 0 {
             return Err(DomainError::Invalid("negative rating count".to_string()));
         }

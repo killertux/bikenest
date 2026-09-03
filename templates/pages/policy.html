@@ -7,7 +7,8 @@
   <a href="/{{ kind_code }}/versions" class="mt-2 inline-block text-sm font-medium text-accent-strong hover:underline">{{ tr.t("policy.view_versions") }}</a>
 
   <div class="mt-6 rounded-2xl border border-border bg-surface p-6 shadow-card">
-    <div class="whitespace-pre-line text-sm leading-relaxed text-fg">{{ content }}</div>
+    {# `content` is the output of crate::markdown::render_policy_markdown (raw HTML escaped there). #}
+    <div class="policy-content text-[15px] leading-relaxed text-fg">{{ content|safe }}</div>
   </div>
 </section>
 {% endblock %}

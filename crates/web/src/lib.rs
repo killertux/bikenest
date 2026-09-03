@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod http;
 pub mod i18n;
+pub mod markdown;
 pub mod observability;
 pub mod security;
 pub mod view;
@@ -223,7 +224,12 @@ pub struct PhotoVm {
 }
 
 impl DetailsPage {
-    pub fn build(tr: Translator, v: ParkingDetailsView, gallery: Vec<PhotoVm>, csrf: String) -> Self {
+    pub fn build(
+        tr: Translator,
+        v: ParkingDetailsView,
+        gallery: Vec<PhotoVm>,
+        csrf: String,
+    ) -> Self {
         use bikenest_domain::OpenStatus;
         let now = chrono::Utc::now();
         let loc = &v.location;
@@ -235,8 +241,7 @@ impl DetailsPage {
         };
         let open_label = view::open_label(tr, v.is_open_now);
         Self {
-            layout: PageLayout::new(format!("{} — BikeNest", loc.name()), "")
-                .csrf(csrf),
+            layout: PageLayout::new(format!("{} — BikeNest", loc.name()), "").csrf(csrf),
             tr,
             id: loc.id(),
             name: loc.name().to_string(),
@@ -279,7 +284,9 @@ impl DetailsPage {
             },
             // §104: external navigation only — links to providers, coordinates
             // only (no user data is sent; the user leaves the app to navigate).
-            osm_url: format!("https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=18/{lat}/{lon}"),
+            osm_url: format!(
+                "https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=18/{lat}/{lon}"
+            ),
             google_url: format!("https://www.google.com/maps/dir/?api=1&destination={lat},{lon}"),
             lat,
             lon,
@@ -308,6 +315,7 @@ impl DetailsPage {
     /// verification panel, favorite, recommendation explanation) overlaid on
     /// the base detail view. `viewer_verified` / `viewer_authenticated` gate the
     /// contributor actions; anonymous viewers get a public-only page.
+    #[allow(clippy::too_many_arguments)]
     pub async fn build_community(
         tr: Translator,
         v: bikenest_application::ParkingDetailsView,
@@ -338,10 +346,7 @@ impl DetailsPage {
                     photos.push(PhotoVm {
                         url,
                         thumb_url,
-                        alt: p
-                            .alt
-                            .clone()
-                            .unwrap_or_else(|| "Review photo".to_string()),
+                        alt: p.alt.clone().unwrap_or_else(|| "Review photo".to_string()),
                     });
                 }
             }
@@ -503,7 +508,9 @@ pub struct PolicyPage {
     pub kind_label: &'static str,
     pub version: String,
     pub effective_label: String,
-    /// Stored markdown, rendered escaped (never `|safe`).
+    /// HTML produced by [`markdown::render_policy_markdown`] from the stored
+    /// markdown (raw HTML in the source is escaped there). This is the only
+    /// template field marked `|safe`.
     pub content: String,
 }
 
@@ -768,7 +775,10 @@ pub struct ModerationActionResultVm {
     pub message: String,
 }
 
-pub fn app_router(db: bikenest_infrastructure::Db, probe_timeout: std::time::Duration) -> axum::Router {
+pub fn app_router(
+    db: bikenest_infrastructure::Db,
+    probe_timeout: std::time::Duration,
+) -> axum::Router {
     http::app_router(db, probe_timeout)
 }
 
@@ -784,5 +794,13 @@ pub fn app_router_with<H: bikenest_application::PasswordHasher + Clone + 'static
     rate_limiter: Box<dyn bikenest_application::RateLimiter>,
     storage: std::sync::Arc<dyn bikenest_application::ObjectStorage>,
 ) -> axum::Router {
-    http::app_router_with(db, probe_timeout, email, oauth, hasher, rate_limiter, storage)
+    http::app_router_with(
+        db,
+        probe_timeout,
+        email,
+        oauth,
+        hasher,
+        rate_limiter,
+        storage,
+    )
 }

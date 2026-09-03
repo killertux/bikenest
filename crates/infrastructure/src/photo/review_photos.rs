@@ -1,8 +1,8 @@
 //! SQL-backed reader for a review's approved photos (D3 §38). Only `APPROVED`
 //! review photos render on the review card; hidden/rejected/pending are excluded.
 
-use crate::parking::search::map_db_err;
 use crate::Db;
+use crate::parking::search::map_db_err;
 use async_trait::async_trait;
 use bikenest_application::{ReaderError, ReviewPhotosReader, StoredPhoto};
 
@@ -25,12 +25,15 @@ struct Row {
 #[async_trait]
 impl ReviewPhotosReader for SqlxReviewPhotosReader {
     async fn photos(&self, review_id: i64) -> Result<Vec<StoredPhoto>, ReaderError> {
-        let rows = sqlx::query_as::<_, Row>(r#"
+        let rows = sqlx::query_as::<_, Row>(
+            r#"
             SELECT storage_key, thumbnail_key
             FROM review_photo
             WHERE review_id = $1 AND moderation_state = 'APPROVED'
             ORDER BY position, id
-            "#).bind(review_id)
+            "#,
+        )
+        .bind(review_id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_db_err)?;

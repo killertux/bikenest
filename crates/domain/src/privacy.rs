@@ -247,7 +247,11 @@ mod tests {
 
     #[test]
     fn export_state_codes_round_trip() {
-        for state in [ExportState::Ready, ExportState::Downloaded, ExportState::Expired] {
+        for state in [
+            ExportState::Ready,
+            ExportState::Downloaded,
+            ExportState::Expired,
+        ] {
             assert_eq!(ExportState::from_code(state.as_code()), Ok(state));
         }
         assert!(ExportState::from_code("PROCESSING").is_err());

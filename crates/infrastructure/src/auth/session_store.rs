@@ -2,8 +2,8 @@
 //! the DB stores its SHA-256 hash. `resolve` applies idle (30-day) + absolute
 //! (90-day) expiry and refreshes `last_seen_at`.
 
-use crate::auth::hash::sha256_hex;
 use crate::Db;
+use crate::auth::hash::sha256_hex;
 use async_trait::async_trait;
 use bikenest_application::{AuthError, Session, SessionStore};
 use bikenest_domain::{CsrfToken, SessionId, UserId};
@@ -44,23 +44,36 @@ impl SessionStore for SqlxSessionStore {
     ) -> Result<(), AuthError> {
         let token_hash = sha256_hex(raw.as_bytes());
         let expires_at = now + ABSOLUTE_CAP;
-        sqlx::query(r#"
+        sqlx::query(
+            r#"
             INSERT INTO sessions (token_hash, user_id, csrf_token, expires_at)
             VALUES ($1, $2, $3, $4)
-            "#).bind(token_hash).bind(user_id.0).bind(csrf.to_base64url()).bind(expires_at)
+            "#,
+        )
+        .bind(token_hash)
+        .bind(user_id.0)
+        .bind(csrf.to_base64url())
+        .bind(expires_at)
         .execute(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;
         Ok(())
     }
 
-    async fn resolve(&self, raw: &SessionId, now: DateTime<Utc>) -> Result<Option<Session>, AuthError> {
+    async fn resolve(
+        &self,
+        raw: &SessionId,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Session>, AuthError> {
         let token_hash = sha256_hex(raw.as_bytes());
-        let row = sqlx::query_as::<_, SessionRow>(r#"
+        let row = sqlx::query_as::<_, SessionRow>(
+            r#"
             SELECT token_hash, user_id, csrf_token, created_at, last_seen_at, expires_at, revoked_at
             FROM sessions
             WHERE token_hash = $1
-            "#).bind(token_hash)
+            "#,
+        )
+        .bind(token_hash)
         .fetch_optional(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;
@@ -96,15 +109,21 @@ impl SessionStore for SqlxSessionStore {
 
     async fn revoke(&self, raw: &SessionId) -> Result<(), AuthError> {
         let token_hash = sha256_hex(raw.as_bytes());
-        sqlx::query("UPDATE sessions SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL")
-            .bind(token_hash)
-            .execute(self.db.pool())
-            .await
-            .map_err(|_| AuthError::Internal)?;
+        sqlx::query(
+            "UPDATE sessions SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL",
+        )
+        .bind(token_hash)
+        .execute(self.db.pool())
+        .await
+        .map_err(|_| AuthError::Internal)?;
         Ok(())
     }
 
-    async fn revoke_all_for_user_except(&self, user_id: UserId, keep: &SessionId) -> Result<(), AuthError> {
+    async fn revoke_all_for_user_except(
+        &self,
+        user_id: UserId,
+        keep: &SessionId,
+    ) -> Result<(), AuthError> {
         let keep_hash = sha256_hex(keep.as_bytes());
         sqlx::query(
             "UPDATE sessions SET revoked_at = now()

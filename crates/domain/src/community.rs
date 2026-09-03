@@ -348,7 +348,10 @@ pub fn confidence(
     if signals.is_empty() {
         return Confidence::Reported;
     }
-    if signals.iter().any(|s| s.result == ExistenceResult::NoLongerExists) {
+    if signals
+        .iter()
+        .any(|s| s.result == ExistenceResult::NoLongerExists)
+    {
         return Confidence::Conflicting;
     }
     // Only still_exists confirms existence. info_changed-only signals neither
@@ -389,7 +392,12 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    fn signal(user: i64, result: ExistenceResult, days_ago: i64, now: DateTime<Utc>) -> ExistenceSignal {
+    fn signal(
+        user: i64,
+        result: ExistenceResult,
+        days_ago: i64,
+        now: DateTime<Utc>,
+    ) -> ExistenceSignal {
         ExistenceSignal::new(UserId(user), result, now - chrono::Duration::days(days_ago))
     }
 
@@ -444,8 +452,14 @@ mod tests {
 
     #[test]
     fn attribute_result_round_trips() {
-        assert_eq!(AttributeResult::from_code("correct").unwrap(), AttributeResult::Correct);
-        assert_eq!(AttributeResult::from_code("incorrect").unwrap(), AttributeResult::Incorrect);
+        assert_eq!(
+            AttributeResult::from_code("correct").unwrap(),
+            AttributeResult::Correct
+        );
+        assert_eq!(
+            AttributeResult::from_code("incorrect").unwrap(),
+            AttributeResult::Incorrect
+        );
         assert!(AttributeResult::from_code("fine").is_err());
     }
 
@@ -492,7 +506,10 @@ mod tests {
 
     #[test]
     fn confidence_empty_signals_is_reported() {
-        assert_eq!(confidence(&[], tz(), &crate::freshness::DEFAULT_THRESHOLDS), Confidence::Reported);
+        assert_eq!(
+            confidence(&[], tz(), &crate::freshness::DEFAULT_THRESHOLDS),
+            Confidence::Reported
+        );
     }
 
     #[test]
@@ -501,27 +518,47 @@ mod tests {
         let thresholds = crate::freshness::DEFAULT_THRESHOLDS;
         // Fresh (0 days ago) → RecentlyVerified.
         assert_eq!(
-            confidence(&[signal(1, ExistenceResult::StillExists, 0, now)], now, &thresholds),
+            confidence(
+                &[signal(1, ExistenceResult::StillExists, 0, now)],
+                now,
+                &thresholds
+            ),
             Confidence::RecentlyVerified
         );
         // RecentlyVerified (45 days) → Verified.
         assert_eq!(
-            confidence(&[signal(1, ExistenceResult::StillExists, 45, now)], now, &thresholds),
+            confidence(
+                &[signal(1, ExistenceResult::StillExists, 45, now)],
+                now,
+                &thresholds
+            ),
             Confidence::Verified
         );
         // Aging (120 days) → Verified.
         assert_eq!(
-            confidence(&[signal(1, ExistenceResult::StillExists, 120, now)], now, &thresholds),
+            confidence(
+                &[signal(1, ExistenceResult::StillExists, 120, now)],
+                now,
+                &thresholds
+            ),
             Confidence::Verified
         );
         // Stale (200 days) → Stale.
         assert_eq!(
-            confidence(&[signal(1, ExistenceResult::StillExists, 200, now)], now, &thresholds),
+            confidence(
+                &[signal(1, ExistenceResult::StillExists, 200, now)],
+                now,
+                &thresholds
+            ),
             Confidence::Stale
         );
         // VeryStale (400 days) → Stale.
         assert_eq!(
-            confidence(&[signal(1, ExistenceResult::StillExists, 400, now)], now, &thresholds),
+            confidence(
+                &[signal(1, ExistenceResult::StillExists, 400, now)],
+                now,
+                &thresholds
+            ),
             Confidence::Stale
         );
     }
@@ -535,7 +572,10 @@ mod tests {
             signal(1, ExistenceResult::StillExists, 200, now),
             signal(2, ExistenceResult::StillExists, 0, now),
         ];
-        assert_eq!(confidence(&signals, now, &thresholds), Confidence::RecentlyVerified);
+        assert_eq!(
+            confidence(&signals, now, &thresholds),
+            Confidence::RecentlyVerified
+        );
     }
 
     #[test]
@@ -546,7 +586,10 @@ mod tests {
             signal(1, ExistenceResult::StillExists, 0, now),
             signal(2, ExistenceResult::NoLongerExists, 1, now),
         ];
-        assert_eq!(confidence(&signals, now, &thresholds), Confidence::Conflicting);
+        assert_eq!(
+            confidence(&signals, now, &thresholds),
+            Confidence::Conflicting
+        );
     }
 
     #[test]

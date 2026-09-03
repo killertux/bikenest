@@ -1,7 +1,7 @@
 //! SQL-backed reader for a location's approved photos (P3 gallery / P2 card).
 
-use crate::parking::search::map_db_err;
 use crate::Db;
+use crate::parking::search::map_db_err;
 use async_trait::async_trait;
 use bikenest_application::{ParkingPhotoReader, ReaderError, StoredPhoto};
 
@@ -26,12 +26,15 @@ struct PhotoRow {
 #[async_trait]
 impl ParkingPhotoReader for SqlxParkingPhotoReader {
     async fn photos(&self, location_id: i64) -> Result<Vec<StoredPhoto>, ReaderError> {
-        let rows = sqlx::query_as::<_, PhotoRow>(r#"
+        let rows = sqlx::query_as::<_, PhotoRow>(
+            r#"
             SELECT storage_key, thumbnail_key, content_type, alt
             FROM parking_photo
             WHERE location_id = $1 AND moderation_state = 'APPROVED'
             ORDER BY position, id
-            "#).bind(location_id)
+            "#,
+        )
+        .bind(location_id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_db_err)?;

@@ -42,6 +42,10 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | `VALKEY_URL` | **Rate limiter** (Ledger #6) single node, e.g. `valkey://valkey:6379`. Shared across auth/photo/contribution/moderation, survives restarts, aggregates across instances |
 | `VALKEY_CLUSTER_URLS` | comma-separated node URLs → **cluster** mode (wins over `VALKEY_URL`) |
 | `RATE_LIMIT_FAIL_OPEN` | `true` (default) → a ValKey outage **allows** requests (goes fail-open); `false` → **denies** (429s the rate-limited endpoints) |
+| `JOBS_ENABLED` | **Background job queue** (M9): `true` (default) spawns an in-process worker that claims/run/retries `background_job` rows; `false` for web-only instances |
+| `JOBS_POLL_INTERVAL_MS` / `JOBS_BATCH_SIZE` / `JOBS_LEASE_TTL_MS` | queue poll cadence, batch size, and lease length (defaults 5000 / 4 / 600000) |
+| `JOBS_MAX_ATTEMPTS` / `JOBS_BACKOFF_BASE_MS` | retry budget (default 5) and exponential-backoff base (default 2000) before dead-letter |
+| `JOBS_HISTORY_RETENTION_DAYS` | `jobs.gc` deletes `succeeded`/`failed` rows older than this (default 7) |
 | `CSP_TILE_HOSTS` / `CSP_GEOCODE_HOSTS` | origins allowed by the strict CSP for map tiles / geocoding |
 | `APP_ENV` | `production` → JSON structured logs (machine-parseable, forward to a log aggregator) |
 | `GEOCODER` | **Geocoder** (Ledger #2): `mapbox` \| `fake` (default `fake`). `mapbox` sends the query to Mapbox server-side (§77/§83) |
@@ -51,6 +55,9 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | `EMAIL_PROVIDER` | `smtp` or `resend` in production (not `fake`) |
 | `SMTP_*` / `RESEND_API_KEY` / `RESEND_FROM` | the chosen email backend |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | `seed-admin` bootstrap (run once) |
+| `POLICY_OPERATOR_NAME` / `POLICY_OPERATOR_CNPJ` / `POLICY_OPERATOR_ADDRESS` / `POLICY_CONTACT_EMAIL` | **Legal pages** (Ledger #21, §70): the controller's legal name, CNPJ, registered address and privacy contact e-mail, substituted into `policies/*.md` by `seed-policies`. The seeder refuses to run with any of them unset |
+| `POLICY_VERSION` / `POLICY_EFFECTIVE_AT` | version label + effective date of the policy text being seeded; bump the version whenever `policies/*.md` change |
+| `DELETED_ACCOUNT_PURGE_AFTER_DAYS` | `30` in production (decision, `docs/retention-policy.md`); `INACTIVE_ACCOUNT_ANONYMIZE_AFTER_DAYS` stays `0` |
 | `REC_*`, `FRESHNESS_*`, `PHOTO_*`, `MOD_*`, `RETENTION_*` | tuning constants (see `.env.example`) |
 
 **Never** put secrets in the image; the `.dockerignore` excludes `.env*`.
@@ -160,6 +167,32 @@ all slots — portable on Docker Desktop for Mac; see the file header for a
 multi-node variant).
 
 
+## 5c. Background jobs (M9, plans/m9-background-jobs.md)
+
+The app ships a **pure-PostgreSQL job queue** — no broker. A `background_job`
+table stores durable one-shot + recurring work; an **in-process worker task**
+(started when `JOBS_ENABLED=true`, the default) claims due jobs with
+`FOR UPDATE SKIP LOCKED`, runs their handler, and records the outcome. All job
+times are UTC.
+
+- **Recurring** jobs never go terminal: on success the worker recomputes
+  `run_at` from `schedule` (`{"every_seconds":N}` or a UTC `{"cron":"…"}`) and
+  resets the row to `pending`.
+- **Retries** use exponential backoff + jitter; after `JOBS_MAX_ATTEMPTS` a job
+  is dead-lettered to `failed` (kept with `last_error` for inspection).
+- **`jobs.gc`** (itself a recurring job) deletes `succeeded`/`failed` rows older
+  than `JOBS_HISTORY_RETENTION_DAYS` (default 7).
+- **At-least-once**: a worker crash leaves the job leasable; it is re-claimed
+  after the lease. Handlers must be idempotent.
+- On a multi-instance deploy each instance runs its own worker; claims are safe
+  because `SKIP LOCKED` assigns disjoint rows. `JOBS_ENABLED=false` keeps an
+  instance web-only (no worker).
+
+The always-on recurring jobs (`retention`, `jobs.gc`) are bootstrapped by the
+worker at startup (idempotent via a stable `idempotency_key`), so no manual
+seeding is required. The legacy `cargo run -- retention` subcommand still works
+as a manual escape hatch.
+
 ## 6. Rolling deploy + rollback
 
 1. Build the new image (tagged with the commit SHA).
@@ -169,14 +202,38 @@ multi-node variant).
 5. On failure: stop the rollout, redeploy the **previous** image tag, and if the
    schema is incompatible restore the pre-release backup (see §4/`docs/backups.md`).
 
+## 6a. Legal pages (privacy / terms / cookies)
+
+The versioned legal pages are stored in `policy_version` and seeded from
+`policies/{privacy,terms,cookies}.{pt-BR,en}.md`:
+
+1. Set `POLICY_OPERATOR_NAME`, `POLICY_OPERATOR_CNPJ`, `POLICY_OPERATOR_ADDRESS`
+   and `POLICY_CONTACT_EMAIL` (the privacy inbox must be monitored — rights
+   requests and takedown notices arrive there).
+2. Set `POLICY_VERSION` (e.g. `2026-09-03.1`) and `POLICY_EFFECTIVE_AT`.
+3. Run `bikenest-web seed-policies` once per release that changes the text. It is
+   idempotent per `(kind, locale, version)`; a new version supersedes the current
+   one and the old text stays reachable at `/{privacy,terms,cookies}/versions`.
+4. Material changes must be announced to users (e-mail or in-app notice) before
+   `POLICY_EFFECTIVE_AT` — the policies promise that.
+
+Review status of the text itself: `docs/legal-review.md`.
+
 ## 7. Logging & retention
 
 - `APP_ENV=production` → JSON structured logs (one line per request via
   `TraceLayer`: method/path/status/latency; **headers never logged**, so no
   cookie/token/PII). PII-free `info`/`warn` events at key boundaries.
 - Forward stdout/stderr to a log driver (Docker/CloudWatch/journald/Syslog).
-- Retain per your audit/incident needs (default: 30 days, forward to an archive
-  if longer retention is required).
+- **Access logs: keep 6 months.** As a Brazilian company operating an internet
+  application, art. 15 of the Marco Civil da Internet (Lei 12.965/2014) requires
+  the *registros de acesso a aplicações* — date/time of access + the client IP —
+  to be kept for **6 months** under confidentiality in a controlled environment.
+  The app's own request logs do not include the client IP, so satisfy this at
+  the reverse proxy / LB access log (or the hosting provider's equivalent):
+  retain those logs for 6 months, access-controlled, then delete. Everything
+  else (diagnostic logs) can stay at ~30 days. The privacy policy states the
+  6-month period; keep them aligned (`docs/retention-policy.md`).
 - Separate **audit events** (the `audit_events` table, `action` codes like
   `photo.*`, `report.*`, `privacy.*`, `retention.*`) from diagnostic logs — audit
   rows are queryable and protected (see `docs/incident-response.md`).

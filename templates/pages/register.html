@@ -22,6 +22,7 @@
         <input id="password" name="password" type="password" required minlength="8" autocomplete="new-password" class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
         <p class="mt-1 text-xs text-muted">{{ tr.t("auth.password_hint") }}</p>
       </div>
+      <p class="text-xs leading-relaxed text-muted">{{ tr.t("auth.legal_prefix") }} <a href="/terms" class="font-medium text-accent-strong hover:underline">{{ tr.t("nav.terms") }}</a> {{ tr.t("auth.legal_middle") }} <a href="/privacy" class="font-medium text-accent-strong hover:underline">{{ tr.t("nav.privacy") }}</a>.</p>
       <button type="submit" class="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("auth.signup") }}</button>
     </form>
     <p class="mt-4 text-sm text-muted">{{ tr.t("auth.have_account") }} <a href="/login" class="font-medium text-accent-strong hover:underline">{{ tr.t("auth.login") }}</a></p>

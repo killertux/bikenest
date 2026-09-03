@@ -2,9 +2,9 @@
 //! fake ports (no database — the real-SQL tests live in infrastructure).
 
 use bikenest_application::{
-    Cursor, Filters, GeocodeError, GeoHit, Geocoder, GetParkingDetails, ParkingDetailsReader,
-    ParkingSearchReader, ParkingSummary, ReaderError,
-    DEFAULT_RECOMMENDATION_CONFIG, SearchError, SearchInput, SearchParking,
+    Cursor, DEFAULT_RECOMMENDATION_CONFIG, Filters, GeoHit, GeocodeError, Geocoder,
+    GetParkingDetails, ParkingDetailsReader, ParkingSearchReader, ParkingSummary, ReaderError,
+    SearchError, SearchInput, SearchParking,
 };
 use bikenest_domain::{Cost, GeoPoint, ParkingLocation, ParkingType, Rating, TimeRange, hms};
 use std::sync::{Arc, Mutex};
@@ -13,7 +13,12 @@ fn sp_tz() -> chrono_tz::Tz {
     "America/Sao_Paulo".parse().unwrap()
 }
 
-fn summary(id: i64, distance_m: f64, rating_avg: Option<f64>, verified_days_ago: Option<i64>) -> ParkingSummary {
+fn summary(
+    id: i64,
+    distance_m: f64,
+    rating_avg: Option<f64>,
+    verified_days_ago: Option<i64>,
+) -> ParkingSummary {
     ParkingSummary {
         id,
         name: format!("Spot {id}"),
@@ -22,13 +27,16 @@ fn summary(id: i64, distance_m: f64, rating_avg: Option<f64>, verified_days_ago:
         cost: Cost::Free,
         point: GeoPoint::new(-23.56, -46.65).unwrap(),
         distance_m,
-        security_yes: if id % 2 == 0 { vec!["cctv", "well_lit"] } else { vec![] }
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
+        security_yes: if id % 2 == 0 {
+            vec!["cctv", "well_lit"]
+        } else {
+            vec![]
+        }
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
         rating: Rating::new(rating_avg, if rating_avg.is_some() { 3 } else { 0 }).unwrap(),
-        last_verified_at: verified_days_ago
-            .map(|d| chrono::Utc::now() - chrono::Duration::days(d)),
+        last_verified_at: verified_days_ago.map(|d| chrono::Utc::now() - chrono::Duration::days(d)),
         timezone: sp_tz(),
         is_open_now: true,
         photo_key: None,
@@ -80,7 +88,10 @@ impl ParkingSearchReader for FakeReader {
         apply_cursor: bool,
     ) -> Result<bikenest_application::SearchPage, ReaderError> {
         self.received_limit.lock().unwrap().push(limit);
-        self.received_apply_cursor.lock().unwrap().push(apply_cursor);
+        self.received_apply_cursor
+            .lock()
+            .unwrap()
+            .push(apply_cursor);
         let items = self.items.iter().take(limit).cloned().collect();
         Ok(bikenest_application::SearchPage {
             items,
@@ -201,14 +212,20 @@ async fn recommended_sort_orders_by_score_then_id_and_paginates() {
         .execute(input.clone())
         .await
         .unwrap();
-    assert_eq!(page.items.iter().map(|i| i.id).collect::<Vec<_>>(), vec![3, 1, 2]);
+    assert_eq!(
+        page.items.iter().map(|i| i.id).collect::<Vec<_>>(),
+        vec![3, 1, 2]
+    );
 
     // Deterministic: same input → same order.
-    let (page2, _) = use_case(FakeGeocoder::default(), FakeReader::new(vec![
-        summary(2, 100.0, None, Some(2)),
-        summary(1, 100.0, None, Some(2)),
-        summary(3, 50.0, None, Some(2)),
-    ]))
+    let (page2, _) = use_case(
+        FakeGeocoder::default(),
+        FakeReader::new(vec![
+            summary(2, 100.0, None, Some(2)),
+            summary(1, 100.0, None, Some(2)),
+            summary(3, 50.0, None, Some(2)),
+        ]),
+    )
     .execute(input.clone())
     .await
     .unwrap();
@@ -223,7 +240,13 @@ async fn recommended_sort_orders_by_score_then_id_and_paginates() {
     let now = chrono::Utc::now();
     let cfg = DEFAULT_RECOMMENDATION_CONFIG;
     let fresh = Default::default();
-    let neutral = bikenest_application::recommendation_score(&summary(9, 500.0, None, None), 1000, now, &cfg, &fresh);
+    let neutral = bikenest_application::recommendation_score(
+        &summary(9, 500.0, None, None),
+        1000,
+        now,
+        &cfg,
+        &fresh,
+    );
     // distance .35*(1-0.5) + security .25*0.5 + rating .2*0.5 + freshness .15*0.5 + verification .05*0.5
     let expected = 0.35 * 0.5 + 0.5 * (0.25 + 0.2 + 0.15 + 0.05);
     assert!((neutral - expected).abs() < 1e-9);
@@ -236,11 +259,14 @@ async fn recommended_sort_orders_by_score_then_id_and_paginates() {
     };
     let mut paged_input = input;
     paged_input.cursor = Some(cursor.encode());
-    let (paged, _) = use_case(FakeGeocoder::default(), FakeReader::new(vec![
-        summary(1, 100.0, None, Some(2)),
-        summary(2, 100.0, None, Some(2)),
-        summary(3, 50.0, None, Some(2)),
-    ]))
+    let (paged, _) = use_case(
+        FakeGeocoder::default(),
+        FakeReader::new(vec![
+            summary(1, 100.0, None, Some(2)),
+            summary(2, 100.0, None, Some(2)),
+            summary(3, 50.0, None, Some(2)),
+        ]),
+    )
     .execute(paged_input)
     .await
     .unwrap();
@@ -264,7 +290,10 @@ async fn sql_sorts_pass_cursor_to_reader_and_build_next_cursor() {
         .unwrap();
     // reader was asked for page_size+1 rows with cursor application enabled
     assert_eq!(reader.received_limit.lock().unwrap().last().unwrap(), &3);
-    assert_eq!(reader.received_apply_cursor.lock().unwrap().last().unwrap(), &true);
+    assert_eq!(
+        reader.received_apply_cursor.lock().unwrap().last().unwrap(),
+        &true
+    );
     // page_size < items returned → next cursor present, anchored on item 2
     let next = page.next_cursor.expect("has next page");
     assert_eq!(next.sort.as_code(), "distance");
@@ -309,7 +338,10 @@ async fn filters_parse_from_input() {
     let filters: Filters = input.filters();
     assert_eq!(filters.cost, Some(bikenest_application::CostFilter::Free));
     // Parsing keeps unknown codes out; deduplication is SearchRequest's job.
-    assert_eq!(filters.types, vec![ParkingType::Rack, ParkingType::Secured, ParkingType::Rack]);
+    assert_eq!(
+        filters.types,
+        vec![ParkingType::Rack, ParkingType::Secured, ParkingType::Rack]
+    );
     assert_eq!(filters.security_all, vec!["cctv", "well_lit"]);
     assert!(filters.open_now);
 
@@ -323,7 +355,10 @@ async fn filters_parse_from_input() {
         20,
         None,
     );
-    assert_eq!(request.filters.types, vec![ParkingType::Rack, ParkingType::Secured]);
+    assert_eq!(
+        request.filters.types,
+        vec![ParkingType::Rack, ParkingType::Secured]
+    );
     assert_eq!(request.filters.security_all, vec!["cctv", "well_lit"]);
 }
 
@@ -366,8 +401,12 @@ fn location(hours: bikenest_domain::OpeningHours) -> ParkingLocation {
 #[tokio::test]
 async fn details_view_computes_freshness_and_open_status() {
     // Open 09:00–18:00 on Mondays (SP local).
-    let hours = bikenest_domain::OpeningHours::weekly(vec![(1, TimeRange::new(hms(9, 0), hms(18, 0)))]);
-    let uc = GetParkingDetails::new(Box::new(OneLocationReader(Some(location(hours)))), Default::default());
+    let hours =
+        bikenest_domain::OpeningHours::weekly(vec![(1, TimeRange::new(hms(9, 0), hms(18, 0)))]);
+    let uc = GetParkingDetails::new(
+        Box::new(OneLocationReader(Some(location(hours)))),
+        Default::default(),
+    );
     let view = uc.execute(42).await.unwrap().unwrap();
     assert_eq!(view.freshness, bikenest_domain::FreshnessCategory::Fresh);
     // Unknown hours would be Unknown; with schedule, depends on now — just check it computes.

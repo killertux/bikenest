@@ -7,8 +7,12 @@
 
 use crate::PhotoVm;
 use crate::i18n::Translator;
-use bikenest_application::{AuthenticatedUser, GeoHit, ObjectStorage, ParkingSummary, PendingPhoto};
-use bikenest_domain::{AccountState, Cost, FreshnessCategory, OpenStatus, OpeningHours, ParkingType, PricingUnit, Role};
+use bikenest_application::{
+    AuthenticatedUser, GeoHit, ObjectStorage, ParkingSummary, PendingPhoto,
+};
+use bikenest_domain::{
+    AccountState, Cost, FreshnessCategory, OpenStatus, OpeningHours, ParkingType, PricingUnit, Role,
+};
 use chrono::{Datelike, Timelike};
 use std::time::Duration;
 
@@ -595,7 +599,9 @@ pub async fn moderation_photo_vm(
     storage: &dyn ObjectStorage,
     p: &PendingPhoto,
 ) -> ModerationPhotoVm {
-    let full_url = resolve_photo(storage, Some(&p.storage_key)).await.unwrap_or_default();
+    let full_url = resolve_photo(storage, Some(&p.storage_key))
+        .await
+        .unwrap_or_default();
     let thumb_url = match p.thumbnail_key.as_deref() {
         Some(k) => resolve_photo(storage, Some(k)).await,
         None => None,
@@ -717,7 +723,9 @@ pub fn report_vm(t: Translator, r: &bikenest_application::Report) -> ReportVm {
         state_color: match r.state {
             bikenest_domain::ReportState::Open => "error",
             bikenest_domain::ReportState::UnderReview => "aging",
-            bikenest_domain::ReportState::Resolved | bikenest_domain::ReportState::Dismissed => "fresh",
+            bikenest_domain::ReportState::Resolved | bikenest_domain::ReportState::Dismissed => {
+                "fresh"
+            }
         },
         reporter_label: r
             .reporter_id
@@ -754,16 +762,26 @@ fn proposal_kind_label(t: Translator, kind: bikenest_domain::ProposalKind) -> &'
     }
 }
 
-fn proposal_detail(t: Translator, kind: bikenest_domain::ProposalKind, proposed: &serde_json::Value) -> String {
+fn proposal_detail(
+    t: Translator,
+    kind: bikenest_domain::ProposalKind,
+    proposed: &serde_json::Value,
+) -> String {
     match kind {
         bikenest_domain::ProposalKind::MoveLocation => {
             let lat = proposed.get("lat").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let lon = proposed.get("lon").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let tz = proposed.get("timezone").and_then(|v| v.as_str()).unwrap_or("");
+            let tz = proposed
+                .get("timezone")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             format!("{:.5}, {:.5} · {tz}", lat, lon)
         }
         bikenest_domain::ProposalKind::ChangeExistence => {
-            let ex = proposed.get("existence").and_then(|v| v.as_str()).unwrap_or("");
+            let ex = proposed
+                .get("existence")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if ex == "removed" {
                 t.t("proposal.existence.removed").to_string()
             } else {
@@ -860,14 +878,22 @@ pub fn export_state_label(t: Translator, s: bikenest_domain::ExportState) -> &'s
 
 /// Build a C7 row. `token` is the single-use download token — only present for
 /// the just-requested export (rendered once as the owner-only link).
-pub fn export_vm(t: Translator, e: &bikenest_application::Export, token: Option<String>) -> ExportVm {
+pub fn export_vm(
+    t: Translator,
+    e: &bikenest_application::Export,
+    token: Option<String>,
+) -> ExportVm {
     ExportVm {
         id: e.id,
         state_code: e.state.as_code(),
         state_label: export_state_label(t, e.state),
         created_label: iso_datetime_label(t, e.created_at),
         expires_label: iso_datetime_label(t, e.expires_at),
-        download_token: if e.state == bikenest_domain::ExportState::Ready { token } else { None },
+        download_token: if e.state == bikenest_domain::ExportState::Ready {
+            token
+        } else {
+            None
+        },
         is_ready: e.state == bikenest_domain::ExportState::Ready,
     }
 }
@@ -883,7 +909,10 @@ pub struct PrivacyRequestVm {
     pub created_label: String,
 }
 
-pub fn privacy_request_kind_label(t: Translator, kind: bikenest_domain::PrivacyRequestKind) -> &'static str {
+pub fn privacy_request_kind_label(
+    t: Translator,
+    kind: bikenest_domain::PrivacyRequestKind,
+) -> &'static str {
     match kind {
         bikenest_domain::PrivacyRequestKind::Access => t.t("privacy.kind.access"),
         bikenest_domain::PrivacyRequestKind::Rectification => t.t("privacy.kind.rectification"),
@@ -895,7 +924,10 @@ pub fn privacy_request_kind_label(t: Translator, kind: bikenest_domain::PrivacyR
     }
 }
 
-pub fn privacy_request_state_label(t: Translator, s: bikenest_domain::PrivacyRequestState) -> &'static str {
+pub fn privacy_request_state_label(
+    t: Translator,
+    s: bikenest_domain::PrivacyRequestState,
+) -> &'static str {
     match s {
         bikenest_domain::PrivacyRequestState::Open => t.t("privacy.state.open"),
         bikenest_domain::PrivacyRequestState::InProgress => t.t("privacy.state.in_progress"),
@@ -904,7 +936,10 @@ pub fn privacy_request_state_label(t: Translator, s: bikenest_domain::PrivacyReq
     }
 }
 
-pub fn privacy_request_vm(t: Translator, r: &bikenest_application::PrivacyRequest) -> PrivacyRequestVm {
+pub fn privacy_request_vm(
+    t: Translator,
+    r: &bikenest_application::PrivacyRequest,
+) -> PrivacyRequestVm {
     PrivacyRequestVm {
         id: r.id,
         kind_code: r.kind.as_code(),
@@ -949,7 +984,10 @@ pub fn privacy_request_kind_options(t: Translator) -> Vec<PrivacyRequestKindVm> 
     vec![
         PrivacyRequestKindVm {
             code: "rectification",
-            label: privacy_request_kind_label(t, bikenest_domain::PrivacyRequestKind::Rectification),
+            label: privacy_request_kind_label(
+                t,
+                bikenest_domain::PrivacyRequestKind::Rectification,
+            ),
             description: t.t("privacy.rights.rectification_desc"),
         },
         PrivacyRequestKindVm {
@@ -964,13 +1002,19 @@ pub fn privacy_request_kind_options(t: Translator) -> Vec<PrivacyRequestKindVm> 
         },
         PrivacyRequestKindVm {
             code: "consent_withdrawal",
-            label: privacy_request_kind_label(t, bikenest_domain::PrivacyRequestKind::ConsentWithdrawal),
+            label: privacy_request_kind_label(
+                t,
+                bikenest_domain::PrivacyRequestKind::ConsentWithdrawal,
+            ),
             description: t.t("privacy.rights.consent_desc"),
         },
     ]
 }
 
-pub fn contribution_vm(t: Translator, i: &bikenest_application::ContributionItem) -> ContributionVm {
+pub fn contribution_vm(
+    t: Translator,
+    i: &bikenest_application::ContributionItem,
+) -> ContributionVm {
     let kind = match i.kind.as_str() {
         "added" => t.t("contrib.kind.added"),
         "edited" => t.t("contrib.kind.edited"),

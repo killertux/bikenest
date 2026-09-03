@@ -4,7 +4,7 @@
 //! to or stored as UTC. "Currently open" is computed by converting the current
 //! UTC instant into the location timezone and comparing wall-clock ranges.
 
-use chrono::{Datelike, DateTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 
 /// ISO weekday: 1 = Monday .. 7 = Sunday.
 pub type IsoDay = u8;
@@ -129,7 +129,10 @@ pub fn local_day_and_time(at: DateTime<Utc>, tz: chrono_tz::Tz) -> (IsoDay, chro
     let local = at.with_timezone(&tz);
     (
         local.weekday().number_from_monday() as IsoDay,
-        local.time().with_nanosecond(0).unwrap_or_else(|| local.time()),
+        local
+            .time()
+            .with_nanosecond(0)
+            .unwrap_or_else(|| local.time()),
     )
 }
 
@@ -152,7 +155,10 @@ mod tests {
 
     #[test]
     fn unknown_hours_never_open_or_closed() {
-        assert_eq!(OpeningHours::Unknown.status_at(utc(2026, 1, 5, 12, 0), sp()), OpenStatus::Unknown);
+        assert_eq!(
+            OpeningHours::Unknown.status_at(utc(2026, 1, 5, 12, 0), sp()),
+            OpenStatus::Unknown
+        );
     }
 
     #[test]
@@ -160,11 +166,20 @@ mod tests {
         // Mon 2026-01-05. 09:00-18:00 local. SP is UTC-3.
         let hours = weekly(vec![(1, TimeRange::new(hms(9, 0), hms(18, 0)))]);
         // 12:00 SP = 15:00 UTC → open.
-        assert_eq!(hours.status_at(utc(2026, 1, 5, 15, 0), sp()), OpenStatus::Open);
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 5, 15, 0), sp()),
+            OpenStatus::Open
+        );
         // 19:00 SP = 22:00 UTC → closed.
-        assert_eq!(hours.status_at(utc(2026, 1, 5, 22, 0), sp()), OpenStatus::Closed);
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 5, 22, 0), sp()),
+            OpenStatus::Closed
+        );
         // Same schedule, different day (Tuesday) → closed.
-        assert_eq!(hours.status_at(utc(2026, 1, 6, 15, 0), sp()), OpenStatus::Closed);
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 6, 15, 0), sp()),
+            OpenStatus::Closed
+        );
     }
 
     #[test]
@@ -173,19 +188,37 @@ mod tests {
             (1, TimeRange::new(hms(6, 0), hms(9, 0))),
             (1, TimeRange::new(hms(17, 0), hms(22, 0))),
         ]);
-        assert_eq!(hours.status_at(utc(2026, 1, 5, 10, 0), sp()), OpenStatus::Open); // 07:00 SP
-        assert_eq!(hours.status_at(utc(2026, 1, 5, 12, 0), sp()), OpenStatus::Closed); // 09:00 SP edge
-        assert_eq!(hours.status_at(utc(2026, 1, 5, 20, 0), sp()), OpenStatus::Open); // 17:00 SP
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 5, 10, 0), sp()),
+            OpenStatus::Open
+        ); // 07:00 SP
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 5, 12, 0), sp()),
+            OpenStatus::Closed
+        ); // 09:00 SP edge
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 5, 20, 0), sp()),
+            OpenStatus::Open
+        ); // 17:00 SP
     }
 
     #[test]
     fn all_day_is_always_open_on_that_day() {
         let hours = weekly(vec![(6, TimeRange::all_day())]);
         // Saturday 2026-01-10.
-        assert_eq!(hours.status_at(utc(2026, 1, 10, 3, 0), sp()), OpenStatus::Open);
-        assert_eq!(hours.status_at(utc(2026, 1, 10, 23, 0), sp()), OpenStatus::Open);
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 10, 3, 0), sp()),
+            OpenStatus::Open
+        );
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 10, 23, 0), sp()),
+            OpenStatus::Open
+        );
         // Sunday → closed.
-        assert_eq!(hours.status_at(utc(2026, 1, 11, 12, 0), sp()), OpenStatus::Closed);
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 11, 12, 0), sp()),
+            OpenStatus::Closed
+        );
     }
 
     #[test]
@@ -193,9 +226,15 @@ mod tests {
         // Fri 22:00 → Sat 02:00 (closes before opens = overnight).
         let hours = weekly(vec![(5, TimeRange::new(hms(22, 0), hms(2, 0)))]);
         // Sat 01:00 local = Sat 04:00 UTC.
-        assert_eq!(hours.status_at(utc(2026, 1, 10, 4, 0), sp()), OpenStatus::Open);
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 10, 4, 0), sp()),
+            OpenStatus::Open
+        );
         // Sat 03:00 local = 06:00 UTC → closed.
-        assert_eq!(hours.status_at(utc(2026, 1, 10, 6, 0), sp()), OpenStatus::Closed);
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 10, 6, 0), sp()),
+            OpenStatus::Closed
+        );
     }
 
     #[test]
@@ -205,10 +244,19 @@ mod tests {
         let berlin: chrono_tz::Tz = "Europe/Berlin".parse().unwrap();
         let hours = weekly(vec![(1, TimeRange::new(hms(9, 0), hms(18, 0)))]);
         // Mon 2026-01-05, 10:00 Berlin = 09:00 UTC (CET) → open.
-        assert_eq!(hours.status_at(utc(2026, 1, 5, 9, 0), berlin), OpenStatus::Open);
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 5, 9, 0), berlin),
+            OpenStatus::Open
+        );
         // Mon 2026-07-06, 10:00 Berlin = 08:00 UTC (CEST) → open.
-        assert_eq!(hours.status_at(utc(2026, 7, 6, 8, 0), berlin), OpenStatus::Open);
+        assert_eq!(
+            hours.status_at(utc(2026, 7, 6, 8, 0), berlin),
+            OpenStatus::Open
+        );
         // 19:00 Berlin in July = 17:00 UTC → closed (18:00 close passed).
-        assert_eq!(hours.status_at(utc(2026, 7, 6, 17, 0), berlin), OpenStatus::Closed);
+        assert_eq!(
+            hours.status_at(utc(2026, 7, 6, 17, 0), berlin),
+            OpenStatus::Closed
+        );
     }
 }

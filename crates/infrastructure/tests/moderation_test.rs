@@ -21,7 +21,11 @@ async fn db() -> Db {
 
 /// Commit a user (with the given role) so repo writes see it on other connections.
 async fn committed_user(tx: &mut bikenest_test_support::TestTx, email: &str, role: &str) -> i64 {
-    let user = UserBuilder::new().with_email(email).create(tx.executor()).await.unwrap();
+    let user = UserBuilder::new()
+        .with_email(email)
+        .create(tx.executor())
+        .await
+        .unwrap();
     if role != "USER" {
         sqlx::query("INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, $2, NULL)")
             .bind(user.id.0)
@@ -67,7 +71,14 @@ async fn report_repo_state_machine(tx: &mut bikenest_test_support::TestTx) {
     ));
 
     // Resolve → RESOLVED.
-    repo.resolve(report_id, UserId(moderator), "hidden", ReportOutcome::Resolved).await.unwrap();
+    repo.resolve(
+        report_id,
+        UserId(moderator),
+        "hidden",
+        ReportOutcome::Resolved,
+    )
+    .await
+    .unwrap();
     let got = repo.get(report_id).await.unwrap().unwrap();
     assert_eq!(got.state, ReportState::Resolved);
     assert_eq!(got.resolution_note.as_deref(), Some("hidden"));
@@ -77,26 +88,54 @@ async fn report_repo_state_machine(tx: &mut bikenest_test_support::TestTx) {
     assert!(open.iter().all(|r| r.state == ReportState::Open));
 
     let _ = tx;
-    sqlx::query("DELETE FROM report WHERE reporter_id = $1").bind(reporter).execute(&pool().await).await.unwrap();
-    sqlx::query("DELETE FROM users WHERE id IN ($1, $2)").bind(reporter).bind(moderator).execute(&pool().await).await.unwrap();
+    sqlx::query("DELETE FROM report WHERE reporter_id = $1")
+        .bind(reporter)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id IN ($1, $2)")
+        .bind(reporter)
+        .bind(moderator)
+        .execute(&pool().await)
+        .await
+        .unwrap();
 }
 
 #[db_test]
 async fn parking_invalidate_writes_moderation_revision(tx: &mut bikenest_test_support::TestTx) {
     let moderator = committed_user(tx, "m5-infra-mod2@example.com", "MODERATOR").await;
     const MARK: &str = "m5-infra-inv";
-    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1").bind(MARK).execute(&pool().await).await.unwrap();
-    let loc = ParkingBuilder::new().with_name("Infra Invalidate").with_fixture_tag(MARK)
-        .with_version(1).create(tx.executor()).await.unwrap();
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let loc = ParkingBuilder::new()
+        .with_name("Infra Invalidate")
+        .with_fixture_tag(MARK)
+        .with_version(1)
+        .create(tx.executor())
+        .await
+        .unwrap();
     tx.commit_fixture().await;
     let id = loc.id();
 
     let repo = SqlxModerationRepository::new(db().await);
-    repo.set_parking_state(id, &[ModerationState::Active], ModerationState::Invalid, UserId(moderator)).await.unwrap();
+    repo.set_parking_state(
+        id,
+        &[ModerationState::Active],
+        ModerationState::Invalid,
+        UserId(moderator),
+    )
+    .await
+    .unwrap();
 
-    let (state, version): (String, i64) = sqlx::query_as(
-        "SELECT moderation_state, version FROM parking_location WHERE id = $1")
-        .bind(id).fetch_one(&pool().await).await.unwrap();
+    let (state, version): (String, i64) =
+        sqlx::query_as("SELECT moderation_state, version FROM parking_location WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
     assert_eq!(state, "INVALID");
     assert_eq!(version, 2, "version bumped on moderation");
 
@@ -107,17 +146,35 @@ async fn parking_invalidate_writes_moderation_revision(tx: &mut bikenest_test_su
     assert_eq!(rev_version, 2);
 
     let _ = tx;
-    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1").bind(MARK).execute(&pool().await).await.unwrap();
-    sqlx::query("DELETE FROM users WHERE id = $1").bind(moderator).execute(&pool().await).await.unwrap();
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(moderator)
+        .execute(&pool().await)
+        .await
+        .unwrap();
 }
 
 #[db_test]
-async fn proposal_approve_applies_change_supersedes_and_writes_revision(tx: &mut bikenest_test_support::TestTx) {
+async fn proposal_approve_applies_change_supersedes_and_writes_revision(
+    tx: &mut bikenest_test_support::TestTx,
+) {
     let moderator = committed_user(tx, "m5-infra-prop-mod@example.com", "MODERATOR").await;
     const MARK: &str = "m5-infra-prop";
-    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1").bind(MARK).execute(&pool().await).await.unwrap();
-    let loc = ParkingBuilder::new().with_name("Infra Proposal").with_fixture_tag(MARK)
-        .create(tx.executor()).await.unwrap();
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let loc = ParkingBuilder::new()
+        .with_name("Infra Proposal")
+        .with_fixture_tag(MARK)
+        .create(tx.executor())
+        .await
+        .unwrap();
     tx.commit_fixture().await;
     let id = loc.id();
 
@@ -133,20 +190,37 @@ async fn proposal_approve_applies_change_supersedes_and_writes_revision(tx: &mut
         .bind(id).bind(moderator).fetch_one(&pool().await).await.unwrap();
 
     let repo = SqlxModerationRepository::new(db().await);
-    repo.approve_proposal(p1, UserId(moderator), ProposalApplication::ChangeExistence { exists: false }).await.unwrap();
+    repo.approve_proposal(
+        p1,
+        UserId(moderator),
+        ProposalApplication::ChangeExistence { exists: false },
+    )
+    .await
+    .unwrap();
 
-    let (lstate, lversion): (String, i64) = sqlx::query_as(
-        "SELECT moderation_state, version FROM parking_location WHERE id = $1")
-        .bind(id).fetch_one(&pool().await).await.unwrap();
+    let (lstate, lversion): (String, i64) =
+        sqlx::query_as("SELECT moderation_state, version FROM parking_location WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
     assert_eq!(lstate, "REMOVED", "approved existence-removal sets REMOVED");
     assert_eq!(lversion, 2);
 
-    let (p1_status,): (String,) = sqlx::query_as("SELECT status FROM parking_proposal WHERE id = $1")
-        .bind(p1).fetch_one(&pool().await).await.unwrap();
+    let (p1_status,): (String,) =
+        sqlx::query_as("SELECT status FROM parking_proposal WHERE id = $1")
+            .bind(p1)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
     assert_eq!(p1_status, "APPROVED");
     // The other PENDING proposal on the same location is superseded.
-    let (p2_status,): (String,) = sqlx::query_as("SELECT status FROM parking_proposal WHERE id = $1")
-        .bind(p2).fetch_one(&pool().await).await.unwrap();
+    let (p2_status,): (String,) =
+        sqlx::query_as("SELECT status FROM parking_proposal WHERE id = $1")
+            .bind(p2)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
     assert_eq!(p2_status, "SUPERSEDED");
 
     let (rev,): (i64,) = sqlx::query_as(
@@ -155,8 +229,16 @@ async fn proposal_approve_applies_change_supersedes_and_writes_revision(tx: &mut
     assert_eq!(rev, 1, "approval writes a moderation revision");
 
     let _ = tx;
-    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1").bind(MARK).execute(&pool().await).await.unwrap();
-    sqlx::query("DELETE FROM users WHERE id = $1").bind(moderator).execute(&pool().await).await.unwrap();
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(moderator)
+        .execute(&pool().await)
+        .await
+        .unwrap();
 }
 
 #[db_test]
@@ -190,18 +272,39 @@ async fn audit_reader_filters_and_paginates(tx: &mut bikenest_test_support::Test
     assert!(page.items.iter().all(|e| e.event.action == "mod.foo"));
 
     // Keyset pagination returns a next_cursor and a strictly smaller id set.
-    let first = reader.list(AuditFilter { limit: 2, ..Default::default() }).await.unwrap();
+    let first = reader
+        .list(AuditFilter {
+            limit: 2,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     assert_eq!(first.items.len(), 2);
     assert!(first.next_cursor.is_some());
     let second = reader
-        .list(AuditFilter { cursor: first.next_cursor, limit: 2, ..Default::default() })
+        .list(AuditFilter {
+            cursor: first.next_cursor,
+            limit: 2,
+            ..Default::default()
+        })
         .await
         .unwrap();
-    assert!(second.items.iter().all(|e| e.id < first.items[0].id), "keyset id DESC");
+    assert!(
+        second.items.iter().all(|e| e.id < first.items[0].id),
+        "keyset id DESC"
+    );
 
     let _ = tx;
-    sqlx::query("DELETE FROM audit_events WHERE actor_user_id = $1").bind(actor).execute(&pool().await).await.unwrap();
-    sqlx::query("DELETE FROM users WHERE id = $1").bind(actor).execute(&pool().await).await.unwrap();
+    sqlx::query("DELETE FROM audit_events WHERE actor_user_id = $1")
+        .bind(actor)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(actor)
+        .execute(&pool().await)
+        .await
+        .unwrap();
 }
 
 // Note: these tests require the migration applied (0010/0011). The suite's

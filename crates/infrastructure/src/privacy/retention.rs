@@ -8,16 +8,19 @@
 use crate::Db;
 use crate::privacy::SqlxAnonymizationRepository;
 use async_trait::async_trait;
-use bikenest_application::{AnonymizationRepository, ObjectStorage, PrivacyError, RetentionRepository};
+use bikenest_application::{
+    AnonymizationRepository, ObjectStorage, PrivacyError, RetentionRepository,
+};
 use bikenest_domain::{RetentionPolicy, UserId};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub struct SqlxRetentionRepository {
     db: Db,
     policy: RetentionPolicy,
-    storage: Box<dyn ObjectStorage>,
+    storage: Arc<dyn ObjectStorage>,
     media_root: PathBuf,
 }
 
@@ -25,10 +28,15 @@ impl SqlxRetentionRepository {
     pub fn new(
         db: Db,
         policy: RetentionPolicy,
-        storage: Box<dyn ObjectStorage>,
+        storage: Arc<dyn ObjectStorage>,
         media_root: PathBuf,
     ) -> Self {
-        Self { db, policy, storage, media_root }
+        Self {
+            db,
+            policy,
+            storage,
+            media_root,
+        }
     }
 }
 
@@ -48,16 +56,24 @@ fn modified_older_than(mtime: std::time::SystemTime, now: DateTime<Utc>, ttl: Du
 
 #[async_trait]
 impl RetentionRepository for SqlxRetentionRepository {
-    async fn purge_expired_password_reset_tokens(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
-        let res = sqlx::query("DELETE FROM password_reset_tokens WHERE expires_at < $1").bind(now)
+    async fn purge_expired_password_reset_tokens(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<u64, PrivacyError> {
+        let res = sqlx::query("DELETE FROM password_reset_tokens WHERE expires_at < $1")
+            .bind(now)
             .execute(self.db.pool())
             .await
             .map_err(map_err)?;
         Ok(res.rows_affected())
     }
 
-    async fn purge_expired_email_verification_tokens(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
-        let res = sqlx::query("DELETE FROM email_verification_tokens WHERE expires_at < $1").bind(now)
+    async fn purge_expired_email_verification_tokens(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<u64, PrivacyError> {
+        let res = sqlx::query("DELETE FROM email_verification_tokens WHERE expires_at < $1")
+            .bind(now)
             .execute(self.db.pool())
             .await
             .map_err(map_err)?;
@@ -66,10 +82,12 @@ impl RetentionRepository for SqlxRetentionRepository {
 
     async fn purge_expired_sessions(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
         let idle_cutoff = now - self.policy.session_idle;
-        let res = sqlx::query("DELETE FROM sessions WHERE expires_at < $1 OR last_seen_at < $2").bind(now).bind(idle_cutoff)
-        .execute(self.db.pool())
-        .await
-        .map_err(map_err)?;
+        let res = sqlx::query("DELETE FROM sessions WHERE expires_at < $1 OR last_seen_at < $2")
+            .bind(now)
+            .bind(idle_cutoff)
+            .execute(self.db.pool())
+            .await
+            .map_err(map_err)?;
         Ok(res.rows_affected())
     }
 
@@ -82,7 +100,8 @@ impl RetentionRepository for SqlxRetentionRepository {
     }
 
     async fn purge_expired_exports(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
-        let res = sqlx::query("DELETE FROM personal_data_export WHERE expires_at < $1").bind(now)
+        let res = sqlx::query("DELETE FROM personal_data_export WHERE expires_at < $1")
+            .bind(now)
             .execute(self.db.pool())
             .await
             .map_err(map_err)?;
@@ -122,7 +141,11 @@ impl RetentionRepository for SqlxRetentionRepository {
                 let Ok(meta) = tokio::fs::metadata(&path).await else {
                     continue;
                 };
-                if !modified_older_than(meta.modified().unwrap_or(std::time::UNIX_EPOCH), now, self.policy.upload_orphan_ttl) {
+                if !modified_older_than(
+                    meta.modified().unwrap_or(std::time::UNIX_EPOCH),
+                    now,
+                    self.policy.upload_orphan_ttl,
+                ) {
                     continue;
                 }
                 if self.storage.delete(&key).await.is_ok() {
@@ -133,8 +156,11 @@ impl RetentionRepository for SqlxRetentionRepository {
         Ok(purged)
     }
 
-    async fn anonymize_inactive_accounts(&self, cutoff: DateTime<Utc>) -> Result<u64, PrivacyError> {
-#[derive(sqlx::FromRow)]
+    async fn anonymize_inactive_accounts(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> Result<u64, PrivacyError> {
+        #[derive(sqlx::FromRow)]
         struct IdRow {
             id: i64,
         }
@@ -164,10 +190,12 @@ impl RetentionRepository for SqlxRetentionRepository {
     }
 
     async fn purge_deleted_accounts(&self, cutoff: DateTime<Utc>) -> Result<u64, PrivacyError> {
-        let res = sqlx::query("DELETE FROM users WHERE account_state = 'DELETED' AND deleted_at < $1").bind(cutoff)
-        .execute(self.db.pool())
-        .await
-        .map_err(map_err)?;
+        let res =
+            sqlx::query("DELETE FROM users WHERE account_state = 'DELETED' AND deleted_at < $1")
+                .bind(cutoff)
+                .execute(self.db.pool())
+                .await
+                .map_err(map_err)?;
         Ok(res.rows_affected())
     }
 }
@@ -186,16 +214,14 @@ impl SqlxRetentionRepository {
         {
             keys.insert(row);
         }
-        for row in sqlx::query_scalar::<_, Option<String>>(
+        for k in sqlx::query_scalar::<_, Option<String>>(
             "SELECT thumbnail_key FROM parking_photo WHERE thumbnail_key IS NOT NULL UNION SELECT thumbnail_key FROM review_photo WHERE thumbnail_key IS NOT NULL",
         )
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?
+        .map_err(map_err)?.into_iter().flatten()
         {
-            if let Some(k) = row {
-                keys.insert(k);
-            }
+            keys.insert(k);
         }
         Ok(keys)
     }

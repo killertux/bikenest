@@ -22,14 +22,18 @@ pub fn from_env() -> Box<dyn bikenest_application::EmailProvider> {
         "smtp" => match SmtpEmailProvider::from_env() {
             Ok(p) => Box::new(p),
             Err(e) => {
-                eprintln!("EMAIL_PROVIDER=smtp but SMTP config is invalid: {e}; falling back to fake");
+                eprintln!(
+                    "EMAIL_PROVIDER=smtp but SMTP config is invalid: {e}; falling back to fake"
+                );
                 Box::new(FakeEmailProvider::new())
             }
         },
         "resend" => match ResendEmailProvider::from_env() {
             Ok(p) => Box::new(p),
             Err(e) => {
-                eprintln!("EMAIL_PROVIDER=resend but Resend config is invalid: {e}; falling back to fake");
+                eprintln!(
+                    "EMAIL_PROVIDER=resend but Resend config is invalid: {e}; falling back to fake"
+                );
                 Box::new(FakeEmailProvider::new())
             }
         },

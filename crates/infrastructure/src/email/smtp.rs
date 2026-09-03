@@ -33,17 +33,28 @@ impl SmtpEmailProvider {
 
     /// Build from the environment.
     pub fn from_env() -> Result<Self, EmailError> {
-        let host = std::env::var("SMTP_HOST").map_err(|_| EmailError::Unexpected("SMTP_HOST not set".into()))?;
-        let port = std::env::var("SMTP_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(1025);
+        let host = std::env::var("SMTP_HOST")
+            .map_err(|_| EmailError::Unexpected("SMTP_HOST not set".into()))?;
+        let port = std::env::var("SMTP_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(1025);
         let username = std::env::var("SMTP_USERNAME").unwrap_or_default();
         let password = std::env::var("SMTP_PASSWORD").unwrap_or_default();
-        let from = std::env::var("EMAIL_FROM").unwrap_or_else(|_| "no-reply@bikenest.local".to_string());
-        let tls = std::env::var("SMTP_TLS").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+        let from =
+            std::env::var("EMAIL_FROM").unwrap_or_else(|_| "no-reply@bikenest.local".to_string());
+        let tls = std::env::var("SMTP_TLS")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
         Self::new(host, port, username, password, from, tls)
     }
 
     fn message(&self, email: OutboundEmail) -> Result<Message, EmailError> {
-        let from: Mailbox = self.from.parse().map_err(|_| EmailError::Unexpected("invalid EMAIL_FROM".into()))?;
+        let from: Mailbox = self
+            .from
+            .parse()
+            .map_err(|_| EmailError::Unexpected("invalid EMAIL_FROM".into()))?;
         let to: Mailbox = email
             .to
             .to_string()
@@ -78,7 +89,8 @@ fn build_mailer(
     tls: bool,
 ) -> Result<Mailer, EmailError> {
     let builder = if tls {
-        AsyncSmtpTransport::<Tokio1Executor>::relay(&host).map_err(|e| EmailError::Unexpected(e.to_string()))?
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&host)
+            .map_err(|e| EmailError::Unexpected(e.to_string()))?
     } else {
         AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&host)
     };
@@ -143,6 +155,9 @@ mod tests {
         let msg = provider().message(email).unwrap();
         let bytes = msg.formatted();
         let formatted = String::from_utf8_lossy(&bytes);
-        assert!(formatted.contains("multipart/alternative"), "multipart html email");
+        assert!(
+            formatted.contains("multipart/alternative"),
+            "multipart html email"
+        );
     }
 }

@@ -6,8 +6,8 @@
 //! only (§67/§73). The download token is stored only as its SHA-256 hex hash
 //! and compared in constant time.
 
-use crate::auth::hash::sha256_hex;
 use crate::Db;
+use crate::auth::hash::sha256_hex;
 use async_trait::async_trait;
 use bikenest_application::{
     Export, ExportAccount, ExportDownload, ExportFavorite, ExportPayload, ExportPhoto,
@@ -164,15 +164,21 @@ impl ExportRepository for SqlxExportRepository {
         let now = Utc::now();
 
         let account = {
-            let row = sqlx::query_as::<_, AccountRow>(r#"
+            let row = sqlx::query_as::<_, AccountRow>(
+                r#"
                 SELECT id, email, display_name, account_state, email_verified_at, created_at
                 FROM users WHERE id = $1
-                "#).bind(user_id.0)
+                "#,
+            )
+            .bind(user_id.0)
             .fetch_optional(pool)
             .await
             .map_err(map_err)?
             .ok_or(PrivacyError::NotFound)?;
-            let roles: Vec<String> = sqlx::query_as::<_, RoleRow>("SELECT role FROM user_roles WHERE user_id = $1 ORDER BY role").bind(user_id.0)
+            let roles: Vec<String> = sqlx::query_as::<_, RoleRow>(
+                "SELECT role FROM user_roles WHERE user_id = $1 ORDER BY role",
+            )
+            .bind(user_id.0)
             .fetch_all(pool)
             .await
             .map_err(map_err)?
@@ -190,13 +196,16 @@ impl ExportRepository for SqlxExportRepository {
             }
         };
 
-        let authentication = sqlx::query_as::<_, IdentityRow>(r#"
+        let authentication = sqlx::query_as::<_, IdentityRow>(
+            r#"
             SELECT ai.provider, ai.provider_subject,
                    COALESCE((u.email_verified_at IS NOT NULL), false) AS email_verified
             FROM authentication_identities ai
             LEFT JOIN users u ON u.id = ai.user_id
             WHERE ai.user_id = $1
-            "#).bind(user_id.0)
+            "#,
+        )
+        .bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -220,19 +229,28 @@ impl ExportRepository for SqlxExportRepository {
         })
         .collect();
 
-        let favorites = sqlx::query_as::<_, FavoriteRow>("SELECT location_id, created_at FROM favorite WHERE user_id = $1 ORDER BY created_at").bind(user_id.0)
+        let favorites = sqlx::query_as::<_, FavoriteRow>(
+            "SELECT location_id, created_at FROM favorite WHERE user_id = $1 ORDER BY created_at",
+        )
+        .bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
         .into_iter()
-        .map(|r| ExportFavorite { location_id: r.location_id, created_at: r.created_at })
+        .map(|r| ExportFavorite {
+            location_id: r.location_id,
+            created_at: r.created_at,
+        })
         .collect();
 
         let reviews = {
-            let rows = sqlx::query_as::<_, ReviewRow>(r#"
+            let rows = sqlx::query_as::<_, ReviewRow>(
+                r#"
                 SELECT id, location_id, rating, body, moderation_state, created_at, updated_at
                 FROM review WHERE author_id = $1 ORDER BY created_at
-                "#).bind(user_id.0)
+                "#,
+            )
+            .bind(user_id.0)
             .fetch_all(pool)
             .await
             .map_err(map_err)?;
@@ -263,10 +281,13 @@ impl ExportRepository for SqlxExportRepository {
             out
         };
 
-        let verifications = sqlx::query_as::<_, VerificationRow>(r#"
+        let verifications = sqlx::query_as::<_, VerificationRow>(
+            r#"
             SELECT location_id, kind, result, attribute_code, created_at
             FROM verification WHERE user_id = $1 ORDER BY created_at
-            "#).bind(user_id.0)
+            "#,
+        )
+        .bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -280,10 +301,13 @@ impl ExportRepository for SqlxExportRepository {
         })
         .collect();
 
-        let proposals = sqlx::query_as::<_, ProposalRow>(r#"
+        let proposals = sqlx::query_as::<_, ProposalRow>(
+            r#"
             SELECT location_id, base_version, kind, proposed, status, created_at
             FROM parking_proposal WHERE proposer_id = $1 ORDER BY created_at
-            "#).bind(user_id.0)
+            "#,
+        )
+        .bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -298,10 +322,13 @@ impl ExportRepository for SqlxExportRepository {
         })
         .collect();
 
-        let reports = sqlx::query_as::<_, ReportRow>(r#"
+        let reports = sqlx::query_as::<_, ReportRow>(
+            r#"
             SELECT target_type, target_id, reason, description, state, created_at
             FROM report WHERE reporter_id = $1 ORDER BY created_at
-            "#).bind(user_id.0)
+            "#,
+        )
+        .bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -336,10 +363,13 @@ impl ExportRepository for SqlxExportRepository {
                 created_at: r.created_at,
             });
         }
-        for r in sqlx::query_as::<_, ReviewPhotoRow>(r#"
+        for r in sqlx::query_as::<_, ReviewPhotoRow>(
+            r#"
             SELECT review_id, storage_key, thumbnail_key, moderation_state, created_at
             FROM review_photo WHERE uploader_id = $1 ORDER BY created_at
-            "#).bind(user_id.0)
+            "#,
+        )
+        .bind(user_id.0)
         .fetch_all(pool)
         .await
         .map_err(map_err)?
@@ -371,17 +401,23 @@ impl ExportRepository for SqlxExportRepository {
     }
 
     async fn create(&self, e: &NewExport) -> Result<i64, PrivacyError> {
-#[derive(sqlx::FromRow)]
+        #[derive(sqlx::FromRow)]
         struct IdRow {
             id: i64,
         }
         let token_hash = sha256_hex(&e.token);
         let payload = serde_json::to_value(&e.payload).map_err(|_| PrivacyError::Internal)?;
-        let row = sqlx::query_as::<_, IdRow>(r#"
+        let row = sqlx::query_as::<_, IdRow>(
+            r#"
             INSERT INTO personal_data_export (user_id, state, token_hash, payload, expires_at)
             VALUES ($1, 'READY', $2, $3, $4)
             RETURNING id
-            "#).bind(e.user_id.0).bind(token_hash).bind(payload).bind(e.expires_at)
+            "#,
+        )
+        .bind(e.user_id.0)
+        .bind(token_hash)
+        .bind(payload)
+        .bind(e.expires_at)
         .fetch_one(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -389,10 +425,13 @@ impl ExportRepository for SqlxExportRepository {
     }
 
     async fn list_for_user(&self, user_id: UserId) -> Result<Vec<Export>, PrivacyError> {
-        let rows = sqlx::query_as::<_, ExportRow>(r#"
+        let rows = sqlx::query_as::<_, ExportRow>(
+            r#"
             SELECT id, user_id, state, created_at, expires_at, downloaded_at
             FROM personal_data_export WHERE user_id = $1 ORDER BY created_at DESC
-            "#).bind(user_id.0)
+            "#,
+        )
+        .bind(user_id.0)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -400,10 +439,13 @@ impl ExportRepository for SqlxExportRepository {
     }
 
     async fn get(&self, id: i64) -> Result<Option<Export>, PrivacyError> {
-        let row = sqlx::query_as::<_, ExportRow>(r#"
+        let row = sqlx::query_as::<_, ExportRow>(
+            r#"
             SELECT id, user_id, state, created_at, expires_at, downloaded_at
             FROM personal_data_export WHERE id = $1
-            "#).bind(id)
+            "#,
+        )
+        .bind(id)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -420,20 +462,26 @@ impl ExportRepository for SqlxExportRepository {
         now: DateTime<Utc>,
     ) -> Result<ExportDownload, PrivacyError> {
         let token_hash = sha256_hex(token);
-        let row = sqlx::query_as::<_, DownloadRow>("SELECT payload FROM personal_data_export WHERE id = $1").bind(id)
+        let row = sqlx::query_as::<_, DownloadRow>(
+            "SELECT payload FROM personal_data_export WHERE id = $1",
+        )
+        .bind(id)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?
         .ok_or(PrivacyError::NotFound)?;
 
         // Validate token + state + expiry against the authoritative row.
-#[derive(sqlx::FromRow)]
+        #[derive(sqlx::FromRow)]
         struct CheckRow {
             token_hash: String,
             state: String,
             expires_at: DateTime<Utc>,
         }
-        let check = sqlx::query_as::<_, CheckRow>("SELECT token_hash, state, expires_at FROM personal_data_export WHERE id = $1").bind(id)
+        let check = sqlx::query_as::<_, CheckRow>(
+            "SELECT token_hash, state, expires_at FROM personal_data_export WHERE id = $1",
+        )
+        .bind(id)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_err)?
@@ -450,11 +498,15 @@ impl ExportRepository for SqlxExportRepository {
         }
 
         // Single-use transition, guarded so a concurrent win cannot double-download.
-        let res = sqlx::query(r#"
+        let res = sqlx::query(
+            r#"
             UPDATE personal_data_export
             SET state = 'DOWNLOADED', downloaded_at = $2
             WHERE id = $1 AND state = 'READY' AND expires_at > $2
-            "#).bind(id).bind(now)
+            "#,
+        )
+        .bind(id)
+        .bind(now)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -467,7 +519,10 @@ impl ExportRepository for SqlxExportRepository {
     }
 
     async fn purge_expired(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
-        let res = sqlx::query("DELETE FROM personal_data_export WHERE state = 'READY' AND expires_at < $1").bind(now)
+        let res = sqlx::query(
+            "DELETE FROM personal_data_export WHERE state = 'READY' AND expires_at < $1",
+        )
+        .bind(now)
         .execute(self.db.pool())
         .await
         .map_err(map_err)?;

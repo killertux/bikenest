@@ -7,7 +7,9 @@
 
 use crate::audit::{AuditEvent, AuditLog};
 use crate::auth::Clock;
-use crate::ports::{FreshnessConfig, ParkingDetailsReader, ReaderError, ReviewPhotosReader, StoredPhoto};
+use crate::ports::{
+    FreshnessConfig, ParkingDetailsReader, ReaderError, ReviewPhotosReader, StoredPhoto,
+};
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use crate::timezone::{TimezoneError, TimezoneResolver};
 use async_trait::async_trait;
@@ -308,7 +310,11 @@ pub trait ReviewRepository: Send + Sync {
 pub trait VerificationRepository: Send + Sync {
     /// `now` is supplied (from the service's `Clock`) so `expires_at` and the
     /// freshness update use one deterministic timestamp.
-    async fn record(&self, signal: &NewVerification, now: DateTime<Utc>) -> Result<(), ContributionError>;
+    async fn record(
+        &self,
+        signal: &NewVerification,
+        now: DateTime<Utc>,
+    ) -> Result<(), ContributionError>;
     /// Latest existence verification per user (deduped), ordered by time.
     async fn latest_existence_per_user(
         &self,
@@ -330,7 +336,8 @@ pub trait VerificationRepository: Send + Sync {
 pub trait FavoriteRepository: Send + Sync {
     /// Returns `true` when the location is now favorited.
     async fn toggle(&self, user: UserId, location_id: i64) -> Result<bool, ContributionError>;
-    async fn is_favorited(&self, user: UserId, location_id: i64) -> Result<bool, ContributionError>;
+    async fn is_favorited(&self, user: UserId, location_id: i64)
+    -> Result<bool, ContributionError>;
     /// Location ids (the web layer joins to cards).
     async fn list(&self, user: UserId) -> Result<Vec<i64>, ContributionError>;
 }
@@ -392,11 +399,7 @@ pub fn recommendation_reasons(
         });
     }
 
-    let cat = bikenest_domain::categorize(
-        item.last_verified_at,
-        now,
-        &freshness.thresholds,
-    );
+    let cat = bikenest_domain::categorize(item.last_verified_at, now, &freshness.thresholds);
     match cat {
         bikenest_domain::FreshnessCategory::Fresh
         | bikenest_domain::FreshnessCategory::RecentlyVerified => {
@@ -477,7 +480,10 @@ impl ContributionService {
         self.deps.clock.now()
     }
 
-    fn require_verified(&self, user: &crate::auth::AuthenticatedUser) -> Result<(), ContributionError> {
+    fn require_verified(
+        &self,
+        user: &crate::auth::AuthenticatedUser,
+    ) -> Result<(), ContributionError> {
         if user.is_verified {
             Ok(())
         } else {
@@ -571,7 +577,7 @@ impl ContributionService {
         .await?;
         validate_name_address(&edit.name, &edit.address)?;
 
-let new_version = self
+        let new_version = self
             .deps
             .contributions
             .apply_edit(id, expected_version, edit, user.id, self.now())
@@ -658,7 +664,11 @@ let new_version = self
             .reviews
             .upsert_review(location_id, user.id, rating, body)
             .await?;
-        let action = if existed { "review.edited" } else { "review.created" };
+        let action = if existed {
+            "review.edited"
+        } else {
+            "review.created"
+        };
         self.audit(
             Some(user.id),
             action,
@@ -761,24 +771,26 @@ let new_version = self
         for r in &reviews {
             review_photos.insert(r.id, self.deps.review_photos.photos(r.id).await?);
         }
-        let signals = self.deps.verifications.latest_existence_per_user(id).await?;
-        let confidence = bikenest_domain::confidence(&signals, now, &self.deps.freshness.thresholds);
+        let signals = self
+            .deps
+            .verifications
+            .latest_existence_per_user(id)
+            .await?;
+        let confidence =
+            bikenest_domain::confidence(&signals, now, &self.deps.freshness.thresholds);
         let attribute_summary = self.deps.verifications.attribute_summary(id).await?;
         let parked_here_count = self.deps.verifications.parked_here_count(id).await?;
         let has_attribute_dispute = attribute_summary.iter().any(|a| a.incorrect > 0);
-        let has_info_changed = signals.iter().any(|s| s.result == ExistenceResult::InfoChanged);
+        let has_info_changed = signals
+            .iter()
+            .any(|s| s.result == ExistenceResult::InfoChanged);
         let disputed = has_attribute_dispute || has_info_changed;
 
         let own_review = match viewer {
             Some(v) => self.deps.reviews.find_own(id, v).await?,
             None => None,
         };
-        let own_verification = viewer.and_then(|v| {
-            signals
-                .iter()
-                .find(|s| s.user == v)
-                .cloned()
-        });
+        let own_verification = viewer.and_then(|v| signals.iter().find(|s| s.user == v).cloned());
         let is_favorited = match viewer {
             Some(v) => self.deps.favorites.is_favorited(v, id).await?,
             None => false,
@@ -835,10 +847,14 @@ let new_version = self
 
 fn validate_name_address(name: &str, address: &str) -> Result<(), ContributionError> {
     if name.trim().is_empty() {
-        return Err(ContributionError::InvalidField("name is required".to_string()));
+        return Err(ContributionError::InvalidField(
+            "name is required".to_string(),
+        ));
     }
     if address.trim().is_empty() {
-        return Err(ContributionError::InvalidField("address is required".to_string()));
+        return Err(ContributionError::InvalidField(
+            "address is required".to_string(),
+        ));
     }
     Ok(())
 }
@@ -851,16 +867,16 @@ fn signal_kind_code(signal: &NewVerification) -> &'static str {
     }
 }
 
-fn summary_of(
-    location: &ParkingLocation,
-    reviews: &[Review],
-) -> crate::ports::ParkingSummary {
+fn summary_of(location: &ParkingLocation, reviews: &[Review]) -> crate::ports::ParkingSummary {
     let rating = bikenest_domain::Rating::new(
         if reviews.is_empty() {
             None
         } else {
             Some(
-                reviews.iter().map(|r| f64::from(r.rating.value())).sum::<f64>()
+                reviews
+                    .iter()
+                    .map(|r| f64::from(r.rating.value()))
+                    .sum::<f64>()
                     / reviews.len() as f64,
             )
         },

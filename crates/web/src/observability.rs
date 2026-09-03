@@ -14,7 +14,7 @@
 use axum::extract::Request;
 use axum::response::Response;
 use std::time::Duration;
-use tracing::{info_span, Span};
+use tracing::{Span, info_span};
 
 /// Span factory: method + path only. `uri.path()` never includes the query
 /// string (so no `lat`/`lon`/`q` leak) and path params stay as literal values.

@@ -159,13 +159,37 @@ mod tests {
     #[test]
     fn megapixel_limit_boundary_is_inclusive() {
         // Exactly 20 MP (20,000,000 px) = at the limit → allowed.
-        assert!(PhotoDimensions { width: 5000, height: 4000 }.within_limit(MAX_PHOTO_MEGAPIXELS));
+        assert!(
+            PhotoDimensions {
+                width: 5000,
+                height: 4000
+            }
+            .within_limit(MAX_PHOTO_MEGAPIXELS)
+        );
         // One pixel past the cap (20,000,001 px) rounds to 21 MP → over.
-        assert!(!PhotoDimensions { width: 5000, height: 4001 }.within_limit(MAX_PHOTO_MEGAPIXELS));
+        assert!(
+            !PhotoDimensions {
+                width: 5000,
+                height: 4001
+            }
+            .within_limit(MAX_PHOTO_MEGAPIXELS)
+        );
         // Below the cap → allowed (a 19.995 MP image rounds up to 20 MP, still ≤ 20).
-        assert!(PhotoDimensions { width: 5000, height: 3999 }.within_limit(MAX_PHOTO_MEGAPIXELS));
+        assert!(
+            PhotoDimensions {
+                width: 5000,
+                height: 3999
+            }
+            .within_limit(MAX_PHOTO_MEGAPIXELS)
+        );
         // A small square is trivially fine.
-        assert!(PhotoDimensions { width: 800, height: 600 }.within_limit(MAX_PHOTO_MEGAPIXELS));
+        assert!(
+            PhotoDimensions {
+                width: 800,
+                height: 600
+            }
+            .within_limit(MAX_PHOTO_MEGAPIXELS)
+        );
     }
 
     #[test]
@@ -179,8 +203,22 @@ mod tests {
 
     #[test]
     fn megapixels_rounds_up() {
-        assert_eq!(PhotoDimensions { width: 1000, height: 1000 }.megapixels(), 1);
-        assert_eq!(PhotoDimensions { width: 1, height: 1 }.megapixels(), 1);
+        assert_eq!(
+            PhotoDimensions {
+                width: 1000,
+                height: 1000
+            }
+            .megapixels(),
+            1
+        );
+        assert_eq!(
+            PhotoDimensions {
+                width: 1,
+                height: 1
+            }
+            .megapixels(),
+            1
+        );
     }
 
     #[test]

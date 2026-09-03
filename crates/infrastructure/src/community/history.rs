@@ -34,7 +34,10 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
         let mut items: Vec<ContributionItem> = Vec::new();
 
         // Locations created.
-        let added = sqlx::query_as::<_, SrcRow>("SELECT name AS target, created_at AS at FROM parking_location WHERE creator_id = $1").bind(user.0)
+        let added = sqlx::query_as::<_, SrcRow>(
+            "SELECT name AS target, created_at AS at FROM parking_location WHERE creator_id = $1",
+        )
+        .bind(user.0)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -48,12 +51,15 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
         }
 
         // Revisions (applied edits).
-        let edited = sqlx::query_as::<_, SrcRow>(r#"
+        let edited = sqlx::query_as::<_, SrcRow>(
+            r#"
             SELECT pl.name AS target, pr.created_at AS at
             FROM parking_revision pr
             JOIN parking_location pl ON pl.id = pr.location_id
             WHERE pr.editor_id = $1 AND pr.change_kind = 'edit'
-            "#).bind(user.0)
+            "#,
+        )
+        .bind(user.0)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -67,12 +73,15 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
         }
 
         // Proposals (sensitive changes).
-        let proposed = sqlx::query_as::<_, SrcRow>(r#"
+        let proposed = sqlx::query_as::<_, SrcRow>(
+            r#"
             SELECT pl.name AS target, pp.created_at AS at
             FROM parking_proposal pp
             JOIN parking_location pl ON pl.id = pp.location_id
             WHERE pp.proposer_id = $1
-            "#).bind(user.0)
+            "#,
+        )
+        .bind(user.0)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -86,12 +95,15 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
         }
 
         // Reviews.
-        let reviewed = sqlx::query_as::<_, SrcRow>(r#"
+        let reviewed = sqlx::query_as::<_, SrcRow>(
+            r#"
             SELECT pl.name AS target, r.created_at AS at
             FROM review r
             JOIN parking_location pl ON pl.id = r.location_id
             WHERE r.author_id = $1
-            "#).bind(user.0)
+            "#,
+        )
+        .bind(user.0)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -105,12 +117,15 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
         }
 
         // Verification signals.
-        let verified = sqlx::query_as::<_, SrcRow>(r#"
+        let verified = sqlx::query_as::<_, SrcRow>(
+            r#"
             SELECT pl.name AS target, v.created_at AS at
             FROM verification v
             JOIN parking_location pl ON pl.id = v.location_id
             WHERE v.user_id = $1
-            "#).bind(user.0)
+            "#,
+        )
+        .bind(user.0)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -124,12 +139,15 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
         }
 
         // Favorites.
-        let favorited = sqlx::query_as::<_, SrcRow>(r#"
+        let favorited = sqlx::query_as::<_, SrcRow>(
+            r#"
             SELECT pl.name AS target, f.created_at AS at
             FROM favorite f
             JOIN parking_location pl ON pl.id = f.location_id
             WHERE f.user_id = $1
-            "#).bind(user.0)
+            "#,
+        )
+        .bind(user.0)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_err)?;
@@ -142,7 +160,7 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
             });
         }
 
-        items.sort_by(|a, b| b.at.cmp(&a.at));
+        items.sort_by_key(|i| std::cmp::Reverse(i.at));
         Ok(items)
     }
 }

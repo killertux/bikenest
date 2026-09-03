@@ -9,8 +9,8 @@ pub mod seed;
 
 pub use details::SqlxParkingDetailsReader;
 pub use photos::SqlxParkingPhotoReader;
-pub use seed::seed_mock;
 pub use search::SqlxParkingSearchReader;
+pub use seed::seed_mock;
 
 /// IDs of ACTIVE (public) parking locations, for the sitemap (§111).
 pub async fn active_parking_ids(db: &Db) -> Result<Vec<i64>, sqlx::Error> {

@@ -4,8 +4,8 @@
 //! writes. Sensitive changes (move / removal) become `PENDING` proposals; only
 //! reversible fields are applied directly (§37/§100/§107).
 
-use crate::parking::SqlxParkingDetailsReader;
 use crate::Db;
+use crate::parking::SqlxParkingDetailsReader;
 use async_trait::async_trait;
 use bikenest_application::{
     ContributionError, DuplicateCandidate, NewParkingLocation, NewProposal,
@@ -69,11 +69,17 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         let tz = new
             .timezone
             .ok_or_else(|| ContributionError::InvalidField("timezone is required".to_string()))?;
-        let mut tx = self.db.pool().begin().await.map_err(map_db_err_to_contribution)?;
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(map_db_err_to_contribution)?;
 
         let (cost_kind, price_cents, price_currency, price_unit) = cost_parts(&new.cost);
 
-        let row = sqlx::query_as::<_, IdRow>(r#"
+        let row = sqlx::query_as::<_, IdRow>(
+            r#"
             INSERT INTO parking_location
                 (name, address, description, parking_type, cost_kind,
                  price_cents, price_currency, price_unit,
@@ -84,7 +90,22 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
                     $11, $12, 'ACTIVE',
                     $13, 1, $14, $14, $14)
             RETURNING id
-            "#).bind(new.name.trim()).bind(new.address.trim()).bind(new.description.as_deref()).bind(new.parking_type.as_code()).bind(cost_kind).bind(price_cents).bind(price_currency).bind(price_unit).bind(new.point.lat()).bind(new.point.lon()).bind(tz.name()).bind(new.hours.is_unknown()).bind(creator.0).bind(now)
+            "#,
+        )
+        .bind(new.name.trim())
+        .bind(new.address.trim())
+        .bind(new.description.as_deref())
+        .bind(new.parking_type.as_code())
+        .bind(cost_kind)
+        .bind(price_cents)
+        .bind(price_currency)
+        .bind(price_unit)
+        .bind(new.point.lat())
+        .bind(new.point.lon())
+        .bind(tz.name())
+        .bind(new.hours.is_unknown())
+        .bind(creator.0)
+        .bind(now)
         .fetch_one(&mut *tx)
         .await
         .map_err(map_db_err_to_contribution)?;
@@ -105,7 +126,16 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             &new.security,
             "ACTIVE",
         );
-        insert_revision(&mut tx, id, 1, creator, ChangeKind::Create, "added", snapshot).await?;
+        insert_revision(
+            &mut tx,
+            id,
+            1,
+            creator,
+            ChangeKind::Create,
+            "added",
+            snapshot,
+        )
+        .await?;
 
         tx.commit().await.map_err(map_db_err_to_contribution)?;
         Ok(id)
@@ -131,12 +161,18 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         let tz = current.timezone();
         let mod_state = current.moderation_state().as_code();
 
-        let mut tx = self.db.pool().begin().await.map_err(map_db_err_to_contribution)?;
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(map_db_err_to_contribution)?;
 
         let (cost_kind, price_cents, price_currency, price_unit) = cost_parts(&edit.cost);
 
         // Optimistic concurrency: only bump when `version` still matches.
-        let row = sqlx::query_as::<_, EditApplyRow>(r#"
+        let row = sqlx::query_as::<_, EditApplyRow>(
+            r#"
             UPDATE parking_location
             SET name = $1, address = $2, description = $3, parking_type = $4,
                 cost_kind = $5, price_cents = $6, price_currency = $7, price_unit = $8,
@@ -144,7 +180,20 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
                 version = version + 1, updated_at = $10, last_meaningful_update_at = $10
             WHERE id = $11 AND version = $12
             RETURNING version, name, address, description, parking_type
-            "#).bind(edit.name.trim()).bind(edit.address.trim()).bind(edit.description.as_deref()).bind(edit.parking_type.as_code()).bind(cost_kind).bind(price_cents).bind(price_currency).bind(price_unit).bind(edit.hours.is_unknown()).bind(now).bind(id).bind(expected_version)
+            "#,
+        )
+        .bind(edit.name.trim())
+        .bind(edit.address.trim())
+        .bind(edit.description.as_deref())
+        .bind(edit.parking_type.as_code())
+        .bind(cost_kind)
+        .bind(price_cents)
+        .bind(price_currency)
+        .bind(price_unit)
+        .bind(edit.hours.is_unknown())
+        .bind(now)
+        .bind(id)
+        .bind(expected_version)
         .fetch_optional(&mut *tx)
         .await
         .map_err(map_db_err_to_contribution)?;
@@ -192,12 +241,19 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
     }
 
     async fn create_proposal(&self, p: &NewProposal) -> Result<i64, ContributionError> {
-        let row = sqlx::query_as::<_, IdRow>(r#"
+        let row = sqlx::query_as::<_, IdRow>(
+            r#"
             INSERT INTO parking_proposal
                 (location_id, proposer_id, base_version, kind, proposed, status)
             VALUES ($1, $2, $3, $4, $5, 'PENDING')
             RETURNING id
-            "#).bind(p.location_id).bind(p.proposer_id.0).bind(p.base_version).bind(p.kind.as_code()).bind(&p.proposed)
+            "#,
+        )
+        .bind(p.location_id)
+        .bind(p.proposer_id.0)
+        .bind(p.base_version)
+        .bind(p.kind.as_code())
+        .bind(&p.proposed)
         .fetch_one(self.db.pool())
         .await
         .map_err(map_db_err_to_contribution)?;
@@ -205,19 +261,22 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
     }
 
     async fn revision_history(&self, id: i64) -> Result<Vec<RevisionSummary>, ContributionError> {
-#[derive(sqlx::FromRow)]
+        #[derive(sqlx::FromRow)]
         struct RevRow {
             version: i64,
             change_kind: String,
             summary: Option<String>,
             created_at: chrono::DateTime<chrono::Utc>,
         }
-        let rows = sqlx::query_as::<_, RevRow>(r#"
+        let rows = sqlx::query_as::<_, RevRow>(
+            r#"
             SELECT version, change_kind, summary, created_at
             FROM parking_revision
             WHERE location_id = $1
             ORDER BY version DESC
-            "#).bind(id)
+            "#,
+        )
+        .bind(id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_db_err_to_contribution)?;
@@ -240,7 +299,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         point: GeoPoint,
         name: &str,
     ) -> Result<Vec<DuplicateCandidate>, ContributionError> {
-#[derive(sqlx::FromRow)]
+        #[derive(sqlx::FromRow)]
         struct CandidateRow {
             id: i64,
             name: String,
@@ -272,7 +331,11 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             })
             .filter(|c| c.similarity >= DUPLICATE_SIMILARITY)
             .collect();
-        candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.sort_by(|a, b| {
+            b.similarity
+                .partial_cmp(&a.similarity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Ok(candidates)
     }
 }
@@ -283,9 +346,9 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
 
 fn map_db_err_to_contribution(e: sqlx::Error) -> ContributionError {
     match e {
-        sqlx::Error::Io(_)
-        | sqlx::Error::PoolTimedOut
-        | sqlx::Error::PoolClosed => ContributionError::Internal,
+        sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => {
+            ContributionError::Internal
+        }
         _ => ContributionError::Internal,
     }
 }
@@ -498,7 +561,10 @@ fn trigram_similarity(a: &str, b: &str) -> f64 {
         if chars.len() < 3 {
             return [s.to_string()].into_iter().collect();
         }
-        chars.windows(3).map(|w| w.iter().collect::<String>()).collect()
+        chars
+            .windows(3)
+            .map(|w| w.iter().collect::<String>())
+            .collect()
     };
     let ga = grams(&a);
     let gb = grams(&b);

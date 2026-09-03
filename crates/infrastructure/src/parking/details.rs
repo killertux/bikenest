@@ -1,7 +1,7 @@
 //! SQL-backed parking details (REQUIREMENTS §24, §28, §29).
 
-use crate::parking::search::map_db_err;
 use crate::Db;
+use crate::parking::search::map_db_err;
 use async_trait::async_trait;
 use bikenest_application::{ParkingDetailsReader, ReaderError};
 use bikenest_domain::{
@@ -61,7 +61,8 @@ struct SecurityRow {
 #[async_trait]
 impl ParkingDetailsReader for SqlxParkingDetailsReader {
     async fn details(&self, id: i64) -> Result<Option<ParkingLocation>, ReaderError> {
-        let Some(row) = sqlx::query_as::<_, LocationRow>(r#"
+        let Some(row) = sqlx::query_as::<_, LocationRow>(
+            r#"
             SELECT id, name, address, description, parking_type, cost_kind, price_cents,
                    price_currency, price_unit, COALESCE(lat, 0) AS lat, COALESCE(lon, 0) AS lon,
                    timezone, hours_unknown,
@@ -69,7 +70,9 @@ impl ParkingDetailsReader for SqlxParkingDetailsReader {
                    created_at, updated_at, last_meaningful_update_at, last_verified_at, version
             FROM parking_location
             WHERE id = $1
-            "#).bind(id)
+            "#,
+        )
+        .bind(id)
         .fetch_optional(self.db.pool())
         .await
         .map_err(map_db_err)?
@@ -77,21 +80,27 @@ impl ParkingDetailsReader for SqlxParkingDetailsReader {
             return Ok(None);
         };
 
-        let hours_rows = sqlx::query_as::<_, HoursRow>(r#"
+        let hours_rows = sqlx::query_as::<_, HoursRow>(
+            r#"
             SELECT day_of_week, opens_at, closes_at, all_day
             FROM opening_hours WHERE location_id = $1
             ORDER BY day_of_week, opens_at
-            "#).bind(id)
+            "#,
+        )
+        .bind(id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_db_err)?;
 
-        let security_rows = sqlx::query_as::<_, SecurityRow>(r#"
+        let security_rows = sqlx::query_as::<_, SecurityRow>(
+            r#"
             SELECT feature_code, state
             FROM parking_security
             WHERE location_id = $1
             ORDER BY feature_code
-            "#).bind(id)
+            "#,
+        )
+        .bind(id)
         .fetch_all(self.db.pool())
         .await
         .map_err(map_db_err)?;

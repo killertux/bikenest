@@ -43,7 +43,9 @@ impl Locale {
     /// Resolve from request headers: `lang` cookie first, then Accept-Language,
     /// then the pt-BR fallback.
     pub fn from_headers(headers: &axum::http::HeaderMap) -> Self {
-        if let Some(cookie) = headers.get(axum::http::header::COOKIE).and_then(|v| v.to_str().ok())
+        if let Some(cookie) = headers
+            .get(axum::http::header::COOKIE)
+            .and_then(|v| v.to_str().ok())
             && let Some(l) = cookie_lang(cookie)
         {
             return l;
@@ -72,7 +74,12 @@ fn cookie_lang(cookie_header: &str) -> Option<Locale> {
 /// support (quality values are ignored — good enough for a two-locale app).
 fn accept_language(header: &str) -> Option<Locale> {
     for part in header.split(',') {
-        let tag = part.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+        let tag = part
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
         if tag.starts_with("pt") {
             return Some(Locale::PtBr);
         }
@@ -176,7 +183,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "footer.privacy" => ("Privacy policy", "Política de privacidade"),
         "footer.terms" => ("Terms of service", "Termos de uso"),
         "footer.cookies" => ("Cookie policy", "Política de cookies"),
-        "footer.coming" => ("Coming in a later milestone", "Em breve, em uma próxima etapa"),
+        "footer.coming" => (
+            "Coming in a later milestone",
+            "Em breve, em uma próxima etapa",
+        ),
         "footer.subtitle" => (
             "Community-maintained bicycle parking",
             "Bicicletários mantidos pela comunidade",
@@ -191,7 +201,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Community-powered bike parking",
             "Bicicletários feitos pela comunidade",
         ),
-        "home.hero.title" => ("From destination to parked bike", "Do destino à bike estacionada"),
+        "home.hero.title" => (
+            "From destination to parked bike",
+            "Do destino à bike estacionada",
+        ),
         "home.hero.subtitle" => (
             "Search any address in Curitiba and see nearby bicycle parking — with cost, security and how recently each spot was checked.",
             "Busque qualquer endereço em Curitiba e veja bicicletários por perto — com custo, segurança e há quanto tempo cada vaga foi conferida.",
@@ -222,9 +235,15 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Pick a spot, navigate there, and help keep the map honest for the next rider.",
             "Escolha uma vaga, siga até lá e ajude a manter o mapa confiável para quem vem depois.",
         ),
-        "home.featured.title" => ("Recently added near Rua XV", "Adicionados recentemente perto da Rua XV"),
+        "home.featured.title" => (
+            "Recently added near Rua XV",
+            "Adicionados recentemente perto da Rua XV",
+        ),
         "home.featured.link" => ("See all parking", "Ver todas as vagas"),
-        "home.community.eyebrow" => ("A map kept honest by riders", "Um mapa mantido honesto por quem pedala"),
+        "home.community.eyebrow" => (
+            "A map kept honest by riders",
+            "Um mapa mantido honesto por quem pedala",
+        ),
         "home.community.title" => (
             "Every good parking spot is known by someone who rides past it",
             "Toda boa vaga é conhecida por alguém que passa por ela",
@@ -233,9 +252,18 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "BikeNest grows from real riders adding spots, confirming they still exist, and flagging what changed. No single source — just the people who park there.",
             "O BikeNest cresce com ciclistas reais adicionando vagas, confirmando que ainda existem e sinalizando o que mudou. Sem fonte única — só quem estaciona ali.",
         ),
-        "home.community.p1" => ("Anyone can add a spot", "Qualquer pessoa pode adicionar uma vaga"),
-        "home.community.p2" => ("Riders confirm and correct details", "Quem pedala confirma e corrige detalhes"),
-        "home.community.p3" => ("Freshness shows how current it is", "A atualidade mostra o quão recente é"),
+        "home.community.p1" => (
+            "Anyone can add a spot",
+            "Qualquer pessoa pode adicionar uma vaga",
+        ),
+        "home.community.p2" => (
+            "Riders confirm and correct details",
+            "Quem pedala confirma e corrige detalhes",
+        ),
+        "home.community.p3" => (
+            "Freshness shows how current it is",
+            "A atualidade mostra o quão recente é",
+        ),
         "home.community.link" => ("Learn how contributing works", "Veja como contribuir"),
         "home.cta.title" => ("Find your next parking spot", "Encontre sua próxima vaga"),
         "home.cta.body" => (
@@ -254,7 +282,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "search.map.hide" => ("Show list", "Mostrar lista"),
         "search.map.recenter" => ("Recenter", "Recentralizar"),
         "search.map.title" => ("Map", "Mapa"),
-        "search.map.pins" => ("Numbered pins match the list", "Os pinos numerados batem com a lista"),
+        "search.map.pins" => (
+            "Numbered pins match the list",
+            "Os pinos numerados batem com a lista",
+        ),
         "search.sort.label" => ("Sort", "Ordenar"),
         "search.sort.recommended" => ("Recommended", "Recomendados"),
         "search.sort.distance" => ("Distance", "Distância"),
@@ -386,7 +417,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "No reviews yet — reviews arrive with community accounts.",
             "Sem avaliações ainda — as avaliações chegam com as contas da comunidade.",
         ),
-        "details.contribute.title" => ("Help keep this spot accurate", "Ajude a manter esta vaga correta"),
+        "details.contribute.title" => (
+            "Help keep this spot accurate",
+            "Ajude a manter esta vaga correta",
+        ),
         "details.contribute.body" => (
             "Favoriting, verifying and proposing changes arrive with community accounts.",
             "Favoritar, verificar e propor mudanças chegam com as contas da comunidade.",
@@ -404,7 +438,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "O BikeNest é um mapa de bicicletários mantido pela comunidade. Não há base oficial — o mapa é tão bom, e tão atual, quanto quem pedala e o constrói.",
         ),
         "about.hero.cta_search" => ("Search parking", "Buscar vagas"),
-        "about.how.title" => ("A loop that runs on riders", "Um ciclo movido por quem pedala"),
+        "about.how.title" => (
+            "A loop that runs on riders",
+            "Um ciclo movido por quem pedala",
+        ),
         "about.how.s1.title" => ("Someone adds a spot", "Alguém adiciona uma vaga"),
         "about.how.s1.body" => (
             "A rider marks where parking exists, with its type, cost, hours and security.",
@@ -420,28 +457,58 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Each spot shows when it was last confirmed, so you know how much to trust it.",
             "Cada vaga mostra quando foi confirmada, para você saber o quanto confiar.",
         ),
-        "about.fresh.title" => ("How verification and freshness work", "Como funcionam verificação e atualidade"),
+        "about.fresh.title" => (
+            "How verification and freshness work",
+            "Como funcionam verificação e atualidade",
+        ),
         "about.fresh.body" => (
             "Every spot carries a freshness signal based on when it was last verified.",
             "Cada vaga carrega um sinal de atualidade com base na última verificação.",
         ),
         "about.fresh.col.label" => ("Freshness", "Atualidade"),
         "about.fresh.col.meaning" => ("What it means", "O que significa"),
-        "about.fresh.fresh" => ("Verified very recently — trust it.", "Verificado há muito pouco — pode confiar."),
-        "about.fresh.recently_verified" => ("Confirmed lately — likely accurate.", "Confirmado recentemente — provavelmente correto."),
-        "about.fresh.aging" => ("A while since the last check.", "Faz um tempo desde a última conferida."),
+        "about.fresh.fresh" => (
+            "Verified very recently — trust it.",
+            "Verificado há muito pouco — pode confiar.",
+        ),
+        "about.fresh.recently_verified" => (
+            "Confirmed lately — likely accurate.",
+            "Confirmado recentemente — provavelmente correto.",
+        ),
+        "about.fresh.aging" => (
+            "A while since the last check.",
+            "Faz um tempo desde a última conferida.",
+        ),
         "about.fresh.stale" => ("Overdue for a re-check.", "Passou da hora de reconferir."),
-        "about.fresh.very_stale" => ("Long unverified — treat with care.", "Sem verificação há muito — cuidado."),
+        "about.fresh.very_stale" => (
+            "Long unverified — treat with care.",
+            "Sem verificação há muito — cuidado.",
+        ),
         "about.contribute.title" => ("Four ways to contribute", "Quatro formas de contribuir"),
         "about.contribute.add.title" => ("Add a spot", "Adicionar uma vaga"),
-        "about.contribute.add.body" => ("Map parking that isn't here yet.", "Mapeie vagas que ainda não estão aqui."),
+        "about.contribute.add.body" => (
+            "Map parking that isn't here yet.",
+            "Mapeie vagas que ainda não estão aqui.",
+        ),
         "about.contribute.verify.title" => ("Verify a spot", "Verificar uma vaga"),
-        "about.contribute.verify.body" => ("Confirm a spot still exists as described.", "Confirme que a vaga ainda existe como descrito."),
+        "about.contribute.verify.body" => (
+            "Confirm a spot still exists as described.",
+            "Confirme que a vaga ainda existe como descrito.",
+        ),
         "about.contribute.review.title" => ("Review a spot", "Avaliar uma vaga"),
-        "about.contribute.review.body" => ("Share how good it is to park there.", "Conte como é estacionar ali."),
+        "about.contribute.review.body" => (
+            "Share how good it is to park there.",
+            "Conte como é estacionar ali.",
+        ),
         "about.contribute.report.title" => ("Report a problem", "Relatar um problema"),
-        "about.contribute.report.body" => ("Flag a spot that's gone or wrong.", "Sinalize uma vaga que sumiu ou está errada."),
-        "about.moderation.title" => ("Moderation keeps it trustworthy", "A moderação mantém a confiança"),
+        "about.contribute.report.body" => (
+            "Flag a spot that's gone or wrong.",
+            "Sinalize uma vaga que sumiu ou está errada.",
+        ),
+        "about.moderation.title" => (
+            "Moderation keeps it trustworthy",
+            "A moderação mantém a confiança",
+        ),
         "about.moderation.body" => (
             "Photos and reports are reviewed by moderators before they affect the map, and every moderation action is recorded. These tools arrive as the project grows.",
             "Fotos e denúncias passam por moderadores antes de afetarem o mapa, e cada ação de moderação é registrada. Essas ferramentas chegam conforme o projeto cresce.",
@@ -470,6 +537,12 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Uma conta da comunidade mantém suas contribuições e o mapa honestos.",
         ),
         "auth.login_title" => ("Log in", "Entrar"),
+        // Registration legal notice (§71): "… agree to the <Terms> and acknowledge the <Privacy policy>."
+        "auth.legal_prefix" => (
+            "By creating an account you confirm that you are 18 or older and agree to the",
+            "Ao criar uma conta, você confirma ter 18 anos ou mais e concorda com os",
+        ),
+        "auth.legal_middle" => ("and acknowledge the", "e declara ter lido a"),
         "auth.login_subtitle" => ("Welcome back.", "Bem-vindo de volta."),
         "auth.email" => ("Email", "E-mail"),
         "auth.display_name" => ("Display name (optional)", "Nome de exibição (opcional)"),
@@ -488,9 +561,18 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Your account is active. You can now log in and contribute.",
             "Sua conta está ativa. Agora você pode entrar e contribuir.",
         ),
-        "auth.verify_invalid" => ("Verification link invalid or expired", "Link de verificação inválido ou expirado"),
-        "auth.resend_hint" => ("Enter your email to resend the link:", "Digite seu e-mail para reenviar o link:"),
-        "auth.resend_link" => ("Resend verification email", "Reenviar e-mail de verificação"),
+        "auth.verify_invalid" => (
+            "Verification link invalid or expired",
+            "Link de verificação inválido ou expirado",
+        ),
+        "auth.resend_hint" => (
+            "Enter your email to resend the link:",
+            "Digite seu e-mail para reenviar o link:",
+        ),
+        "auth.resend_link" => (
+            "Resend verification email",
+            "Reenviar e-mail de verificação",
+        ),
 
         // --- auth: password reset (A4/A5) ---------------------------------
         "auth.reset_title" => ("Reset your password", "Redefinir sua senha"),
@@ -500,14 +582,20 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         ),
         "auth.reset_button" => ("Send reset link", "Enviar link de redefinição"),
         "auth.reset_new_title" => ("Set a new password", "Defina uma nova senha"),
-        "auth.reset_new_subtitle" => ("Choose a strong new password.", "Escolha uma nova senha forte."),
+        "auth.reset_new_subtitle" => (
+            "Choose a strong new password.",
+            "Escolha uma nova senha forte.",
+        ),
 
         // --- auth: notices / errors ---------------------------------------
         "auth.registered" => (
             "Check your inbox to verify your email, then log in.",
             "Confira seu e-mail para verificar seu endereço e depois entre.",
         ),
-        "auth.verified" => ("Email verified — you can log in.", "E-mail verificado — você pode entrar."),
+        "auth.verified" => (
+            "Email verified — you can log in.",
+            "E-mail verificado — você pode entrar.",
+        ),
         "auth.reset_sent" => (
             "If that address exists, a reset link has been sent.",
             "Se esse endereço existir, um link de redefinição foi enviado.",
@@ -516,17 +604,35 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "If that address exists, a verification email has been sent.",
             "Se esse endereço existir, um e-mail de verificação foi enviado.",
         ),
-        "auth.oauth_failed" => ("Google sign-in failed. Try again.", "Falha ao entrar com o Google. Tente novamente."),
+        "auth.oauth_failed" => (
+            "Google sign-in failed. Try again.",
+            "Falha ao entrar com o Google. Tente novamente.",
+        ),
         "auth.error.invalid_credentials" => (
             "Email or password is incorrect.",
             "E-mail ou senha incorretos.",
         ),
-        "auth.error.weak_password" => ("Password must be at least 8 characters.", "A senha deve ter pelo menos 8 caracteres."),
+        "auth.error.weak_password" => (
+            "Password must be at least 8 characters.",
+            "A senha deve ter pelo menos 8 caracteres.",
+        ),
         "auth.error.invalid_email" => ("That email is not valid.", "Esse e-mail não é válido."),
-        "auth.error.rate_limited" => ("Too many attempts. Try again later.", "Muitas tentativas. Tente novamente mais tarde."),
-        "auth.error.invalid_token" => ("That link is invalid or has expired.", "Esse link é inválido ou expirou."),
-        "auth.error.last_admin" => ("You cannot remove your own last admin role.", "Você não pode remover sua própria última função de admin."),
-        "auth.error.generic" => ("Something went wrong. Try again.", "Algo deu errado. Tente novamente."),
+        "auth.error.rate_limited" => (
+            "Too many attempts. Try again later.",
+            "Muitas tentativas. Tente novamente mais tarde.",
+        ),
+        "auth.error.invalid_token" => (
+            "That link is invalid or has expired.",
+            "Esse link é inválido ou expirou.",
+        ),
+        "auth.error.last_admin" => (
+            "You cannot remove your own last admin role.",
+            "Você não pode remover sua própria última função de admin.",
+        ),
+        "auth.error.generic" => (
+            "Something went wrong. Try again.",
+            "Algo deu errado. Tente novamente.",
+        ),
 
         // --- account (C1) --------------------------------------------------
         "account.title" => ("Your account", "Sua conta"),
@@ -541,7 +647,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "account.change_password" => ("Change password", "Alterar senha"),
         "account.change_email" => ("Change email", "Alterar e-mail"),
         "account.back" => ("Back to account", "Voltar à conta"),
-        "account.banner_title" => ("Verify your email to contribute", "Verifique seu e-mail para contribuir"),
+        "account.banner_title" => (
+            "Verify your email to contribute",
+            "Verifique seu e-mail para contribuir",
+        ),
         "account.banner_body" => (
             "Your account is active, but you must confirm your email address before adding or editing parking.",
             "Sua conta está ativa, mas você precisa confirmar seu e-mail antes de adicionar ou editar vagas.",
@@ -580,7 +689,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "admin.actions" => ("Actions", "Ações"),
         "admin.granted" => ("Role granted.", "Função concedida."),
         "admin.revoked" => ("Role revoked.", "Função revogada."),
-        "admin.role_error" => ("That action could not be completed.", "Não foi possível concluir essa ação."),
+        "admin.role_error" => (
+            "That action could not be completed.",
+            "Não foi possível concluir essa ação.",
+        ),
         "admin.grant_moderator" => ("+ Moderator", "+ Moderador"),
         "admin.revoke_moderator" => ("− Moderator", "− Moderador"),
         "admin.grant_admin" => ("+ Admin", "+ Admin"),
@@ -642,13 +754,25 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "review.rating" => ("Rating", "Avaliação"),
         "review.select" => ("Choose a rating", "Escolha uma nota"),
         "review.body" => ("Your review", "Sua avaliação"),
-        "review.length_hint" => ("Between 1 and 2000 characters.", "Entre 1 e 2000 caracteres."),
+        "review.length_hint" => (
+            "Between 1 and 2000 characters.",
+            "Entre 1 e 2000 caracteres.",
+        ),
         "review.submit" => ("Save review", "Salvar avaliação"),
         "review.write" => ("Write a review", "Escrever uma avaliação"),
         "review.edit" => ("Edit your review", "Editar sua avaliação"),
-        "review.error.invalid" => ("Rating must be 1 to 5 stars.", "A nota deve ser de 1 a 5 estrelas."),
-        "review.error.length" => ("Review must be 1 to 2000 characters.", "A avaliação deve ter de 1 a 2000 caracteres."),
-        "review.error.generic" => ("Could not save your review.", "Não foi possível salvar sua avaliação."),
+        "review.error.invalid" => (
+            "Rating must be 1 to 5 stars.",
+            "A nota deve ser de 1 a 5 estrelas.",
+        ),
+        "review.error.length" => (
+            "Review must be 1 to 2000 characters.",
+            "A avaliação deve ter de 1 a 2000 caracteres.",
+        ),
+        "review.error.generic" => (
+            "Could not save your review.",
+            "Não foi possível salvar sua avaliação.",
+        ),
 
         // --- M3 favorites (C4) -----------------------------------------
         "favorites.title" => ("Your favorites", "Seus favoritos"),
@@ -663,7 +787,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
 
         // --- M3 contributions history (C5) ------------------------------
         "contrib.title" => ("Your contributions", "Suas contribuições"),
-        "contrib.subtitle" => ("Everything you have added, verified or reviewed.", "Tudo que você adicionou, verificou ou avaliou."),
+        "contrib.subtitle" => (
+            "Everything you have added, verified or reviewed.",
+            "Tudo que você adicionou, verificou ou avaliou.",
+        ),
         "contrib.empty" => ("No contributions yet", "Nenhuma contribuição ainda"),
         "contrib.empty_hint" => (
             "Add a spot, verify one, or write a review.",
@@ -693,17 +820,26 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Alguns ciclistas dizem que esta vaga mudou. O mapa não faz média — mostra os dois lados.",
         ),
         "confidence.disputes" => ("disputes:", "disputas:"),
-        "confidence.parked_here_count" => ("Riders who parked here:", "Ciclistas que estacionaram aqui:"),
+        "confidence.parked_here_count" => (
+            "Riders who parked here:",
+            "Ciclistas que estacionaram aqui:",
+        ),
 
         // --- Verification (M3 §39) ---------------------------------------
         "verification.title" => ("Verify this spot", "Verificar esta vaga"),
-        "verification.anonymous" => ("Log in and verify your email to confirm this spot.", "Entre e verifique seu e-mail para confirmar esta vaga."),
+        "verification.anonymous" => (
+            "Log in and verify your email to confirm this spot.",
+            "Entre e verifique seu e-mail para confirmar esta vaga.",
+        ),
         "verification.saved" => ("Thanks — recorded.", "Obrigado — registrado."),
         "verify.still_exists" => ("Still exists", "Ainda existe"),
         "verify.no_longer_exists" => ("No longer exists", "Não existe mais"),
         "verify.info_changed" => ("Information changed", "Informação mudou"),
         "verify.parked_here" => ("I parked here", "Estacionei aqui"),
-        "parked.saved" => ("Noted. This helps others spot usage.", "Anotado. Isso ajuda a ver o uso."),
+        "parked.saved" => (
+            "Noted. This helps others spot usage.",
+            "Anotado. Isso ajuda a ver o uso.",
+        ),
 
         // --- P3 post-action notices --------------------------------------
         "details.notice.proposed" => (
@@ -711,7 +847,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Sua mudança foi enviada e será revisada por um moderador antes de aparecer.",
         ),
         "details.notice.edited" => ("Your changes were saved.", "Suas alterações foram salvas."),
-        "details.notice.reviewed" => ("Thanks — your review was saved.", "Obrigado — sua avaliação foi salva."),
+        "details.notice.reviewed" => (
+            "Thanks — your review was saved.",
+            "Obrigado — sua avaliação foi salva.",
+        ),
         "details.notice.added" => ("The parking spot was added.", "A vaga foi adicionada."),
 
         // --- P3 recommended because (§105) -------------------------------
@@ -727,18 +866,39 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Verify your email to contribute.",
             "Verifique seu e-mail para contribuir.",
         ),
-        "contribution.error.rate_limited" => ("Too many attempts. Try again later.", "Muitas tentativas. Tente novamente mais tarde."),
+        "contribution.error.rate_limited" => (
+            "Too many attempts. Try again later.",
+            "Muitas tentativas. Tente novamente mais tarde.",
+        ),
         "contribution.error.version_conflict" => (
             "Someone else recently changed this. We reloaded the latest values — try again.",
             "Alguém alterou isto recentemente. Recarregamos os valores atuais — tente de novo.",
         ),
-        "contribution.error.not_found" => ("That spot could not be found.", "Não foi possível encontrar essa vaga."),
-        "contribution.error.invalid" => ("Some fields are missing or invalid.", "Alguns campos estão vazios ou inválidos."),
-        "contribution.error.unauthorized" => ("You cannot perform this action.", "Você não pode fazer isso."),
-        "contribution.error.timezone" => ("Could not determine the timezone from that point.", "Não foi possível determinar o fuso a partir do ponto."),
-        "contribution.error.internal" => ("Something went wrong. Please try again.", "Algo deu errado. Tente novamente."),
+        "contribution.error.not_found" => (
+            "That spot could not be found.",
+            "Não foi possível encontrar essa vaga.",
+        ),
+        "contribution.error.invalid" => (
+            "Some fields are missing or invalid.",
+            "Alguns campos estão vazios ou inválidos.",
+        ),
+        "contribution.error.unauthorized" => (
+            "You cannot perform this action.",
+            "Você não pode fazer isso.",
+        ),
+        "contribution.error.timezone" => (
+            "Could not determine the timezone from that point.",
+            "Não foi possível determinar o fuso a partir do ponto.",
+        ),
+        "contribution.error.internal" => (
+            "Something went wrong. Please try again.",
+            "Algo deu errado. Tente novamente.",
+        ),
         "contribution.error.generic" => ("Something went wrong.", "Algo deu errado."),
-        "contribution.verify_to" => ("Verify your email to confirm this spot.", "Verifique seu e-mail para confirmar esta vaga."),
+        "contribution.verify_to" => (
+            "Verify your email to confirm this spot.",
+            "Verifique seu e-mail para confirmar esta vaga.",
+        ),
 
         // --- time-ago labels ---------------------------------------------
         "time.today" => ("today", "hoje"),
@@ -759,8 +919,8 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         // --- photos (M4, §30/§80) -----------------------------------------
         "photo.upload.title" => ("Add a photo", "Adicionar foto"),
         "photo.upload.hint" => (
-            "A photo helps riders recognize a spot. It is reviewed before it appears.",
-            "Uma foto ajuda a reconhecer a vaga. Ela é revisada antes de aparecer.",
+            "A photo helps riders recognize a spot. Upload only photos you took of the parking itself and avoid people's faces and licence plates. You are responsible for what you upload; photos are reviewed by moderators and automated tools before they appear.",
+            "Uma foto ajuda a reconhecer a vaga. Envie apenas fotos que você tirou do próprio local e evite rostos de pessoas e placas de veículos. Você é responsável pelo que envia; as fotos passam por revisão de moderadores e ferramentas automáticas antes de aparecer.",
         ),
         "photo.upload.submit" => ("Upload photo", "Enviar foto"),
         "photo.upload.pending_notice" => (
@@ -771,34 +931,70 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Photo uploaded. It will appear once approved.",
             "Foto enviada. Ela aparecerá quando for aprovada.",
         ),
-        "photo.error.too_large" => ("Photo is too large (max 10 MiB).", "A foto é muito grande (máx. 10 MiB)."),
-        "photo.error.unsupported" => ("Unsupported format. Use JPEG, PNG or WebP.", "Formato não suportado. Use JPEG, PNG ou WebP."),
-        "photo.error.undecodable" => ("That file isn't a readable image.", "Esse arquivo não é uma imagem legível."),
+        "photo.error.too_large" => (
+            "Photo is too large (max 10 MiB).",
+            "A foto é muito grande (máx. 10 MiB).",
+        ),
+        "photo.error.unsupported" => (
+            "Unsupported format. Use JPEG, PNG or WebP.",
+            "Formato não suportado. Use JPEG, PNG ou WebP.",
+        ),
+        "photo.error.undecodable" => (
+            "That file isn't a readable image.",
+            "Esse arquivo não é uma imagem legível.",
+        ),
         "photo.error.invalid" => ("Invalid photo input.", "Dados de foto inválidos."),
-        "photo.error.too_many_pixels" => ("Image resolution is too high (max 20 MP).", "A resolução é muito alta (máx. 20 MP)."),
-        "photo.error.not_verified" => ("Verify your email to add photos.", "Verifique seu e-mail para adicionar fotos."),
+        "photo.error.too_many_pixels" => (
+            "Image resolution is too high (max 20 MP).",
+            "A resolução é muito alta (máx. 20 MP).",
+        ),
+        "photo.error.not_verified" => (
+            "Verify your email to add photos.",
+            "Verifique seu e-mail para adicionar fotos.",
+        ),
         "photo.error.not_found" => ("Location not found.", "Local não encontrado."),
-        "photo.error.rate_limited" => ("Too many uploads, try again later.", "Muitos envios, tente novamente mais tarde."),
-        "photo.error.internal" => ("Upload failed. Try a different photo.", "Falha no envio. Tente outra foto."),
+        "photo.error.rate_limited" => (
+            "Too many uploads, try again later.",
+            "Muitos envios, tente novamente mais tarde.",
+        ),
+        "photo.error.internal" => (
+            "Upload failed. Try a different photo.",
+            "Falha no envio. Tente outra foto.",
+        ),
 
         // --- photo moderation queue (M2 screen, §44) ----------------------
         "moderation.title" => ("Photo moderation", "Moderação de fotos"),
-        "moderation.empty" => ("No photos awaiting review.", "Nenhuma foto aguardando revisão."),
+        "moderation.empty" => (
+            "No photos awaiting review.",
+            "Nenhuma foto aguardando revisão.",
+        ),
         "moderation.pending" => ("Pending", "Pendente"),
         "moderation.approve" => ("Approve", "Aprovar"),
         "moderation.reject" => ("Reject", "Rejeitar"),
         "moderation.reason_label" => ("Rejection reason", "Motivo da rejeição"),
-        "moderation.reason_placeholder" => ("e.g. unclear image, incorrect location", "ex.: imagem ilegível, local incorreto"),
+        "moderation.reason_placeholder" => (
+            "e.g. unclear image, incorrect location",
+            "ex.: imagem ilegível, local incorreto",
+        ),
         "moderation.approved" => ("Photo approved.", "Foto aprovada."),
         "moderation.rejected" => ("Photo rejected.", "Foto rejeitada."),
         "moderation.err.approve" => ("Approve failed.", "Falha ao aprovar."),
         "moderation.err.reject" => ("Reject failed.", "Falha ao rejeitar."),
         "moderation.error.internal" => ("Moderation action failed.", "Ação de moderação falhou."),
         "moderation.not_found" => ("Photo not found.", "Foto não encontrada."),
-        "moderation.not_pending" => ("This photo isn't awaiting review.", "Esta foto não está aguardando revisão."),
-        "moderation.unauthorized" => ("You don't have permission to moderate.", "Você não tem permissão para moderar."),
+        "moderation.not_pending" => (
+            "This photo isn't awaiting review.",
+            "Esta foto não está aguardando revisão.",
+        ),
+        "moderation.unauthorized" => (
+            "You don't have permission to moderate.",
+            "Você não tem permissão para moderar.",
+        ),
         "moderation.contributor" => ("Contributor", "Contribuidor"),
-        "moderation.exif_note" => ("EXIF stripped · processed derivative", "EXIF removido · derivado processado"),
+        "moderation.exif_note" => (
+            "EXIF stripped · processed derivative",
+            "EXIF removido · derivado processado",
+        ),
         "moderation.locations" => ("Location", "Local"),
         "moderation.dimensions" => ("Dimensions", "Dimensões"),
         "moderation.view" => ("Full size", "Tamanho completo"),
@@ -812,7 +1008,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "report.description" => ("Details (optional)", "Detalhes (opcional)"),
         "report.submit" => ("Submit report", "Enviar denúncia"),
         "report.cancel" => ("Cancel", "Cancelar"),
-        "report.submitted" => ("Thanks — your report was submitted.", "Obrigado — sua denúncia foi enviada."),
+        "report.submitted" => (
+            "Thanks — your report was submitted.",
+            "Obrigado — sua denúncia foi enviada.",
+        ),
         "report.claim" => ("Claim", "Assumir"),
         "report.claimed" => ("Report claimed.", "Denúncia assumida."),
         "report.resolve" => ("Resolve", "Resolver"),
@@ -822,8 +1021,14 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "report.dismissed_msg" => ("Report dismissed.", "Denúncia descartada."),
         "report.claimed.none" => ("Unclaimed", "Sem responsável"),
         "report.reporter.anonymous" => ("Anonymous", "Anônimo"),
-        "report.error.invalid_reason" => ("That reason is not valid for this content.", "Esse motivo não é válido para este conteúdo."),
-        "report.error.rate_limited" => ("Too many reports. Try again later.", "Muitas denúncias. Tente novamente mais tarde."),
+        "report.error.invalid_reason" => (
+            "That reason is not valid for this content.",
+            "Esse motivo não é válido para este conteúdo.",
+        ),
+        "report.error.rate_limited" => (
+            "Too many reports. Try again later.",
+            "Muitas denúncias. Tente novamente mais tarde.",
+        ),
         "report.target.parking" => ("Parking spot", "Vaga"),
         "report.target.parking_photo" => ("Parking photo", "Foto da vaga"),
         "report.target.review" => ("Review", "Avaliação"),
@@ -848,7 +1053,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
 
         // --- moderation dashboard / queues -----------------------------
         "moderation.dashboard.title" => ("Moderation", "Moderação"),
-        "moderation.dashboard.subtitle" => ("Triage reports, photos and proposals from one place.", "Faça a triagem de denúncias, fotos e propostas em um só lugar."),
+        "moderation.dashboard.subtitle" => (
+            "Triage reports, photos and proposals from one place.",
+            "Faça a triagem de denúncias, fotos e propostas em um só lugar.",
+        ),
         "moderation.dashboard.photos" => ("Pending photos", "Fotos pendentes"),
         "moderation.dashboard.reports" => ("Reports", "Denúncias"),
         "moderation.dashboard.proposals" => ("Pending proposals", "Propostas pendentes"),
@@ -860,18 +1068,36 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "moderation.dashboard.link.proposals" => ("Proposal review", "Revisão de propostas"),
         "moderation.dashboard.link.audit" => ("Audit log", "Registro de auditoria"),
         "moderation.reports.title" => ("Report queue", "Fila de denúncias"),
-        "moderation.reports.subtitle" => ("Claims are the only open→review move; resolve or dismiss a claim.", "Assumir é o único movimento de aberta→em análise; resolva ou descarte."),
+        "moderation.reports.subtitle" => (
+            "Claims are the only open→review move; resolve or dismiss a claim.",
+            "Assumir é o único movimento de aberta→em análise; resolva ou descarte.",
+        ),
         "moderation.reports.empty" => ("No reports here.", "Nenhuma denúncia aqui."),
         "moderation.proposals.title" => ("Proposal review", "Revisão de propostas"),
-        "moderation.proposals.subtitle" => ("Approve applies the change with a new revision; reject leaves the listing untouched.", "Aprovar aplica a mudança com nova revisão; rejeitar mantém a vaga intacta."),
+        "moderation.proposals.subtitle" => (
+            "Approve applies the change with a new revision; reject leaves the listing untouched.",
+            "Aprovar aplica a mudança com nova revisão; rejeitar mantém a vaga intacta.",
+        ),
         "moderation.proposals.empty" => ("No pending proposals.", "Nenhuma proposta pendente."),
-        "moderation.banner" => ("This listing is under moderation:", "Esta vaga está sob moderação:"),
+        "moderation.banner" => (
+            "This listing is under moderation:",
+            "Esta vaga está sob moderação:",
+        ),
         "moderation.restore" => ("Restore", "Restaurar"),
         "moderation.photo_hidden" => ("Photo hidden.", "Foto ocultada."),
         "moderation.photo_restored" => ("Photo restored.", "Foto restaurada."),
-        "moderation.self_resolve" => ("You cannot resolve a report you submitted.", "Você não pode resolver uma denúncia que você mesmo enviou."),
-        "moderation.invalid_state" => ("That action isn't valid in the current state.", "Essa ação não é válida no estado atual."),
-        "moderation.target_not_found" => ("The reported content could not be found.", "O conteúdo denunciado não foi encontrado."),
+        "moderation.self_resolve" => (
+            "You cannot resolve a report you submitted.",
+            "Você não pode resolver uma denúncia que você mesmo enviou.",
+        ),
+        "moderation.invalid_state" => (
+            "That action isn't valid in the current state.",
+            "Essa ação não é válida no estado atual.",
+        ),
+        "moderation.target_not_found" => (
+            "The reported content could not be found.",
+            "O conteúdo denunciado não foi encontrado.",
+        ),
         "moderation.invalid" => ("Invalid input.", "Entrada inválida."),
         "moderation.moderator" => ("Moderator", "Moderador"),
         "moderation.proposer" => ("Proposer", "Proponente"),
@@ -896,25 +1122,40 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "parking.invalidated" => ("Location invalidated.", "Vaga invalidada."),
         "parking.restored" => ("Location restored.", "Vaga restaurada."),
         "review.photos" => ("Photos (optional)", "Fotos (opcional)"),
-        "review.photos_hint" => ("Photos are reviewed before they appear.", "As fotos são revisadas antes de aparecer."),
+        "review.photos_hint" => (
+            "Only photos of the parking itself, without people's faces or licence plates. You are responsible for what you upload; photos are reviewed before they appear.",
+            "Apenas fotos do próprio local, sem rostos de pessoas nem placas de veículos. Você é responsável pelo que envia; as fotos são revisadas antes de aparecer.",
+        ),
 
         // --- admin user management (suspend/restore + contributions) ---
         "admin.suspend" => ("Suspend", "Suspender"),
         "admin.restore" => ("Restore", "Restaurar"),
-        "admin.suspended" => ("User suspended — sessions revoked.", "Usuário suspenso — sessões revogadas."),
+        "admin.suspended" => (
+            "User suspended — sessions revoked.",
+            "Usuário suspenso — sessões revogadas.",
+        ),
         "admin.restored" => ("User restored to active.", "Usuário restaurado para ativo."),
         "admin.contrib_link" => ("Contributions", "Contribuições"),
         "admin.contrib.title" => ("Contributions", "Contribuições"),
-        "admin.contrib.subtitle" => ("Inspection view of a user's contribution history.", "Visão de inspeção do histórico de contribuições de um usuário."),
+        "admin.contrib.subtitle" => (
+            "Inspection view of a user's contribution history.",
+            "Visão de inspeção do histórico de contribuições de um usuário.",
+        ),
         "admin.audit.title" => ("Audit log", "Registro de auditoria"),
-        "admin.audit.subtitle" => ("Security, account, role and moderation actions.", "Ações de segurança, conta, função e moderação."),
+        "admin.audit.subtitle" => (
+            "Security, account, role and moderation actions.",
+            "Ações de segurança, conta, função e moderação.",
+        ),
         "admin.audit.action" => ("Action contains", "Ação contém"),
         "admin.audit.target_type" => ("Target type", "Tipo de alvo"),
         "admin.audit.actor" => ("Actor id", "Id do ator"),
         "admin.audit.from" => ("From (ISO)", "De (ISO)"),
         "admin.audit.to" => ("To (ISO)", "Até (ISO)"),
         "admin.audit.filter" => ("Apply", "Aplicar"),
-        "admin.audit.empty" => ("No audit events match the filter.", "Nenhum evento de auditoria corresponde ao filtro."),
+        "admin.audit.empty" => (
+            "No audit events match the filter.",
+            "Nenhum evento de auditoria corresponde ao filtro.",
+        ),
         "admin.audit.id" => ("Id", "Id"),
         "admin.audit.target" => ("Target", "Alvo"),
         "admin.audit.result" => ("Result", "Resultado"),
@@ -929,7 +1170,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "nav.privacy" => ("Privacy policy", "Política de privacidade"),
         "nav.terms" => ("Terms of service", "Termos de serviço"),
         "nav.cookies" => ("Cookie policy", "Política de cookies"),
-        "policy.missing" => ("This policy is not available yet.", "Esta política ainda não está disponível."),
+        "policy.missing" => (
+            "This policy is not available yet.",
+            "Esta política ainda não está disponível.",
+        ),
         "policy.versions_title" => ("Version history", "Histórico de versões"),
         "policy.effective" => ("Effective", "Em vigor"),
         "policy.version" => ("Version", "Versão"),
@@ -940,21 +1184,50 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "privacy.kind" => ("Kind", "Tipo"),
         "privacy.state" => ("State", "Estado"),
         "privacy.hub_title" => ("Privacy & data", "Privacidade e dados"),
-        "privacy.hub_intro" => ("Every request on this page is recorded in an auditable trail, and we verify your identity before acting on it.", "Cada solicitação desta página é registrada em um histórico auditável e verificamos sua identidade antes de agir."),
+        "privacy.hub_intro" => (
+            "Every request on this page is recorded in an auditable trail, and we verify your identity before acting on it.",
+            "Cada solicitação desta página é registrada em um histórico auditável e verificamos sua identidade antes de agir.",
+        ),
         "privacy.export_title" => ("Export your data", "Exporte seus dados"),
-        "privacy.export_desc" => ("A machine-readable copy (JSON) of everything we hold about you. Download links expire after 24 hours.", "Uma cópia legível por máquina (JSON) de tudo o que temos sobre você. Os links de download expiram em 24 horas."),
+        "privacy.export_desc" => (
+            "A machine-readable copy (JSON) of everything we hold about you. Download links expire after 24 hours.",
+            "Uma cópia legível por máquina (JSON) de tudo o que temos sobre você. Os links de download expiram em 24 horas.",
+        ),
         "privacy.request_export" => ("Request export", "Solicitar exportação"),
         "privacy.request" => ("Request", "Solicitar"),
         "privacy.details" => ("Details (optional)", "Detalhes (opcional)"),
-        "privacy.details_placeholder" => ("Add anything we should know (optional)", "Adicione algo que devemos saber (opcional)"),
-        "privacy.rights_title" => ("Rectification & other rights", "Retificação e outros direitos"),
-        "privacy.rights_desc" => ("You can also request access, rectification, restriction or objection regarding your data. Most requests are handled automatically; a few need a human pass.", "Você também pode solicitar acesso, retificação, restrição ou objeção sobre seus dados. A maioria é tratada automaticamente; algumas precisam de análise humana."),
-        "privacy.rights.rectification_desc" => ("Correct inaccurate data", "Corrigir dados incorretos"),
-        "privacy.rights.restriction_desc" => ("Pause processing of your data", "Pausar o processamento dos seus dados"),
-        "privacy.rights.objection_desc" => ("Stop a specific processing purpose", "Interromper uma finalidade específica de processamento"),
-        "privacy.rights.consent_desc" => ("Withdraw a previously given consent", "Revogar um consentimento anteriormente concedido"),
+        "privacy.details_placeholder" => (
+            "Add anything we should know (optional)",
+            "Adicione algo que devemos saber (opcional)",
+        ),
+        "privacy.rights_title" => (
+            "Rectification & other rights",
+            "Retificação e outros direitos",
+        ),
+        "privacy.rights_desc" => (
+            "You can also request access, rectification, restriction or objection regarding your data. Most requests are handled automatically; a few need a human pass.",
+            "Você também pode solicitar acesso, retificação, restrição ou objeção sobre seus dados. A maioria é tratada automaticamente; algumas precisam de análise humana.",
+        ),
+        "privacy.rights.rectification_desc" => {
+            ("Correct inaccurate data", "Corrigir dados incorretos")
+        }
+        "privacy.rights.restriction_desc" => (
+            "Pause processing of your data",
+            "Pausar o processamento dos seus dados",
+        ),
+        "privacy.rights.objection_desc" => (
+            "Stop a specific processing purpose",
+            "Interromper uma finalidade específica de processamento",
+        ),
+        "privacy.rights.consent_desc" => (
+            "Withdraw a previously given consent",
+            "Revogar um consentimento anteriormente concedido",
+        ),
         "privacy.consent_title" => ("Consent records", "Registros de consentimento"),
-        "privacy.consent_desc" => ("Where we rely on your consent, it is specific, recorded and withdrawable at any time.", "Quando usamos seu consentimento, ele é específico, registrado e revogável a qualquer momento."),
+        "privacy.consent_desc" => (
+            "Where we rely on your consent, it is specific, recorded and withdrawable at any time.",
+            "Quando usamos seu consentimento, ele é específico, registrado e revogável a qualquer momento.",
+        ),
         "privacy.back" => ("Back to Privacy & data", "Voltar a Privacidade e dados"),
         "privacy.kind.access" => ("Access", "Acesso"),
         "privacy.kind.rectification" => ("Rectification", "Retificação"),
@@ -968,30 +1241,63 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "privacy.state.completed" => ("Completed", "Concluído"),
         "privacy.state.declined" => ("Declined", "Recusado"),
         "export.title" => ("Your data export", "Sua exportação de dados"),
-        "export.error" => ("Unable to download. The link may have expired or already been used.", "Não foi possível baixar. O link pode ter expirado ou já ter sido usado."),
-        "export.none" => ("You have not requested an export yet.", "Você ainda não solicitou uma exportação."),
+        "export.error" => (
+            "Unable to download. The link may have expired or already been used.",
+            "Não foi possível baixar. O link pode ter expirado ou já ter sido usado.",
+        ),
+        "export.none" => (
+            "You have not requested an export yet.",
+            "Você ainda não solicitou uma exportação.",
+        ),
         "export.status_title" => ("Export status", "Status da exportação"),
         "export.requested" => ("Requested", "Solicitada em"),
         "export.expires" => ("Expires", "Expira em"),
         "export.status" => ("Status", "Status"),
         "export.download" => ("Download", "Baixar"),
-        "export.expiry_note" => ("Links are single-use and expire 24 hours after the export is created; only you can download them while signed in.", "Os links são de uso único e expiram 24 horas após a criação da exportação; somente você pode baixá-los enquanto estiver conectado."),
+        "export.expiry_note" => (
+            "Links are single-use and expire 24 hours after the export is created; only you can download them while signed in.",
+            "Os links são de uso único e expiram 24 horas após a criação da exportação; somente você pode baixá-los enquanto estiver conectado.",
+        ),
         "export.state.ready" => ("Ready", "Pronta"),
         "export.state.downloaded" => ("Downloaded", "Baixada"),
         "export.state.expired" => ("Expired", "Expirada"),
         "delete.title" => ("Delete account", "Excluir conta"),
-        "delete.intro" => ("Your personal identity is removed and your sessions are signed out. Community contributions may be kept, but anonymized — they stop being attributable to you. This can’t be undone.", "Sua identidade pessoal é removida e suas sessões são encerradas. As contribuições da comunidade podem ser mantidas, mas anonimizadas — deixam de ser atribuídas a você. Isso não pode ser desfeito."),
+        "delete.intro" => (
+            "Your personal identity is removed and your sessions are signed out. Community contributions may be kept, but anonymized — they stop being attributable to you. This can’t be undone.",
+            "Sua identidade pessoal é removida e suas sessões são encerradas. As contribuições da comunidade podem ser mantidas, mas anonimizadas — deixam de ser atribuídas a você. Isso não pode ser desfeito.",
+        ),
         "delete.request" => ("Request deletion", "Solicitar exclusão"),
-        "delete.reauth_error" => ("We could not confirm your identity. Check your email and, if you use a password, your current password.", "Não foi possível confirmar sua identidade. Verifique seu e-mail e, se você usa senha, sua senha atual."),
-        "delete.last_admin_error" => ("You cannot delete your account while you are the only administrator. Promote someone else first.", "Você não pode excluir sua conta enquanto for o único administrador. Promova outra pessoa primeiro."),
-        "delete.password_optional" => ("blank for Google-only accounts", "em branco para contas só Google"),
-        "delete.list_identity" => ("Your personal identity is removed; you are signed out everywhere.", "Sua identidade pessoal é removida; você é desconectado em todos os lugares."),
-        "delete.list_contributions" => ("Contributions you added may remain on the map, anonymized.", "As contribuições que você adicionou podem permanecer no mapa, anonimizadas."),
-        "delete.list_private" => ("Private activity (favorites, \"I parked here\") is deleted.", "A atividade privada (favoritos, \"Estacionei aqui\") é excluída."),
+        "delete.reauth_error" => (
+            "We could not confirm your identity. Check your email and, if you use a password, your current password.",
+            "Não foi possível confirmar sua identidade. Verifique seu e-mail e, se você usa senha, sua senha atual.",
+        ),
+        "delete.last_admin_error" => (
+            "You cannot delete your account while you are the only administrator. Promote someone else first.",
+            "Você não pode excluir sua conta enquanto for o único administrador. Promova outra pessoa primeiro.",
+        ),
+        "delete.password_optional" => (
+            "blank for Google-only accounts",
+            "em branco para contas só Google",
+        ),
+        "delete.list_identity" => (
+            "Your personal identity is removed; you are signed out everywhere.",
+            "Sua identidade pessoal é removida; você é desconectado em todos os lugares.",
+        ),
+        "delete.list_contributions" => (
+            "Contributions you added may remain on the map, anonymized.",
+            "As contribuições que você adicionou podem permanecer no mapa, anonimizadas.",
+        ),
+        "delete.list_private" => (
+            "Private activity (favorites, \"I parked here\") is deleted.",
+            "A atividade privada (favoritos, \"Estacionei aqui\") é excluída.",
+        ),
         "delete.confirm" => ("Delete my account", "Excluir minha conta"),
         "admin.title" => ("Admin", "Admin"),
         "admin.privacy_requests.title" => ("Privacy requests", "Solicitações de privacidade"),
-        "admin.privacy_requests.empty" => ("No privacy requests.", "Nenhuma solicitação de privacidade."),
+        "admin.privacy_requests.empty" => (
+            "No privacy requests.",
+            "Nenhuma solicitação de privacidade.",
+        ),
         "admin.privacy_requests.fulfill" => ("Mark completed", "Marcar como concluída"),
 
         // Unknown key: a visible marker (all real keys are defined above, so

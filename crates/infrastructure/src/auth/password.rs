@@ -1,11 +1,11 @@
 //! argon2id password hasher (§16). OWASP memory-hard interactive parameters,
 //! per-hash random salt encoded in the PHC string, constant-time verify.
 
+use argon2::password_hash::PasswordHasher as ArgonPasswordHasher;
 use argon2::{
     Argon2, PasswordHash,
     password_hash::{PasswordVerifier, SaltString, rand_core::OsRng},
 };
-use argon2::password_hash::PasswordHasher as ArgonPasswordHasher;
 use async_trait::async_trait;
 use bikenest_application::{AuthError, PasswordHasher};
 use bikenest_domain::Password;

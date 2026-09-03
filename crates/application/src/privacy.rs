@@ -13,7 +13,7 @@
 
 use crate::audit::{AuditEvent, AuditLog};
 use crate::auth::{
-    AccountRepository, AuthenticatedUser, AuthError, Clock, PasswordHasher, SessionStore,
+    AccountRepository, AuthError, AuthenticatedUser, Clock, PasswordHasher, SessionStore,
     TokenGenerator,
 };
 use async_trait::async_trait;
@@ -102,6 +102,7 @@ pub struct ExportPayload {
 }
 
 impl ExportPayload {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         account: ExportAccount,
         authentication: Vec<ExportProvider>,
@@ -300,7 +301,10 @@ pub struct PrivacyRequest {
 pub trait PrivacyRequestRepository: Send + Sync {
     async fn create(&self, r: &NewPrivacyRequest) -> Result<i64, PrivacyError>;
     /// Optional state filter; ordered by `created_at`.
-    async fn list(&self, state: Option<PrivacyRequestState>) -> Result<Vec<PrivacyRequest>, PrivacyError>;
+    async fn list(
+        &self,
+        state: Option<PrivacyRequestState>,
+    ) -> Result<Vec<PrivacyRequest>, PrivacyError>;
     async fn get(&self, id: i64) -> Result<Option<PrivacyRequest>, PrivacyError>;
     /// `OPEN|IN_PROGRESS → COMPLETED`, setting `fulfilled_by` (`None` = automated)
     /// and `fulfilled_at`. 0 rows → `NotFound`/`InvalidKind`.
@@ -357,8 +361,14 @@ pub trait AnonymizationRepository: Send + Sync {
 
 #[async_trait]
 pub trait RetentionRepository: Send + Sync {
-    async fn purge_expired_password_reset_tokens(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError>;
-    async fn purge_expired_email_verification_tokens(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError>;
+    async fn purge_expired_password_reset_tokens(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<u64, PrivacyError>;
+    async fn purge_expired_email_verification_tokens(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<u64, PrivacyError>;
     async fn purge_expired_sessions(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError>;
     async fn purge_expired_parked_here(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError>;
     async fn purge_expired_exports(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError>;
@@ -367,7 +377,8 @@ pub trait RetentionRepository: Send + Sync {
     async fn purge_orphan_uploads(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError>;
     /// Anonymize accounts inactive before `cutoff` (config-gated; TTL=0 → caller
     /// must not invoke). Returns the number of accounts anonymized.
-    async fn anonymize_inactive_accounts(&self, cutoff: DateTime<Utc>) -> Result<u64, PrivacyError>;
+    async fn anonymize_inactive_accounts(&self, cutoff: DateTime<Utc>)
+    -> Result<u64, PrivacyError>;
     /// Hard-purge the shell of accounts deleted before `cutoff` (config-gated).
     /// Returns the number of shells purged.
     async fn purge_deleted_accounts(&self, cutoff: DateTime<Utc>) -> Result<u64, PrivacyError>;
@@ -377,24 +388,42 @@ pub trait RetentionRepository: Send + Sync {
 // Ports: versioned legal pages (§70)
 // ---------------------------------------------------------------------------
 
+/// Locale code stored in `policy_version.locale` (BCP 47 form, as used for
+/// `<html lang>`): `"pt-BR"` (default/fallback) or `"en"`.
+pub const POLICY_FALLBACK_LOCALE: &str = "pt-BR";
+
 /// One `policy_version` row, as read by the public legal pages.
 #[derive(Debug, Clone)]
 pub struct PolicyDocument {
     pub id: i64,
     pub kind: PolicyKind,
+    /// `"pt-BR"` | `"en"` — see [`POLICY_FALLBACK_LOCALE`].
+    pub locale: String,
     pub version: String,
     pub effective_at: DateTime<Utc>,
     pub superseded_at: Option<DateTime<Utc>>,
-    /// Markdown content; the web layer renders it **escaped** — never `|safe`.
+    /// Markdown content. The web layer renders it through its own markdown
+    /// renderer, which escapes any raw HTML in the source (§103); templates
+    /// never mark the stored text itself as safe.
     pub content: String,
 }
 
 #[async_trait]
 pub trait PolicyReader: Send + Sync {
-    /// The current version (latest `effective_at`, `superseded_at IS NULL`).
-    async fn current(&self, kind: PolicyKind) -> Result<Option<PolicyDocument>, PrivacyError>;
-    /// All versions, newest first (for the version-history page).
-    async fn history(&self, kind: PolicyKind) -> Result<Vec<PolicyDocument>, PrivacyError>;
+    /// The current version for `locale` (latest `effective_at`,
+    /// `superseded_at IS NULL`). `None` when that locale has no document —
+    /// callers fall back to [`POLICY_FALLBACK_LOCALE`].
+    async fn current(
+        &self,
+        kind: PolicyKind,
+        locale: &str,
+    ) -> Result<Option<PolicyDocument>, PrivacyError>;
+    /// All versions for `locale`, newest first (for the version-history page).
+    async fn history(
+        &self,
+        kind: PolicyKind,
+        locale: &str,
+    ) -> Result<Vec<PolicyDocument>, PrivacyError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +468,9 @@ fn b64url_encode(bytes: &[u8]) -> String {
 
 fn b64url_decode(s: &str) -> Option<[u8; 32]> {
     use base64::Engine as _;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).ok()?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .ok()?;
     if bytes.len() != 32 {
         return None;
     }
@@ -557,11 +588,7 @@ impl PrivacyService {
         }
         let token = b64url_decode(raw_token).ok_or(PrivacyError::InvalidToken)?;
         let now = self.now();
-        let download = self
-            .deps
-            .exports
-            .consume_download(id, &token, now)
-            .await?;
+        let download = self.deps.exports.consume_download(id, &token, now).await?;
         self.audit(
             Some(user.id),
             "privacy.export_downloaded",
@@ -733,16 +760,10 @@ pub struct ExportRequested {
 /// Config-gated retention knobs. Zero (the default) disables the corresponding
 /// step — the retention periods are legal/product decisions, not engineering
 /// ones, so they default to "off" until approved.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct RetentionConfig {
     pub inactive_account_anonymize_after_days: u32,
     pub deleted_account_purge_after_days: u32,
-}
-
-impl Default for RetentionConfig {
-    fn default() -> Self {
-        Self { inactive_account_anonymize_after_days: 0, deleted_account_purge_after_days: 0 }
-    }
 }
 
 /// One retention step's result.
@@ -772,7 +793,12 @@ impl RetentionJob {
         clock: Box<dyn Clock>,
         config: RetentionConfig,
     ) -> Self {
-        Self { retention, audit, clock, config }
+        Self {
+            retention,
+            audit,
+            clock,
+            config,
+        }
     }
 
     /// Run every purge step. The six default steps always run; the two
@@ -783,25 +809,45 @@ impl RetentionJob {
         let mut counts: Vec<(&str, u64)> = vec![
             (
                 "password_reset_tokens",
-                self.retention.purge_expired_password_reset_tokens(now).await?,
+                self.retention
+                    .purge_expired_password_reset_tokens(now)
+                    .await?,
             ),
             (
                 "email_verification_tokens",
-                self.retention.purge_expired_email_verification_tokens(now).await?,
+                self.retention
+                    .purge_expired_email_verification_tokens(now)
+                    .await?,
             ),
-            ("sessions", self.retention.purge_expired_sessions(now).await?),
-            ("parked_here", self.retention.purge_expired_parked_here(now).await?),
+            (
+                "sessions",
+                self.retention.purge_expired_sessions(now).await?,
+            ),
+            (
+                "parked_here",
+                self.retention.purge_expired_parked_here(now).await?,
+            ),
             ("exports", self.retention.purge_expired_exports(now).await?),
-            ("orphan_uploads", self.retention.purge_orphan_uploads(now).await?),
+            (
+                "orphan_uploads",
+                self.retention.purge_orphan_uploads(now).await?,
+            ),
         ];
 
         if self.config.inactive_account_anonymize_after_days > 0 {
-            let cutoff = now - Duration::days(self.config.inactive_account_anonymize_after_days as i64);
-            counts.push(("inactive_accounts", self.retention.anonymize_inactive_accounts(cutoff).await?));
+            let cutoff =
+                now - Duration::days(self.config.inactive_account_anonymize_after_days as i64);
+            counts.push((
+                "inactive_accounts",
+                self.retention.anonymize_inactive_accounts(cutoff).await?,
+            ));
         }
         if self.config.deleted_account_purge_after_days > 0 {
             let cutoff = now - Duration::days(self.config.deleted_account_purge_after_days as i64);
-            counts.push(("deleted_accounts", self.retention.purge_deleted_accounts(cutoff).await?));
+            counts.push((
+                "deleted_accounts",
+                self.retention.purge_deleted_accounts(cutoff).await?,
+            ));
         }
 
         let mut step_map = serde_json::Map::new();
@@ -823,7 +869,10 @@ impl RetentionJob {
         Ok(RetentionSummary {
             steps: counts
                 .iter()
-                .map(|(n, c)| RetentionStep { name: n.to_string(), purged: *c })
+                .map(|(n, c)| RetentionStep {
+                    name: n.to_string(),
+                    purged: *c,
+                })
                 .collect(),
         })
     }
@@ -874,8 +923,11 @@ mod tests {
         )
     }
 
+    #[allow(clippy::type_complexity)]
     struct FakeExportRepo {
-        stored: std::sync::Mutex<std::collections::HashMap<i64, (Vec<u8>, ExportPayload, DateTime<Utc>)>>,
+        stored: std::sync::Mutex<
+            std::collections::HashMap<i64, (Vec<u8>, ExportPayload, DateTime<Utc>)>,
+        >,
         downloaded: std::sync::Mutex<bool>,
         next_id: std::sync::Mutex<i64>,
     }
@@ -915,7 +967,11 @@ mod tests {
             Ok(Some(Export {
                 id,
                 user_id: UserId(1),
-                state: if downloaded { ExportState::Downloaded } else { ExportState::Ready },
+                state: if downloaded {
+                    ExportState::Downloaded
+                } else {
+                    ExportState::Ready
+                },
                 created_at: Utc::now(),
                 expires_at: *expires,
                 downloaded_at: None,
@@ -940,7 +996,9 @@ mod tests {
             if stored != token {
                 return Err(PrivacyError::InvalidToken);
             }
-            Ok(ExportDownload { payload: payload.clone() })
+            Ok(ExportDownload {
+                payload: payload.clone(),
+            })
         }
         async fn purge_expired(&self, _n: DateTime<Utc>) -> Result<u64, PrivacyError> {
             Ok(0)
@@ -954,7 +1012,10 @@ mod tests {
 
     impl FakeRequestRepo {
         fn new() -> Self {
-            Self { rows: Default::default(), next_id: std::sync::Mutex::new(1) }
+            Self {
+                rows: Default::default(),
+                next_id: std::sync::Mutex::new(1),
+            }
         }
     }
 
@@ -981,7 +1042,10 @@ mod tests {
             );
             Ok(id)
         }
-        async fn list(&self, _s: Option<PrivacyRequestState>) -> Result<Vec<PrivacyRequest>, PrivacyError> {
+        async fn list(
+            &self,
+            _s: Option<PrivacyRequestState>,
+        ) -> Result<Vec<PrivacyRequest>, PrivacyError> {
             Ok(self.rows.lock().unwrap().values().cloned().collect())
         }
         async fn get(&self, id: i64) -> Result<Option<PrivacyRequest>, PrivacyError> {
@@ -1005,7 +1069,11 @@ mod tests {
         async fn is_last_admin(&self, _u: UserId) -> Result<bool, PrivacyError> {
             Ok(false)
         }
-        async fn anonymize(&self, _u: UserId, _n: DateTime<Utc>) -> Result<AnonymizationReport, PrivacyError> {
+        async fn anonymize(
+            &self,
+            _u: UserId,
+            _n: DateTime<Utc>,
+        ) -> Result<AnonymizationReport, PrivacyError> {
             Ok(AnonymizationReport::default())
         }
     }
@@ -1013,10 +1081,16 @@ mod tests {
     struct FakeRetention;
     #[async_trait]
     impl RetentionRepository for FakeRetention {
-        async fn purge_expired_password_reset_tokens(&self, _n: DateTime<Utc>) -> Result<u64, PrivacyError> {
+        async fn purge_expired_password_reset_tokens(
+            &self,
+            _n: DateTime<Utc>,
+        ) -> Result<u64, PrivacyError> {
             Ok(1)
         }
-        async fn purge_expired_email_verification_tokens(&self, _n: DateTime<Utc>) -> Result<u64, PrivacyError> {
+        async fn purge_expired_email_verification_tokens(
+            &self,
+            _n: DateTime<Utc>,
+        ) -> Result<u64, PrivacyError> {
             Ok(2)
         }
         async fn purge_expired_sessions(&self, _n: DateTime<Utc>) -> Result<u64, PrivacyError> {
@@ -1031,7 +1105,10 @@ mod tests {
         async fn purge_orphan_uploads(&self, _n: DateTime<Utc>) -> Result<u64, PrivacyError> {
             Ok(6)
         }
-        async fn anonymize_inactive_accounts(&self, _c: DateTime<Utc>) -> Result<u64, PrivacyError> {
+        async fn anonymize_inactive_accounts(
+            &self,
+            _c: DateTime<Utc>,
+        ) -> Result<u64, PrivacyError> {
             Ok(7)
         }
         async fn purge_deleted_accounts(&self, _c: DateTime<Utc>) -> Result<u64, PrivacyError> {
@@ -1042,7 +1119,10 @@ mod tests {
     struct FakeAccounts;
     #[async_trait]
     impl AccountRepository for FakeAccounts {
-        async fn find_by_email(&self, _e: &bikenest_domain::UserEmail) -> Result<Option<bikenest_domain::User>, AuthError> {
+        async fn find_by_email(
+            &self,
+            _e: &bikenest_domain::UserEmail,
+        ) -> Result<Option<bikenest_domain::User>, AuthError> {
             Ok(None)
         }
         async fn find_by_id(&self, _i: UserId) -> Result<Option<bikenest_domain::User>, AuthError> {
@@ -1054,22 +1134,45 @@ mod tests {
         async fn set_state(&self, _i: UserId, _s: AccountState) -> Result<(), AuthError> {
             Ok(())
         }
-        async fn mark_email_verified(&self, _i: UserId, _a: DateTime<Utc>) -> Result<(), AuthError> {
+        async fn mark_email_verified(
+            &self,
+            _i: UserId,
+            _a: DateTime<Utc>,
+        ) -> Result<(), AuthError> {
             Ok(())
         }
-        async fn update_canonical_email(&self, _i: UserId, _e: &bikenest_domain::UserEmail) -> Result<(), AuthError> {
+        async fn update_canonical_email(
+            &self,
+            _i: UserId,
+            _e: &bikenest_domain::UserEmail,
+        ) -> Result<(), AuthError> {
             Ok(())
         }
-        async fn confirm_email(&self, _i: UserId, _a: DateTime<Utc>, _e: &bikenest_domain::UserEmail) -> Result<(), AuthError> {
+        async fn confirm_email(
+            &self,
+            _i: UserId,
+            _a: DateTime<Utc>,
+            _e: &bikenest_domain::UserEmail,
+        ) -> Result<(), AuthError> {
             Ok(())
         }
         async fn set_password(&self, _i: UserId, _h: &str) -> Result<(), AuthError> {
             Ok(())
         }
-        async fn link_identity(&self, _u: UserId, _p: AuthenticationProvider, _s: &str, _h: Option<&str>) -> Result<(), AuthError> {
+        async fn link_identity(
+            &self,
+            _u: UserId,
+            _p: AuthenticationProvider,
+            _s: &str,
+            _h: Option<&str>,
+        ) -> Result<(), AuthError> {
             Ok(())
         }
-        async fn find_identity(&self, _p: AuthenticationProvider, _s: &str) -> Result<Option<IdentityRecord>, AuthError> {
+        async fn find_identity(
+            &self,
+            _p: AuthenticationProvider,
+            _s: &str,
+        ) -> Result<Option<IdentityRecord>, AuthError> {
             Ok(Some(IdentityRecord {
                 id: 1,
                 user_id: UserId(1),
@@ -1120,16 +1223,30 @@ mod tests {
     struct FakeSessions;
     #[async_trait]
     impl SessionStore for FakeSessions {
-        async fn create(&self, _u: UserId, _r: &SessionId, _c: &CsrfToken, _n: DateTime<Utc>) -> Result<(), AuthError> {
+        async fn create(
+            &self,
+            _u: UserId,
+            _r: &SessionId,
+            _c: &CsrfToken,
+            _n: DateTime<Utc>,
+        ) -> Result<(), AuthError> {
             Ok(())
         }
-        async fn resolve(&self, _r: &SessionId, _n: DateTime<Utc>) -> Result<Option<Session>, AuthError> {
+        async fn resolve(
+            &self,
+            _r: &SessionId,
+            _n: DateTime<Utc>,
+        ) -> Result<Option<Session>, AuthError> {
             Ok(None)
         }
         async fn revoke(&self, _r: &SessionId) -> Result<(), AuthError> {
             Ok(())
         }
-        async fn revoke_all_for_user_except(&self, _u: UserId, _k: &SessionId) -> Result<(), AuthError> {
+        async fn revoke_all_for_user_except(
+            &self,
+            _u: UserId,
+            _k: &SessionId,
+        ) -> Result<(), AuthError> {
             Ok(())
         }
         async fn revoke_all_for_user(&self, _u: UserId) -> Result<(), AuthError> {
@@ -1187,7 +1304,11 @@ mod tests {
         let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
         let svc = PrivacyService::new(deps(now));
         let res = svc
-            .request_deletion(&actor(), Some("correct-password"), "not-my-email@example.com")
+            .request_deletion(
+                &actor(),
+                Some("correct-password"),
+                "not-my-email@example.com",
+            )
             .await;
         assert!(matches!(res, Err(PrivacyError::ReauthRequired)));
     }
@@ -1207,7 +1328,11 @@ mod tests {
         let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
         let svc = PrivacyService::new(deps(now));
         let res = svc
-            .submit_request(&actor(), PrivacyRequestKind::Deletion, serde_json::json!({}))
+            .submit_request(
+                &actor(),
+                PrivacyRequestKind::Deletion,
+                serde_json::json!({}),
+            )
             .await;
         assert!(matches!(res, Err(PrivacyError::InvalidKind)));
     }
@@ -1233,7 +1358,10 @@ mod tests {
             Box::new(FakeRetention),
             Box::new(FakeAudit),
             Box::new(FakeClock(now)),
-            RetentionConfig { inactive_account_anonymize_after_days: 90, deleted_account_purge_after_days: 180 },
+            RetentionConfig {
+                inactive_account_anonymize_after_days: 90,
+                deleted_account_purge_after_days: 180,
+            },
         );
         let summary = job.run().await.expect("retention");
         assert_eq!(summary.steps.len(), 8);

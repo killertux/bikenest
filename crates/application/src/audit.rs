@@ -42,7 +42,14 @@ impl AuditEvent {
         target_type: &str,
         target_id: impl Into<String>,
     ) -> Self {
-        Self::new(actor, action, target_type, target_id, "success", serde_json::json!({}))
+        Self::new(
+            actor,
+            action,
+            target_type,
+            target_id,
+            "success",
+            serde_json::json!({}),
+        )
     }
 
     pub fn failure(
@@ -51,7 +58,14 @@ impl AuditEvent {
         target_type: &str,
         target_id: impl Into<String>,
     ) -> Self {
-        Self::new(actor, action, target_type, target_id, "failure", serde_json::json!({}))
+        Self::new(
+            actor,
+            action,
+            target_type,
+            target_id,
+            "failure",
+            serde_json::json!({}),
+        )
     }
 }
 

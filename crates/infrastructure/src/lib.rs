@@ -7,6 +7,7 @@ pub mod db;
 pub mod devdata;
 pub mod email;
 pub mod geocoding;
+pub mod job;
 pub mod moderation;
 pub mod parking;
 pub mod photo;
@@ -24,18 +25,21 @@ pub use community::{
     SqlxContributionHistoryReader, SqlxFavoriteRepository, SqlxParkingContributionRepository,
     SqlxReviewRepository, SqlxVerificationRepository,
 };
-pub use email::{
-    CapturedEmail, FakeEmailProvider, ResendEmailProvider, SmtpEmailProvider, from_env as email_from_env,
-};
-pub use config::{Config, MapConfig, map_config_from_env};
+pub use config::{Config, JobConfig, MapConfig, job_config_from_env, map_config_from_env};
 pub use db::Db;
+pub use email::{
+    CapturedEmail, FakeEmailProvider, ResendEmailProvider, SmtpEmailProvider,
+    from_env as email_from_env,
+};
 pub use geocoding::{FakeGeocoder, MapboxGeocoder, geocoder_from, geocoder_from_env};
+pub use job::{ClaimedJob, JobRegistry, JobServices, SqlxJobRepository, Worker, job_services};
 pub use moderation::{SqlxAuditLogReader, SqlxModerationRepository, SqlxReportRepository};
 pub use parking::{SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader};
-pub use privacy::{
-    SqlxAnonymizationRepository, SqlxExportRepository, SqlxPolicyReader,
-    SqlxPrivacyRequestRepository, SqlxRetentionRepository, seed_policy,
-};
 pub use photo::{LocalImageProcessor, SqlxPhotoRepository, SqlxReviewPhotosReader};
-pub use storage::{SharedObjectStorage, S3ObjectStorage, storage_from_env};
+pub use privacy::{
+    POLICY_LOCALES, POLICY_PLACEHOLDERS, SqlxAnonymizationRepository, SqlxExportRepository,
+    SqlxPolicyReader, SqlxPrivacyRequestRepository, SqlxRetentionRepository,
+    fill_policy_placeholders, seed_policy,
+};
+pub use storage::{S3ObjectStorage, SharedObjectStorage, storage_from_env};
 pub use timezone::OfflineTimezoneResolver;
