@@ -552,6 +552,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "auth.forgot" => ("Forgot password?", "Esqueceu a senha?"),
         "auth.logout" => ("Log out", "Sair"),
         "auth.google" => ("Continue with Google", "Continuar com o Google"),
+        "auth.google_soon" => ("Coming soon", "Em breve"),
         "auth.oauth_note" => ("Or", "Ou"),
 
         // --- auth: verification (A3) ---------------------------------------

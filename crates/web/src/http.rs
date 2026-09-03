@@ -75,6 +75,9 @@ pub struct AppState {
     pub moderation: Arc<ModerationService>,
     pub privacy: Arc<PrivacyService>,
     pub policy: Arc<dyn bikenest_application::PolicyReader>,
+    /// Google sign-in feature flag (product decision: disabled until a real
+    /// OAuth provider exists), read from `GOOGLE_OAUTH_ENABLED`.
+    pub google_oauth_enabled: bool,
 }
 
 /// Builds the full application router with a real database handle and the
@@ -82,6 +85,13 @@ pub struct AppState {
 /// The rate limiter is selected by `VALKEY_URL`/`VALKEY_CLUSTER_URLS`
 /// (`rate_limiter_from_env`, falling back to in-memory).
 pub fn app_router(db: Db, probe_timeout: std::time::Duration) -> Router {
+    let google_oauth_enabled = bikenest_infrastructure::config::google_oauth_enabled_from_env();
+    let app_env = std::env::var("APP_ENV").unwrap_or_default();
+    if google_oauth_enabled && app_env.eq_ignore_ascii_case("production") {
+        panic!(
+            "GOOGLE_OAUTH_ENABLED=true is not allowed in production: only the fake provider exists"
+        );
+    }
     app_router_with(
         db,
         probe_timeout,
@@ -89,17 +99,20 @@ pub fn app_router(db: Db, probe_timeout: std::time::Duration) -> Router {
         FakeOAuthProvider::from_env(),
         Argon2PasswordHasher,
         rate_limiter_from_env(),
-        Arc::new(bikenest_infrastructure::storage_from_env()), // Ledger #7 (MinIO/S3)
+        Arc::new(bikenest_infrastructure::storage_from_env()), // MinIO/S3-compatible object storage
+        google_oauth_enabled,
     )
 }
 
 /// Builds the router with injectable email/OAuth/password/rate-limiter
 /// providers (tests pass fakes — e.g. a fast [`TestPasswordHasher`] and a fresh
-/// in-memory limiter — to keep the suite fast and isolated). See
-/// plans/m2-accounts-auth.md §7 for the wiring.
+/// in-memory limiter — to keep the suite fast and isolated).
 ///
 /// The passed limiter is shared by the auth, contributions, photo and
-/// moderation services so they all read one store (Ledger #6).
+/// moderation services so they all read one store.
+// The parameter list is replaced by a single `Arc<Config>` in the configuration
+// work package (WP6); until then the extra flag pushes it past clippy's limit.
+#[allow(clippy::too_many_arguments)]
 pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
     db: Db,
     probe_timeout: std::time::Duration,
@@ -108,6 +121,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
     hasher: H,
     rate_limiter: Box<dyn RateLimiter>,
     storage: Arc<dyn ObjectStorage>,
+    google_oauth_enabled: bool,
 ) -> Router {
     let rate_limiter: Arc<dyn RateLimiter> = Arc::from(rate_limiter);
     let probe = SqlxDatabaseProbe::new(db.clone(), probe_timeout);
@@ -195,8 +209,9 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         moderation: Arc::new(moderation_service),
         privacy: Arc::new(privacy_service),
         policy: policy_reader,
+        google_oauth_enabled,
     };
-    Router::new()
+    let mut router = Router::new()
         .route("/", get(home))
         .route("/search", get(search))
         .route("/parking/{id}", get(parking_details))
@@ -220,10 +235,16 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         .route(
             "/password-reset/new",
             get(password_reset_new).post(password_reset_new_post),
-        )
-        .route("/auth/google", get(auth_google))
-        .route("/auth/google/fake-consent", get(auth_google_fake_consent))
-        .route("/auth/google/callback", get(auth_google_callback))
+        );
+    // Google sign-in (product decision: disabled until a real OAuth provider
+    // exists). Unregistered routes fall through to the styled 404 handler.
+    if google_oauth_enabled {
+        router = router
+            .route("/auth/google", get(auth_google))
+            .route("/auth/google/fake-consent", get(auth_google_fake_consent))
+            .route("/auth/google/callback", get(auth_google_callback));
+    }
+    router
         .route("/account", get(account))
         .route(
             "/account/password",
@@ -2015,7 +2036,12 @@ struct LoginForm {
     password: String,
 }
 
-async fn login_page(locale: Locale, auth: Auth, Query(q): Query<LoginNotices>) -> Response {
+async fn login_page(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Query(q): Query<LoginNotices>,
+) -> Response {
     if auth.authenticated() {
         return axum::response::Redirect::to("/account").into_response();
     }
@@ -2029,6 +2055,7 @@ async fn login_page(locale: Locale, auth: Auth, Query(q): Query<LoginNotices>) -
             email: String::new(),
             notice: login_notice(tr, &q),
             error: None,
+            google_enabled: state.google_oauth_enabled,
         },
         &token,
     )
@@ -2063,6 +2090,7 @@ async fn login_post(
                     email: String::new(),
                     notice: None,
                     error: Some(tr.t("auth.error.invalid_credentials").to_string()),
+                    google_enabled: state.google_oauth_enabled,
                 },
                 &token,
             )
@@ -2153,6 +2181,7 @@ async fn verify_resend(
                     email: String::new(),
                     notice: None,
                     error: Some(auth_error_message(tr, &err)),
+                    google_enabled: state.google_oauth_enabled,
                 },
                 &t,
             )

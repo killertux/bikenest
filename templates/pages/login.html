@@ -26,7 +26,15 @@
       <a href="/register" class="font-medium text-accent-strong hover:underline">{{ tr.t("auth.signup") }}</a>
       <a href="/password-reset" class="text-accent-strong hover:underline">{{ tr.t("auth.forgot") }}</a>
     </p>
-    <p class="mt-4 border-t border-border pt-4 text-sm text-muted">{{ tr.t("auth.oauth_note") }} <a href="/auth/google" class="font-medium text-accent-strong hover:underline">{{ tr.t("auth.google") }}</a></p>
+    <p class="mt-4 border-t border-border pt-4 text-sm text-muted">
+      {{ tr.t("auth.oauth_note") }}
+      {% if google_enabled %}
+        <a href="/auth/google" class="font-medium text-accent-strong hover:underline">{{ tr.t("auth.google") }}</a>
+      {% else %}
+        <button type="button" disabled aria-disabled="true" class="font-medium text-muted cursor-not-allowed">{{ tr.t("auth.google") }}</button>
+        <span class="text-xs text-muted">{{ tr.t("auth.google_soon") }}</span>
+      {% endif %}
+    </p>
   </div>
 </section>
 {% endblock %}

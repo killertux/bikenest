@@ -468,6 +468,15 @@ fn urlencode(s: &str) -> String {
 }
 
 async fn auth_app() -> (axum::Router, FakeEmailProvider) {
+    // The wider M2/M3/... suite exercises the fake OAuth flow's plumbing, so
+    // it builds with Google sign-in enabled; WP1's own tests below build with
+    // `auth_app_opts(false)` to cover the disabled (default) product state.
+    auth_app_opts(true).await
+}
+
+/// Like [`auth_app`], but with the Google sign-in feature flag set explicitly
+/// (product decision: disabled by default until a real OAuth provider exists).
+async fn auth_app_opts(google_oauth_enabled: bool) -> (axum::Router, FakeEmailProvider) {
     let email = FakeEmailProvider::with_root(None);
     let oauth = FakeOAuthProvider::new("oauth.user@example.com", "sub-oauth-1");
     let db = Db::from_pool(pool().await);
@@ -479,6 +488,7 @@ async fn auth_app() -> (axum::Router, FakeEmailProvider) {
         TestPasswordHasher,
         Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
         std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
+        google_oauth_enabled,
     );
     (app, email)
 }
@@ -1132,6 +1142,68 @@ async fn csrf_header_path_is_accepted(tx: &mut bikenest_test_support::TestTx) {
     );
     let _ = tx;
     cleanup_user("hdr@example.com").await;
+}
+
+// ---------------------------------------------------------------------------
+// WP1: Google sign-in disabled by default (product decision: disable, do not
+// implement real OAuth). `FakeOAuthProvider` still exists for opt-in dev use,
+// but the routes are unregistered unless `GOOGLE_OAUTH_ENABLED` is set.
+// ---------------------------------------------------------------------------
+
+#[db_test]
+async fn google_oauth_disabled_by_default_returns_404(_tx: &mut TestTx) {
+    let app = test_app().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/auth/google")
+                .header("Accept-Language", "en")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    assert!(
+        res.headers().get("set-cookie").is_none(),
+        "a disabled/unregistered route must not set any cookie"
+    );
+}
+
+#[db_test]
+async fn google_oauth_disabled_callback_returns_404(_tx: &mut TestTx) {
+    let (status, _) = get("/auth/google/callback?code=x&state=y").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[db_test]
+async fn login_page_hides_google_link_when_disabled(_tx: &mut TestTx) {
+    let (status, body) = get("/login").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.contains("href=\"/auth/google\""),
+        "no live Google link when the feature is disabled"
+    );
+    assert!(
+        body.contains("Coming soon"),
+        "disabled button shows the coming-soon copy"
+    );
+}
+
+#[db_test]
+async fn google_oauth_enabled_flag_still_redirects(_tx: &mut TestTx) {
+    // Protects the future real-integration plumbing: with the flag explicitly
+    // on, `/auth/google` is registered and behaves as before (redirect to the
+    // provider's authorize URL — the fake's consent stub in this test build).
+    let (app, _) = auth_app_opts(true).await;
+    let (status, _) = get_c(&app, "/auth/google", None).await;
+    assert!(
+        matches!(
+            status,
+            StatusCode::SEE_OTHER | StatusCode::FOUND | StatusCode::TEMPORARY_REDIRECT
+        ),
+        "enabled Google route redirects, got {status}"
+    );
 }
 
 // ---------------------------------------------------------------------------

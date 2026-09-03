@@ -32,6 +32,9 @@ pub struct Config {
     pub moderation: ModerationConfig,
     /// Background job queue (plans/m9-background-jobs.md).
     pub jobs: JobConfig,
+    /// Google sign-in feature flag (product decision: disable until a real
+    /// OAuth provider exists). From `GOOGLE_OAUTH_ENABLED`; default false.
+    pub google_oauth_enabled: bool,
 }
 
 /// Photo upload/derivative limits (§30/#44, Ledger #18), env-driven with the
@@ -97,6 +100,7 @@ impl Config {
             photo: photo_config_from_env(),
             moderation: moderation_config_from_env(),
             jobs: job_config_from_env(),
+            google_oauth_enabled: google_oauth_enabled_from_env(),
         })
     }
 }
@@ -112,6 +116,13 @@ pub fn job_config_from_env() -> JobConfig {
         backoff_base_ms: env_u64("JOBS_BACKOFF_BASE_MS").unwrap_or(2000),
         history_retention_days: env_u32("JOBS_HISTORY_RETENTION_DAYS").unwrap_or(7),
     }
+}
+
+/// Google sign-in feature flag, from `GOOGLE_OAUTH_ENABLED` (accepts
+/// true/1/yes, case-insensitively; unset or anything else is false). Only the
+/// deterministic fake provider exists, so this stays off outside development.
+pub fn google_oauth_enabled_from_env() -> bool {
+    env_bool("GOOGLE_OAUTH_ENABLED").unwrap_or(false)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -336,6 +347,11 @@ mod tests {
             retention_from_env().export_ttl,
             RetentionPolicy::default().export_ttl
         );
+    }
+
+    #[test]
+    fn google_oauth_disabled_by_default() {
+        assert!(!google_oauth_enabled_from_env());
     }
 
     #[test]

@@ -419,6 +419,10 @@ pub struct LoginPage {
     pub email: String,
     pub notice: Option<String>,
     pub error: Option<String>,
+    /// Google sign-in feature flag: when false the link is replaced by a
+    /// disabled "coming soon" button (product decision: disabled until a real
+    /// OAuth provider exists).
+    pub google_enabled: bool,
 }
 
 /// A3 — email verified (success or invalid/expired) + resend.
@@ -785,6 +789,8 @@ pub fn app_router(
 /// Test-oriented constructor: inject email/OAuth/password/rate-limiter providers
 /// (tests pass a fast [`bikenest_test_support::TestPasswordHasher`] and a fresh
 /// in-memory limiter to keep argon2 and ValKey out of the suite).
+// Parameter list collapses into `Arc<Config>` in WP6; see `http::app_router_with`.
+#[allow(clippy::too_many_arguments)]
 pub fn app_router_with<H: bikenest_application::PasswordHasher + Clone + 'static>(
     db: bikenest_infrastructure::Db,
     probe_timeout: std::time::Duration,
@@ -793,6 +799,7 @@ pub fn app_router_with<H: bikenest_application::PasswordHasher + Clone + 'static
     hasher: H,
     rate_limiter: Box<dyn bikenest_application::RateLimiter>,
     storage: std::sync::Arc<dyn bikenest_application::ObjectStorage>,
+    google_oauth_enabled: bool,
 ) -> axum::Router {
     http::app_router_with(
         db,
@@ -802,5 +809,6 @@ pub fn app_router_with<H: bikenest_application::PasswordHasher + Clone + 'static
         hasher,
         rate_limiter,
         storage,
+        google_oauth_enabled,
     )
 }
