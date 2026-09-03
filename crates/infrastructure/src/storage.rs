@@ -2,16 +2,10 @@
 //!
 //! Replaces the local-disk store with an S3-compatible backend (AWS S3,
 //! Cloudflare R2, Backblaze B2, MinIO). Writes go to the bucket; object reads
-//! are served through the app's `/media/{key}` route using HMAC-signed,
-//! time-limited GET URLs (the port's "presigned GET parity") — the bucket stays
-//! private and the app authorizes every media read. The store takes keys as
-//! opaque strings and keeps S3's content-type metadata.
-//!
-//! Note: we deliberately serve media *through the app* (rather than handing the
-//! browser a direct presigned bucket URL). This keeps the `presigned_get`
-//! port method synchronous (it is HMAC signing, not an async S3 presign call)
-//! and preserves the existing signed-URL access-control model. To offload media
-//! to the bucket directly, the port would need `presigned_get` made async.
+//! are served via **direct S3 presigned GET URLs** that point straight at the
+//! bucket — the browser hits the bucket and S3's SigV4 signature authorizes the
+//! read, so the app is not a media proxy and no app-side signing secret is
+//! needed.
 //!
 //! Configured with `S3_*` env (dev defaults target a local MinIO):
 //! - `S3_ENDPOINT` — default `http://localhost:9000`; set `S3_ENDPOINT=` (empty)
@@ -19,32 +13,26 @@
 //! - `S3_REGION` — default `us-east-1`
 //! - `S3_BUCKET` — default `bikenest`
 //! - `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` — default MinIO `minioadmin`
-//! - `MEDIA_SIGNING_SECRET` — required to sign `/media` URLs; dev-insecure default
-//!   (must be overridden — Ledger #14).
+//!
+//! Path-style addressing is always on (required for MinIO; also fine for AWS/R2).
 
 use async_trait::async_trait;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
+use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::Config;
 use aws_smithy_types::byte_stream::ByteStream;
 use bikenest_application::{ObjectStorage, PutObject, StorageError};
-use hmac::{Hmac, KeyInit, Mac};
-use sha2::Sha256;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 pub const DEFAULT_S3_REGION: &str = "us-east-1";
 pub const DEFAULT_S3_BUCKET: &str = "bikenest";
-/// The URL path prefix under which signed objects are served.
-pub const MEDIA_BASE_PATH: &str = "/media";
-
-type HmacSha256 = Hmac<Sha256>;
+const DEV_S3_ENDPOINT: &str = "http://localhost:9000";
 
 #[derive(Clone)]
 pub struct S3ObjectStorage {
     client: aws_sdk_s3::Client,
     bucket: String,
-    /// HMAC key for `/media` signed URLs (must be a strong secret in prod).
-    secret: Vec<u8>,
 }
 
 impl S3ObjectStorage {
@@ -55,7 +43,6 @@ impl S3ObjectStorage {
         bucket: String,
         access_key: String,
         secret_key: String,
-        signing_secret: impl Into<Vec<u8>>,
     ) -> Self {
         let mut builder = Config::builder()
             .behavior_version(BehaviorVersion::latest())
@@ -74,45 +61,23 @@ impl S3ObjectStorage {
         Self {
             client: aws_sdk_s3::Client::from_conf(builder.build()),
             bucket,
-            secret: signing_secret.into(),
         }
     }
 
     /// Build from the `S3_*` env vars, defaulting to a local MinIO so `cargo run`
-    /// works against the compose stack (dev). Production sets real credentials
-    /// and a real `MEDIA_SIGNING_SECRET`.
+    /// works against the compose stack (dev). Production sets real credentials.
     pub fn from_env() -> Self {
         let endpoint = std::env::var("S3_ENDPOINT")
             .ok()
             .filter(|s| !s.is_empty())
-            .or_else(|| Some("http://localhost:9000".to_string()));
+            .or_else(|| Some(DEV_S3_ENDPOINT.to_string()));
         let region = std::env::var("S3_REGION").unwrap_or_else(|_| DEFAULT_S3_REGION.to_string());
         let bucket = std::env::var("S3_BUCKET").unwrap_or_else(|_| DEFAULT_S3_BUCKET.to_string());
         let access =
             std::env::var("S3_ACCESS_KEY_ID").unwrap_or_else(|_| "minioadmin".to_string());
         let secret =
             std::env::var("S3_SECRET_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".to_string());
-        let signing_secret = std::env::var("MEDIA_SIGNING_SECRET")
-            .unwrap_or_else(|_| "dev-insecure-media-signing-secret".to_string());
-        Self::new(endpoint, region, bucket, access, secret, signing_secret)
-    }
-
-    /// Reject keys that would break the `/media/{key}` URL (`?`/`#` keep the
-    /// query/URL from parsing cleanly). Keys are otherwise opaque.
-    fn safe_key(&self, key: &str) -> Result<(), StorageError> {
-        if key.is_empty() || key.contains(['?', '#', '\n', '\r']) {
-            return Err(StorageError::Unexpected(format!("unsafe key: {key}")));
-        }
-        Ok(())
-    }
-
-    fn mac(&self, key: &str, exp: u64) -> HmacSha256 {
-        let mut mac =
-            HmacSha256::new_from_slice(&self.secret).expect("HMAC accepts any key length");
-        mac.update(key.as_bytes());
-        mac.update(b"\n");
-        mac.update(exp.to_string().as_bytes());
-        mac
+        Self::new(endpoint, region, bucket, access, secret)
     }
 }
 
@@ -121,35 +86,9 @@ pub fn storage_from_env() -> S3ObjectStorage {
     S3ObjectStorage::from_env()
 }
 
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-fn to_hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
-}
-
-fn from_hex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
-        return None;
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-        .collect()
-}
-
 #[async_trait]
 impl ObjectStorage for S3ObjectStorage {
     async fn put(&self, req: PutObject<'_>) -> Result<String, StorageError> {
-        self.safe_key(&req.key)?;
         self.client
             .put_object()
             .bucket(&self.bucket)
@@ -165,12 +104,19 @@ impl ObjectStorage for S3ObjectStorage {
         Ok(req.key)
     }
 
-    fn presigned_get(&self, key: &str, ttl: Duration) -> Result<String, StorageError> {
-        // Signing does not touch the store — pure HMAC + URL assembly.
-        self.safe_key(key)?;
-        let exp = unix_now() + ttl.as_secs().max(1);
-        let sig = to_hex(&self.mac(key, exp).finalize().into_bytes());
-        Ok(format!("{MEDIA_BASE_PATH}/{key}?exp={exp}&sig={sig}"))
+    async fn presigned_get(&self, key: &str, ttl: Duration) -> Result<String, StorageError> {
+        // Direct S3 presigned URL (SigV4). Presigning does no network I/O.
+        let cfg = PresigningConfig::expires_in(ttl)
+            .map_err(|e| StorageError::Unexpected(format!("presign config: {e}")))?;
+        let request = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .presigned(cfg)
+            .await
+            .map_err(|e| StorageError::Unexpected(format!("presign: {e}")))?;
+        Ok(request.uri().to_string())
     }
 
     async fn delete(&self, key: &str) -> Result<(), StorageError> {
@@ -191,52 +137,17 @@ impl ObjectStorage for S3ObjectStorage {
         }
     }
 
-    async fn get(&self, key: &str) -> Result<(Vec<u8>, String), StorageError> {
-        self.safe_key(key)?;
-        let resp = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await
-            .map_err(|e| {
-                if matches!(
-                    e.as_service_error(),
-                    Some(aws_sdk_s3::operation::get_object::GetObjectError::NoSuchKey(_))
-                ) {
-                    StorageError::NotFound
-                } else {
-                    tracing::warn!(error = %e, key = %key, "S3 get failed");
-                    StorageError::Unavailable
-                }
-            })?;
-        let content_type = resp
-            .content_type()
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "application/octet-stream".to_string());
-        let bytes = resp
-            .body
-            .collect()
-            .await
-            .map_err(|e| {
-                tracing::warn!(error = %e, key = %key, "S3 get body failed");
-                StorageError::Unavailable
-            })?
-            .into_bytes()
-            .to_vec();
-        Ok((bytes, content_type))
+    async fn get(&self, _key: &str) -> Result<(Vec<u8>, String), StorageError> {
+        // Media is served via direct S3 presigned URLs that bypass the app; the
+        // app's `/media` route is not used and should not proxy from the bucket.
+        Err(StorageError::Unexpected(
+            "objects are served via S3 presigned URLs (no app media proxy)".to_string(),
+        ))
     }
 
-    fn verify_get(&self, key: &str, exp: u64, sig: &str) -> bool {
-        if exp < unix_now() {
-            return false;
-        }
-        let Some(provided) = from_hex(sig) else {
-            return false;
-        };
-        // `verify_slice` is constant-time.
-        self.mac(key, exp).verify_slice(&provided).is_ok()
+    fn verify_get(&self, _key: &str, _exp: u64, _sig: &str) -> bool {
+        // No app-side signature scheme; presigned URLs are self-authorizing.
+        false
     }
 }
 
@@ -258,8 +169,8 @@ impl ObjectStorage for SharedObjectStorage {
         self.0.put(req).await
     }
 
-    fn presigned_get(&self, key: &str, ttl: Duration) -> Result<String, StorageError> {
-        self.0.presigned_get(key, ttl)
+    async fn presigned_get(&self, key: &str, ttl: Duration) -> Result<String, StorageError> {
+        self.0.presigned_get(key, ttl).await
     }
 
     async fn delete(&self, key: &str) -> Result<(), StorageError> {
@@ -280,55 +191,46 @@ mod tests {
     use super::*;
 
     fn store() -> S3ObjectStorage {
+        // Fake credentials; no network happens at construction.
         S3ObjectStorage::new(
             Some("http://localhost:9000".to_string()),
             DEFAULT_S3_REGION.to_string(),
             "bikenest".to_string(),
             "minioadmin".to_string(),
             "minioadmin".to_string(),
-            b"secret".to_vec(),
         )
     }
 
-    #[test]
-    fn signed_media_url_verifies_and_detects_tampering() {
+    #[tokio::test]
+    async fn presigned_get_is_a_direct_signed_url() {
         let s = store();
-        let url = s.presigned_get("seed/x.jpg", Duration::from_secs(60)).unwrap();
-        assert!(url.starts_with("/media/seed/x.jpg?"), "uses the /media route: {url}");
-        let (_, qs) = url.split_once('?').unwrap();
-        let mut exp = 0u64;
-        let mut sig = String::new();
-        for kv in qs.split('&') {
-            let (k, v) = kv.split_once('=').unwrap();
-            match k {
-                "exp" => exp = v.parse().unwrap(),
-                "sig" => sig = v.to_string(),
-                _ => {}
-            }
-        }
-        assert!(s.verify_get("seed/x.jpg", exp, &sig));
-        assert!(!s.verify_get("seed/other.jpg", exp, &sig), "key tamper rejected");
-        assert!(!s.verify_get("seed/x.jpg", exp, "deadbeef"), "sig tamper rejected");
+        let url = s
+            .presigned_get("seed/x.jpg", Duration::from_secs(60))
+            .await
+            .expect("presign is local crypto, no network");
+        // Points at the endpoint/bucket and carries SigV4 query params.
+        assert!(url.contains("localhost:9000"), "should point at the S3 endpoint: {url}");
+        assert!(url.contains("X-Amz-Signature="), "should carry a signature: {url}");
+        assert!(url.contains("X-Amz-Expires=60"), "should carry the TTL: {url}");
+    }
+
+    #[tokio::test]
+    async fn get_is_unsupported_for_direct_presign_model() {
+        let s = store();
+        assert!(matches!(
+            s.get("seed/x.jpg").await,
+            Err(StorageError::Unexpected(_))
+        ), "S3 storage must not proxy media");
     }
 
     #[test]
-    fn expired_signature_is_rejected() {
-        let s = store();
-        let sig = to_hex(&s.mac("k.jpg", 1).finalize().into_bytes());
-        assert!(!s.verify_get("k.jpg", 1, &sig), "past expiry rejected");
-    }
-
-    #[test]
-    fn rejects_bad_keys() {
-        let s = store();
-        assert!(s.presigned_get("a?b.jpg", Duration::from_secs(1)).is_err());
-        assert!(s.presigned_get("", Duration::from_secs(1)).is_err());
+    fn verify_get_is_false() {
+        assert!(!store().verify_get("seed/x.jpg", 0, "sig"));
     }
 
     #[test]
     fn from_env_defaults_to_local_minio() {
         assert_eq!(DEFAULT_S3_BUCKET, "bikenest");
         assert_eq!(DEFAULT_S3_REGION, "us-east-1");
-        assert_eq!(MEDIA_BASE_PATH, "/media");
     }
 }

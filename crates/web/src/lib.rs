@@ -308,7 +308,7 @@ impl DetailsPage {
     /// verification panel, favorite, recommendation explanation) overlaid on
     /// the base detail view. `viewer_verified` / `viewer_authenticated` gate the
     /// contributor actions; anonymous viewers get a public-only page.
-    pub fn build_community(
+    pub async fn build_community(
         tr: Translator,
         v: bikenest_application::ParkingDetailsView,
         gallery: Vec<PhotoVm>,
@@ -321,33 +321,33 @@ impl DetailsPage {
     ) -> Self {
         let mut page = Self::build(tr, v, gallery, csrf);
         let Some(c) = community else { return page };
-        page.reviews = c.reviews.iter().map(|r| {
-            let photos = c
-                .review_photos
-                .get(&r.id)
-                .map(|ps| {
-                    ps.iter()
-                        .filter_map(|p| {
-                            let url = view::resolve_photo(storage, Some(&p.key))?;
-                            let thumb_url = p
-                                .thumbnail_key
-                                .as_deref()
-                                .and_then(|k| view::resolve_photo(storage, Some(k)))
-                                .unwrap_or_else(|| url.clone());
-                            Some(PhotoVm {
-                                url,
-                                thumb_url,
-                                alt: p
-                                    .alt
-                                    .clone()
-                                    .unwrap_or_else(|| "Review photo".to_string()),
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            view::review_vm(tr, r, false, photos)
-        }).collect();
+        let mut reviews = Vec::with_capacity(c.reviews.len());
+        for r in &c.reviews {
+            let mut photos = Vec::new();
+            if let Some(ps) = c.review_photos.get(&r.id) {
+                for p in ps {
+                    let Some(url) = view::resolve_photo(storage, Some(&p.key)).await else {
+                        continue;
+                    };
+                    let thumb_url = match p.thumbnail_key.as_deref() {
+                        Some(k) => view::resolve_photo(storage, Some(k))
+                            .await
+                            .unwrap_or_else(|| url.clone()),
+                        None => url.clone(),
+                    };
+                    photos.push(PhotoVm {
+                        url,
+                        thumb_url,
+                        alt: p
+                            .alt
+                            .clone()
+                            .unwrap_or_else(|| "Review photo".to_string()),
+                    });
+                }
+            }
+            reviews.push(view::review_vm(tr, r, false, photos));
+        }
+        page.reviews = reviews;
         page.confidence_code = c.confidence.as_code();
         page.confidence_label = view::confidence_label(tr, c.confidence).to_string();
         page.disputed = c.disputed;

@@ -32,9 +32,11 @@ pub trait ObjectStorage: Send + Sync {
     /// Returns the stored key (echoed for parity with providers that rewrite it).
     async fn put(&self, req: PutObject<'_>) -> Result<String, StorageError>;
 
-    /// A time-limited GET URL for a stored object (S3-presign parity). This only
-    /// signs a URL; it does not touch the backing store, so it is synchronous.
-    fn presigned_get(&self, key: &str, ttl: Duration) -> Result<String, StorageError>;
+    /// A time-limited GET URL for a stored object. For an S3-compatible store
+    /// this returns a *direct* presigned URL (S3 SigV4 signs it; the browser
+    /// hits the bucket). Async because the AWS SDK presigner is async.
+    async fn presigned_get(&self, key: &str, ttl: Duration) -> Result<String, StorageError>;
+
 
     /// Remove an object. Missing objects are not an error (idempotent).
     async fn delete(&self, key: &str) -> Result<(), StorageError>;

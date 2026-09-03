@@ -34,9 +34,8 @@ services:
       # Object storage (Ledger #7). MEDIA_ROOT defaults to <repo>/media, which
       # is the mounted /app/media; the signing secret is dev-only here.
       MEDIA_ROOT: /app/media
-      MEDIA_SIGNING_SECRET: dev-compose-media-secret
-      # Object storage (Ledger #7): MinIO (S3-compatible) for dev. The app
-      # serves media via signed /media URLs; MinIO is the backing store.
+      # Object storage (Ledger #7): MinIO (S3-compatible) for dev. Media is
+      # served via direct S3 presigned URLs (no app signing secret).
       S3_ENDPOINT: http://minio:9000
       S3_REGION: us-east-1
       S3_BUCKET: bikenest

@@ -365,7 +365,8 @@ async fn home(State(state): State<AppState>, locale: Locale, auth: Auth) -> Resp
     let tr = Translator::new(locale);
     // A few example locations near the featured landmark, when data exists
     // (UI_DESIGN P1: optional section). Failure → render without them.
-    let featured = state
+    let mut featured = Vec::new();
+    if let Ok((page, _)) = state
         .search
         .execute(SearchInput {
             query: Some("Rua XV de Novembro".to_string()),
@@ -374,27 +375,18 @@ async fn home(State(state): State<AppState>, locale: Locale, auth: Auth) -> Resp
             ..Default::default()
         })
         .await
-        .map(|(page, _)| {
-            let now = chrono::Utc::now();
-            page.items
-                .iter()
-                .map(|s| {
-                    let photo_url =
-                        view::resolve_photo(&*state.storage, s.photo_key.as_deref());
-                    CardVm::from_summary(
-                        tr,
-                        s,
-                        bikenest_domain::categorize(
-                            s.last_verified_at,
-                            now,
-                            &state.freshness.thresholds,
-                        ),
-                        photo_url,
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    {
+        let now = chrono::Utc::now();
+        for s in &page.items {
+            let photo_url = view::resolve_photo(&*state.storage, s.photo_key.as_deref()).await;
+            featured.push(CardVm::from_summary(
+                tr,
+                s,
+                bikenest_domain::categorize(s.last_verified_at, now, &state.freshness.thresholds),
+                photo_url,
+            ));
+        }
+    }
 
     let page = HomePage {
         layout: PageLayout::new(tr.t("home.title").to_string(), "home")
@@ -526,6 +518,7 @@ async fn search(
                 &state.freshness.thresholds,
                 &*state.storage,
             )
+            .await
         }
         Err(bikenest_application::SearchError::MissingDestination) => ResultsData {
             destination_label: None,
@@ -621,22 +614,26 @@ async fn parking_details(
             let gallery = match state.photos.photos(id).await {
                 Ok(photos) => {
                     let name = view.location.name().to_string();
-                    photos
-                        .into_iter()
-                        .filter_map(|p| {
-                            let url = view::resolve_photo(&*state.storage, Some(&p.key))?;
-                            let thumb_url = p
-                                .thumbnail_key
-                                .as_deref()
-                                .and_then(|k| view::resolve_photo(&*state.storage, Some(k)))
-                                .unwrap_or_else(|| url.clone());
-                            Some(PhotoVm {
-                                url,
-                                thumb_url,
-                                alt: p.alt.unwrap_or_else(|| format!("Photo of {name}")),
-                            })
-                        })
-                        .collect()
+                    let mut gallery = Vec::new();
+                    for p in photos {
+                        let Some(url) =
+                            view::resolve_photo(&*state.storage, Some(&p.key)).await
+                        else {
+                            continue;
+                        };
+                        let thumb_url = match p.thumbnail_key.as_deref() {
+                            Some(k) => view::resolve_photo(&*state.storage, Some(k))
+                                .await
+                                .unwrap_or_else(|| url.clone()),
+                            None => url.clone(),
+                        };
+                        gallery.push(PhotoVm {
+                            url,
+                            thumb_url,
+                            alt: p.alt.unwrap_or_else(|| format!("Photo of {name}")),
+                        });
+                    }
+                    gallery
                 }
                 Err(_) => Vec::new(),
             };
@@ -663,6 +660,7 @@ async fn parking_details(
                 is_moderator,
                 &*state.storage,
             )
+            .await
             .notice(notice);
             render(page, StatusCode::OK)
         }
@@ -795,10 +793,13 @@ async fn moderation_photos(
         Err(resp) => return resp,
     };
     let items = match state.photo.list_pending_photos(user).await {
-        Ok(photos) => photos
-            .iter()
-            .map(|p| view::moderation_photo_vm(tr, &*state.storage, p))
-            .collect(),
+        Ok(photos) => {
+            let mut items = Vec::with_capacity(photos.len());
+            for p in &photos {
+                items.push(view::moderation_photo_vm(tr, &*state.storage, p).await);
+            }
+            items
+        }
         Err(_) => Vec::new(),
     };
     render(
@@ -3638,7 +3639,7 @@ async fn account_favorites(
                 now,
                 &state.freshness.thresholds,
             );
-            let photo_url = view::resolve_photo(&*state.storage, None);
+            let photo_url = view::resolve_photo(&*state.storage, None).await;
             items.push(CardVm::from_summary(tr, &summary, freshness, photo_url));
         }
     }

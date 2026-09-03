@@ -31,8 +31,9 @@ pub fn escape_script_json(s: String) -> String {
 }
 
 /// Resolve a location's stored photo key to a presigned URL, if present.
-pub fn resolve_photo(storage: &dyn ObjectStorage, key: Option<&str>) -> Option<String> {
-    key.and_then(|k| storage.presigned_get(k, PHOTO_URL_TTL).ok())
+pub async fn resolve_photo(storage: &dyn ObjectStorage, key: Option<&str>) -> Option<String> {
+    let k = key?;
+    storage.presigned_get(k, PHOTO_URL_TTL).await.ok()
 }
 
 /// Filterable parking-type codes (labels come from the translator).
@@ -278,7 +279,7 @@ pub struct ResultsData {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn build_results(
+pub async fn build_results(
     t: Translator,
     page: &bikenest_application::SearchPage,
     hit: Option<&GeoHit>,
@@ -288,19 +289,12 @@ pub fn build_results(
     thresholds: &bikenest_domain::FreshnessThresholds,
     storage: &dyn ObjectStorage,
 ) -> ResultsData {
-    let items: Vec<CardVm> = page
-        .items
-        .iter()
-        .map(|s| {
-            let freshness = bikenest_domain::categorize(
-                s.last_verified_at,
-                now,
-                thresholds,
-            );
-            let photo_url = resolve_photo(storage, s.photo_key.as_deref());
-            CardVm::from_summary(t, s, freshness, photo_url)
-        })
-        .collect();
+    let mut items = Vec::with_capacity(page.items.len());
+    for s in &page.items {
+        let freshness = bikenest_domain::categorize(s.last_verified_at, now, thresholds);
+        let photo_url = resolve_photo(storage, s.photo_key.as_deref()).await;
+        items.push(CardVm::from_summary(t, s, freshness, photo_url));
+    }
 
     let map_json = escape_script_json(
         serde_json::json!({
@@ -596,16 +590,16 @@ pub struct ModerationPhotoVm {
     pub uploaded_label: String,
 }
 
-pub fn moderation_photo_vm(
+pub async fn moderation_photo_vm(
     t: Translator,
     storage: &dyn ObjectStorage,
     p: &PendingPhoto,
 ) -> ModerationPhotoVm {
-    let full_url = resolve_photo(storage, Some(&p.storage_key)).unwrap_or_default();
-    let thumb_url = p
-        .thumbnail_key
-        .as_deref()
-        .and_then(|k| resolve_photo(storage, Some(k)));
+    let full_url = resolve_photo(storage, Some(&p.storage_key)).await.unwrap_or_default();
+    let thumb_url = match p.thumbnail_key.as_deref() {
+        Some(k) => resolve_photo(storage, Some(k)).await,
+        None => None,
+    };
     let alt = p
         .alt
         .clone()

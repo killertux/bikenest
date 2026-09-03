@@ -17,8 +17,8 @@ The multi-stage `Dockerfile` (`rust:1.95` builder → `debian:bookworm-slim`) ba
 the release binary and `web/static/`. Templates and migrations are **embedded**
 (Askama / `sqlx::migrate!`), so nothing else is copied. Uploaded media lives in an
 **S3-compatible bucket** (MinIO in dev), not the image; the bucket is the
-configured store (`S3_*` env). Signed `/media` URLs point at the app, which
-proxies from the bucket.
+configured store (`S3_*` env). Media is served via **direct S3 presigned GET
+URLs** (the browser hits the bucket; the app is not a media proxy).
 
 Build is reproducible because `Cargo.lock` is committed and the toolchain is
 pinned by the base image tag. No `DATABASE_URL`, no offline cache, no build-time
@@ -34,8 +34,7 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | `DATABASE_URL` | Postgres DSN. Example `postgres://user:pass@db:5432/bikenest` |
 | `BIND_ADDR` | default `0.0.0.0:8080` |
 | `BASE_URL` | the public origin, e.g. `https://bikenest.example.com` — builds links + canonical URLs. **Must be reachable** |
-| `MEDIA_SIGNING_SECRET` | signs the expiring `/media` GET URLs. Set a long random secret; rotate deliberately. **Required** in production (Ledger #14) |
-| `MEDIA_ROOT` | legacy local media directory (default `/app/media`) — only used by the retention orphan-media sweep; with S3 the objects live in the bucket |
+| `MEDIA_ROOT` | legacy local media directory (default `/app/media`) — only used by the retention orphan-media sweep; with direct S3 presign the objects live in the bucket |
 | `S3_ENDPOINT` | **Object storage** (Ledger #7): the S3-compatible endpoint (default `http://localhost:9000` → MinIO). Set `S3_ENDPOINT=` (empty) for the standard AWS endpoint |
 | `S3_REGION` / `S3_BUCKET` | coverage: region (default `us-east-1`) + bucket name (default `bikenest`) |
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | S3 credentials (default MinIO `minioadmin`; **required** real creds in prod) |
@@ -106,9 +105,10 @@ The map/tile, geocoder, email, OAuth and object-storage integrations
   (OSM) is the no-cost, no-external-transfer alternative if preferred.
 
 **Object storage (Ledger #7).** Media is stored in an S3-compatible bucket
-(MinIO in dev, AWS/S3/R2/B2 in prod; `S3_*` env) and served through the app via
-signed `/media` URLs (the bucket stays private, the app authorizes every read).
-Selectable by `S3_ENDPOINT`/`S3_BUCKET`; defaults target the compose MinIO.
+(MinIO in dev, AWS/S3/R2/B2 in prod; `S3_*` env) and served via **direct S3
+presigned GET URLs** — the browser hits the bucket and S3's SigV4 signature
+authorizes the read (no app-side proxy, no app signing secret). Selectable by
+`S3_ENDPOINT`/`S3_BUCKET`; defaults target the compose MinIO.
 
 **Email (Ledger #4) — done in code.** Provider is selected by `EMAIL_PROVIDER`
 (`fake` | `smtp` | `resend`, default `fake`; dev uses `smtp` → Mailpit). For

@@ -44,8 +44,8 @@ existing `docs/provider-transfer-inventory.md` for third-party transfer.
 
 Stop the bleed before investigating fully:
 
-- Rotate the involved secret (`MEDIA_SIGNING_SECRET`, DB password, email/OAuth
-  keys, `ADMIN_PASSWORD`).
+- Rotate the involved secret (S3 access keys, DB password, email/OAuth keys,
+  `ADMIN_PASSWORD`).
 - Revoke sessions / tokens if credentials were exposed (the export/anonymization
   commands or a manual session purge).
 - If a photo/object or a moderation decision is the subject, set it

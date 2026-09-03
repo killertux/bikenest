@@ -183,8 +183,8 @@ credentials needed.
 - `DATABASE_URL` — Postgres connection (required, read at build time by SQLx).
 - `BIND_ADDR` — HTTP bind address (default `0.0.0.0:8080`).
 - `MEDIA_ROOT` — legacy local media directory (default `<repo>/media`, gitignored); only the
-  retention orphan-media sweep reads it. Media objects now live in the S3 bucket.
-- `MEDIA_SIGNING_SECRET` — signs the expiring `/media` GET URLs (set a real secret outside dev).
+  retention orphan-media sweep reads it. Media objects now live in the S3 bucket, served via direct
+  presigned URLs.
 - `S3_ENDPOINT` / `S3_REGION` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` —
   S3-compatible object storage (Ledger #7); defaults target a local MinIO in docker-compose.
 - `BASE_URL` — builds emailed verification/reset links (default `http://localhost:8080`).

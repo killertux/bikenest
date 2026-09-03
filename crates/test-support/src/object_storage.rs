@@ -53,7 +53,7 @@ impl ObjectStorage for TestObjectStorage {
         Ok(req.key)
     }
 
-    fn presigned_get(&self, key: &str, ttl: Duration) -> Result<String, StorageError> {
+    async fn presigned_get(&self, key: &str, ttl: Duration) -> Result<String, StorageError> {
         let exp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())

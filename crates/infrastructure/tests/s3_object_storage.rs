@@ -27,7 +27,6 @@ fn store() -> S3ObjectStorage {
         env_or("S3_TEST_BUCKET", "bikenest"),
         env_or("S3_TEST_ACCESS_KEY_ID", "minioadmin"),
         env_or("S3_TEST_SECRET_ACCESS_KEY", "minioadmin"),
-        b"test-secret".to_vec(),
     )
 }
 
@@ -50,25 +49,15 @@ async fn put_get_delete_round_trip() {
     };
     assert_eq!(k, key);
 
-    let (got, ct) = s.get(&key).await.expect("get should succeed");
-    assert_eq!(got, bytes);
-    assert_eq!(ct, "image/jpeg");
+    // Direct S3 presigned URL (SigV4) pointing at the bucket — the browser hits
+    // the bucket directly; the app is not a media proxy.
+    let url = s.presigned_get(&key, Duration::from_secs(60)).await.unwrap();
+    assert!(url.contains("X-Amz-Signature="), "direct S3 presigned url: {url}");
+    assert!(url.contains("X-Amz-Expires=60"), "carries TTL: {url}");
+    assert!(!url.starts_with("/media/"), "direct presign bypasses the app: {url}");
 
-    // predigned URL is a signed /media URL that verifies.
-    let url = s.presigned_get(&key, Duration::from_secs(60)).unwrap();
-    assert!(url.starts_with("/media/"), "signed /media url: {url}");
-    assert!(url.contains("exp=") && url.contains("sig="), "carries exp+sig: {url}");
-    let (_, qs) = url.split_once('?').unwrap();
-    let mut exp = 0u64;
-    let mut sig = String::new();
-    for kv in qs.split('&') {
-        if let Some((k, v)) = kv.split_once('=') {
-            if k == "exp" { exp = v.parse().unwrap(); }
-            if k == "sig" { sig = v.to_string(); }
-        }
-    }
-    assert!(s.verify_get(&key, exp, &sig), "signed url verifies");
+    // `get` (the app /media proxy path) is intentionally unsupported.
+    assert!(matches!(s.get(&key).await, Err(bikenest_application::StorageError::Unexpected(_))));
 
     s.delete(&key).await.expect("delete should succeed");
-    assert!(matches!(s.get(&key).await, Err(bikenest_application::StorageError::NotFound)), "deleted object is gone");
 }

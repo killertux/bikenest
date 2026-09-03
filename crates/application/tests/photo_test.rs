@@ -64,7 +64,7 @@ impl ObjectStorage for FakeStorage {
         self.puts.lock().unwrap().push(req.key.clone());
         Ok(req.key)
     }
-    fn presigned_get(
+    async fn presigned_get(
         &self,
         key: &str,
         _ttl: Duration,
@@ -408,7 +408,7 @@ async fn upload_compensates_deletes_row_when_second_put_fails() {
             self.0.puts.lock().unwrap().push(req.key.clone());
             Ok(req.key)
         }
-        fn presigned_get(&self, key: &str, _ttl: Duration) -> Result<String, bikenest_application::StorageError> {
+        async fn presigned_get(&self, key: &str, _ttl: Duration) -> Result<String, bikenest_application::StorageError> {
             Ok(format!("/media/{key}"))
         }
         async fn delete(&self, key: &str) -> Result<(), bikenest_application::StorageError> {
