@@ -727,7 +727,7 @@ pub fn report_vm(t: Translator, r: &bikenest_application::Report) -> ReportVm {
         state_code: r.state.as_code(),
         state_label: report_state_label(t, r.state),
         state_color: match r.state {
-            bikenest_domain::ReportState::Open => "error",
+            bikenest_domain::ReportState::Open => "danger",
             bikenest_domain::ReportState::UnderReview => "aging",
             bikenest_domain::ReportState::Resolved | bikenest_domain::ReportState::Dismissed => {
                 "fresh"

@@ -206,7 +206,7 @@
                   <div class="flex items-center gap-3">
                     {% if is_authenticated %}
                     <button type="button" @click="report('review', {{ r.id }})"
-                            class="text-xs text-muted hover:text-error">{{ tr.t("report.action") }}</button>
+                            class="text-xs text-muted hover:text-danger">{{ tr.t("report.action") }}</button>
                     {% endif %}
                     <span class="text-xs text-muted">{{ r.created_label }}</span>
                   </div>
@@ -247,10 +247,10 @@
       <div class="rounded-2xl border border-border bg-surface p-4 text-sm">
         <div class="flex items-center justify-between gap-2">
           <h2 class="font-display text-sm font-semibold">{{ tr.t("confidence.title") }}</h2>
-          <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if confidence_code == "recently_verified" || confidence_code == "verified" %}bg-fresh/10 text-fresh{% else if confidence_code == "conflicting" %}bg-error/10 text-error{% else if confidence_code == "stale" %}bg-stale/10 text-stale{% else %}bg-bg text-muted{% endif %}">{{ confidence_label }}</span>
+          <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if confidence_code == "recently_verified" || confidence_code == "verified" %}bg-fresh/10 text-fresh{% else if confidence_code == "conflicting" %}bg-danger/10 text-danger{% else if confidence_code == "stale" %}bg-stale/10 text-stale{% else %}bg-bg text-muted{% endif %}">{{ confidence_label }}</span>
         </div>
         {% if disputed %}
-          <div class="mt-2 rounded-lg border border-error/30 bg-error/10 px-3 py-2 text-xs text-error">
+          <div class="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
             {{ tr.t("confidence.disputed") }}
           </div>
           {% if !dispute_items.is_empty() %}
@@ -280,7 +280,7 @@
                 <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
                 <input type="hidden" name="kind" value="existence" />
                 <input type="hidden" name="result" value="no_longer_exists" />
-                <button type="submit" class="rounded-lg border border-error/30 px-3 py-2 text-sm text-error hover:border-error">{{ tr.t("verify.no_longer_exists") }}</button>
+                <button type="submit" class="rounded-lg border border-danger/30 px-3 py-2 text-sm text-danger hover:border-danger">{{ tr.t("verify.no_longer_exists") }}</button>
               </form>
               <form action="/parking/{{ id }}/verify" method="post" hx-post="/parking/{{ id }}/verify" hx-target="#verification-panel" hx-swap="innerHTML" class="contents">
                 <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
@@ -336,10 +336,10 @@
 </div>
 
 {% if is_authenticated %}
-<!-- Report modal (M5 §43). Any `bikenest:report` event sets the target; the
-     modal posts to /reports with the resolved target_type + target_id. -->
+<!-- Report modal. Any `bikenest:report` event sets the target; the modal
+     posts to /reports with the resolved target_type + target_id. -->
 <div x-data="reportModal" data-report-id="{{ id }}"
-     @window:bikenest:report.window="openReport">
+     @bikenest:report.window="openReport">
   <div x-show="open" x-cloak
        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
        @click.self="close">

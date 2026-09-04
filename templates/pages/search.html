@@ -1,11 +1,12 @@
 {% extends "layouts/base.html" %}
+{% import "components/search_state_inputs.html" as state %}
 {% block content %}
 <div x-data="searchFilters">
 
 <!-- ======== Search strip (P2 — pre-filled, editable) ======== -->
 <section class="border-b border-border bg-surface">
   <div class="mx-auto max-w-shell px-4 pb-6 pt-8 lg:px-8">
-    <h1 class="font-display text-2xl font-bold tracking-tight sm:text-3xl">
+    <h1 id="search-heading" class="font-display text-2xl font-bold tracking-tight sm:text-3xl">
       {% if let Some(label) = results.destination_label %}
         {{ tr.t("search.heading.near") }} <span class="text-accent-strong">“{{ label }}”</span>
       {% else %}
@@ -17,10 +18,10 @@
       id="search-form"
       action="/search" method="get"
       hx-get="/search" hx-target="#results" hx-swap="innerHTML"
+      hx-push-url="true" hx-indicator="#results-indicator"
       class="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center"
     >
-      {% if let Some(lat) = form.lat %}<input type="hidden" name="lat" value="{{ lat }}" />{% endif %}
-      {% if let Some(lon) = form.lon %}<input type="hidden" name="lon" value="{{ lon }}" />{% endif %}
+      {% call state::hidden(form, true, false, false) %}
       <div class="relative flex-1">
         <svg aria-hidden="true" class="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-muted" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
         <label for="q" class="sr-only">{{ tr.t("home.search.placeholder") }}</label>
@@ -60,15 +61,8 @@
           <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.5 9.9 3.8 4 6v15l5.9-2.2 4.2 1.7 5.9-2.3V3.7Z" /><path d="M9.9 3.8v15" /><path d="M14.1 5.5v15" /></svg>
           <span x-text="mapOpen ? '{{ tr.t("search.map.hide") }}' : '{{ tr.t("search.map.show") }}'">{{ tr.t("search.map.show") }}</span>
         </button>
-        <form action="/search" method="get" hx-get="/search" hx-target="#results" hx-swap="innerHTML" class="flex items-center gap-2.5">
-          {% if let Some(lat) = form.lat %}<input type="hidden" name="lat" value="{{ lat }}" />{% endif %}
-          {% if let Some(lon) = form.lon %}<input type="hidden" name="lon" value="{{ lon }}" />{% endif %}
-          {% if q_set() %}<input type="hidden" name="q" value="{{ form.q }}" />{% endif %}
-          {% if let Some(r) = form.radius %}<input type="hidden" name="radius" value="{{ r }}" />{% endif %}
-          {% if !form.cost.is_empty() %}<input type="hidden" name="cost" value="{{ form.cost }}" />{% endif %}
-          {% if !form.parking_type.is_empty() %}<input type="hidden" name="type" value="{{ form.parking_type }}" />{% endif %}
-          {% if !form.security.is_empty() %}<input type="hidden" name="security" value="{{ form.security }}" />{% endif %}
-          {% if !form.open_now.is_empty() %}<input type="hidden" name="open_now" value="{{ form.open_now }}" />{% endif %}
+        <form action="/search" method="get" hx-get="/search" hx-target="#results" hx-swap="innerHTML" hx-push-url="true" hx-indicator="#results-indicator" class="flex items-center gap-2.5">
+          {% call state::hidden(form, false, true, false) %}
           <label class="flex items-center gap-2 text-sm text-muted">
             {{ tr.t("search.sort.label") }}
             <select
@@ -82,6 +76,7 @@
               <option value="recently_verified" {% if sort_is("recently_verified") %}selected{% endif %}>{{ tr.t("search.sort.recently_verified") }}</option>
             </select>
           </label>
+          <noscript><button type="submit" class="rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg">{{ tr.t("search.filters.apply") }}</button></noscript>
         </form>
         <button @click="toggleFilters" :aria-expanded="filtersOpen" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg">
           <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18" /><path d="M7 12h10" /><path d="M10 18h4" /></svg>
@@ -94,18 +89,16 @@
     <div x-show="filtersOpen" class="mt-4 rounded-2xl border border-border bg-surface p-5 shadow-card">
       <div class="flex items-center justify-between">
         <h2 class="font-display text-sm font-semibold uppercase tracking-wide text-muted">{{ tr.t("search.filters.results") }}</h2>
-        <a href="/search{% if q_set() %}?q={{ form.q }}{% endif %}" class="text-sm font-medium text-accent-strong hover:text-accent-dark">{{ tr.t("search.filters.clear") }}</a>
+        <a href="/search{% if q_set() %}?q={{ form.q|urlencode }}{% endif %}" class="text-sm font-medium text-accent-strong hover:text-accent-dark">{{ tr.t("search.filters.clear") }}</a>
       </div>
       <form
         action="/search" method="get"
         hx-get="/search" hx-target="#results" hx-swap="innerHTML"
         hx-trigger="change from:input[type='checkbox'], change from:input[type='radio'], change from:select"
+        hx-push-url="true" hx-indicator="#results-indicator"
         class="mt-4 grid gap-6 md:grid-cols-3"
       >
-        {% if q_set() %}<input type="hidden" name="q" value="{{ form.q }}" />{% endif %}
-        {% if let Some(lat) = form.lat %}<input type="hidden" name="lat" value="{{ lat }}" />{% endif %}
-        {% if let Some(lon) = form.lon %}<input type="hidden" name="lon" value="{{ lon }}" />{% endif %}
-        {% if sort_set() %}<input type="hidden" name="sort" value="{{ form.sort }}" />{% endif %}
+        {% call state::hidden(form, false, false, true) %}
 
         <fieldset>
           <legend class="mb-2.5 text-sm font-semibold text-fg">{{ tr.t("search.filters.type") }}</legend>
@@ -185,11 +178,11 @@
         </div>
       </div>
 
-      <!-- Results list (the accessible non-map alternative, §23) -->
+      <!-- Results list (the accessible non-map alternative) -->
       <div class="lg:col-span-7" :class="resultsClass">
         <div class="relative">
           <!-- HTMX loading overlay -->
-          <div class="htmx-indicator absolute inset-0 z-10 items-center justify-center rounded-2xl bg-[oklch(98%_0.004_240_/_0.7)]" aria-hidden="true">
+          <div id="results-indicator" class="htmx-indicator absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-[oklch(98%_0.004_240_/_0.7)]" aria-hidden="true">
             <span class="inline-flex items-center gap-2.5 rounded-xl border border-border bg-surface px-4 py-2.5 text-sm font-medium text-fg shadow-pop">{{ tr.t("search.updating") }}</span>
           </div>
           <div id="results" role="list" aria-label="{{ tr.t("search.results_aria") }}" class="space-y-4">

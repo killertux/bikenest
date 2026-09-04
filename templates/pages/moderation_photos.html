@@ -69,7 +69,7 @@
                 <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
                 <input type="text" name="reason" required placeholder="{{ tr.t("moderation.reason_placeholder") }}"
                        class="rounded-lg border border-border bg-bg px-3 py-2 text-sm" />
-                <button type="submit" class="rounded-lg border border-error/30 px-4 py-2 text-sm font-medium text-error hover:border-error">{{ tr.t("moderation.reject") }}</button>
+                <button type="submit" class="rounded-lg border border-danger/30 px-4 py-2 text-sm font-medium text-danger hover:border-danger">{{ tr.t("moderation.reject") }}</button>
               </form>
               <a href="{{ p.full_url }}" target="_blank" rel="noopener" class="rounded-lg border border-border px-3 py-2 text-sm text-muted hover:text-fg">{{ tr.t("moderation.view") }}</a>
             </div>

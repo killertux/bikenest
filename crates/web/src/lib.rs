@@ -119,6 +119,11 @@ pub struct SearchPageVm {
     pub form: http::SearchParams,
     pub security_options: Vec<view::OptionVm>,
     pub type_options: Vec<view::OptionVm>,
+    /// `partials/search_results.html` is included here for the initial render;
+    /// this is always `false` so it does not also emit the out-of-band copies
+    /// of the destination heading / result count that the standalone HTMX
+    /// fragment (`SearchResultsVm`, `oob: true`) uses to update them in place.
+    pub oob: bool,
 }
 
 impl SearchPageVm {
@@ -142,9 +147,6 @@ impl SearchPageVm {
     fn q_set(&self) -> bool {
         !self.form.q.is_empty()
     }
-    fn sort_set(&self) -> bool {
-        !self.form.sort.is_empty()
-    }
     fn radius_is(&self, m: u32) -> bool {
         self.form.radius == Some(m)
     }
@@ -159,6 +161,10 @@ impl SearchPageVm {
 pub struct SearchResultsVm {
     pub tr: Translator,
     pub results: view::ResultsData,
+    /// Always `true`: the destination heading and result count live outside
+    /// `#results` in `search.html`, so this fragment updates them via
+    /// `hx-swap-oob` alongside the swapped results list.
+    pub oob: bool,
 }
 
 /// P3 — parking details.

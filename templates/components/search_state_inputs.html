@@ -1,0 +1,17 @@
+{# Shared hidden-input mirrors for the three search.html forms (main search box,
+   sort select, filter panel) so that submitting any one of them preserves the
+   state the other two own. Each caller skips the field(s) it renders as a
+   visible control, so no form ever submits a field twice. #}
+{% macro hidden(form, skip_q, skip_sort, skip_filters) %}
+{% if let Some(lat) = form.lat %}<input type="hidden" name="lat" value="{{ lat }}" />{% endif %}
+{% if let Some(lon) = form.lon %}<input type="hidden" name="lon" value="{{ lon }}" />{% endif %}
+{% if !skip_q %}{% if !form.q.is_empty() %}<input type="hidden" name="q" value="{{ form.q }}" />{% endif %}{% endif %}
+{% if !skip_sort %}{% if !form.sort.is_empty() %}<input type="hidden" name="sort" value="{{ form.sort }}" />{% endif %}{% endif %}
+{% if !skip_filters %}
+{% if let Some(r) = form.radius %}<input type="hidden" name="radius" value="{{ r }}" />{% endif %}
+{% if !form.cost.is_empty() %}<input type="hidden" name="cost" value="{{ form.cost }}" />{% endif %}
+{% if !form.parking_type.is_empty() %}<input type="hidden" name="type" value="{{ form.parking_type }}" />{% endif %}
+{% if !form.security.is_empty() %}<input type="hidden" name="security" value="{{ form.security }}" />{% endif %}
+{% if !form.open_now.is_empty() %}<input type="hidden" name="open_now" value="{{ form.open_now }}" />{% endif %}
+{% endif %}
+{% endmacro %}

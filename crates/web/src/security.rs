@@ -1,4 +1,4 @@
-//! Security response headers + Content-Security-Policy (§64/§65).
+//! Security response headers + Content-Security-Policy.
 //!
 //! A single middleware adds the hard-header set to *every* response (public,
 //! account, admin, media, error): `Strict-Transport-Security` (only when TLS is
@@ -6,12 +6,12 @@
 //! `Permissions-Policy` and `X-Frame-Options`.
 //!
 //! The CSP is deliberately strict: `script-src 'self'` with **no `'unsafe-eval'`**
-//! — this is the whole point of the Alpine CSP build (plans/m7-hardening.md §3).
+//! — this is the whole point of the Alpine CSP build.
 //! `style-src 'unsafe-inline'` is retained only because MapLibre injects inline
 //! styles (attribution/controls/markers); we add no inline styles of our own, so
-//! that surface is MapLibre's alone. The tile/geocode origins are templated from
-//! env so the same binary works against any hosted provider (dev defaults to the
-//! `demotiles.maplibre.org` demo style — Ledger #3).
+//! that surface is MapLibre's alone. The tile/geocode/media origins are templated
+//! from env so the same binary works against any hosted provider (dev defaults
+//! to the `demotiles.maplibre.org` demo style for tiles).
 
 use axum::body::Body;
 use axum::extract::State;
@@ -30,6 +30,10 @@ pub struct SecurityHeaders {
     /// Origins the browser may reach for client-side geocoding (empty in dev — geocoding is
     /// server-side via the `Geocoder` port).
     geocode_hosts: Vec<String>,
+    /// Object-storage origin(s) that parking photos are served from as direct
+    /// (pre-signed) URLs, e.g. `http://localhost:9000` in dev or
+    /// `https://<bucket>.s3.<region>.amazonaws.com` in production.
+    media_hosts: Vec<String>,
 }
 
 impl SecurityHeaders {
@@ -39,6 +43,7 @@ impl SecurityHeaders {
             tile_hosts: env_hosts("CSP_TILE_HOSTS")
                 .unwrap_or_else(|| vec!["https://demotiles.maplibre.org".to_string()]),
             geocode_hosts: env_hosts("CSP_GEOCODE_HOSTS").unwrap_or_default(),
+            media_hosts: env_hosts("CSP_MEDIA_HOSTS").unwrap_or_default(),
         }
     }
 
@@ -46,11 +51,12 @@ impl SecurityHeaders {
     pub fn csp(&self) -> String {
         let tile = self.join_hosts(&self.tile_hosts);
         let geocode = self.join_hosts(&self.geocode_hosts);
+        let media = self.join_hosts(&self.media_hosts);
         format!(
             "default-src 'self'; \
              script-src 'self'; \
              style-src 'self' 'unsafe-inline'; \
-             img-src 'self' data: blob:{tile}; \
+             img-src 'self' data: blob:{tile}{media}; \
              font-src 'self'{tile}; \
              connect-src 'self'{tile}{geocode}; \
              worker-src 'self' blob:; \
@@ -98,7 +104,7 @@ pub async fn security_headers(
     head.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
     // The CSP string is a fixed shape (no forbidden header chars), so
     // `from_str` always succeeds; a failure means a real bug and should panic
-    // rather than silently strip the policy (§65).
+    // rather than silently strip the policy.
     head.insert(
         "Content-Security-Policy",
         HeaderValue::from_str(&s.csp()).expect("valid CSP header value"),
@@ -109,7 +115,7 @@ pub async fn security_headers(
             HeaderValue::from_static("max-age=31536000; includeSubDomains"),
         );
     }
-    // Private data must never be indexed (§110). Also enforced in robots.txt.
+    // Private data must never be indexed. Also enforced in robots.txt.
     if path_is_private {
         head.insert(
             "X-Robots-Tag",
@@ -119,7 +125,7 @@ pub async fn security_headers(
     res
 }
 
-/// Private (account/admin/moderation) paths — never indexable (§110).
+/// Private (account/admin/moderation) paths — never indexable.
 fn is_private_path(path: &str) -> bool {
     path.starts_with("/account") || path.starts_with("/admin") || path.starts_with("/moderation")
 }
@@ -145,10 +151,20 @@ mod tests {
     use super::*;
 
     fn headers(tls_on: bool, tile_hosts: &[&str], geocode_hosts: &[&str]) -> SecurityHeaders {
+        headers_with_media(tls_on, tile_hosts, geocode_hosts, &[])
+    }
+
+    fn headers_with_media(
+        tls_on: bool,
+        tile_hosts: &[&str],
+        geocode_hosts: &[&str],
+        media_hosts: &[&str],
+    ) -> SecurityHeaders {
         SecurityHeaders {
             tls_on,
             tile_hosts: tile_hosts.iter().map(|s| s.to_string()).collect(),
             geocode_hosts: geocode_hosts.iter().map(|s| s.to_string()).collect(),
+            media_hosts: media_hosts.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -177,6 +193,12 @@ mod tests {
         assert!(csp.contains("img-src 'self' data: blob:"));
         assert!(csp.contains("font-src 'self'"));
         assert!(csp.contains("connect-src 'self'"));
+    }
+
+    #[test]
+    fn csp_img_src_includes_media_hosts() {
+        let csp = headers_with_media(false, &[], &[], &["http://localhost:9000"]).csp();
+        assert!(csp.contains("img-src 'self' data: blob: http://localhost:9000"));
     }
 
     #[test]

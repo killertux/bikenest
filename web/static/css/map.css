@@ -53,15 +53,4 @@
   box-shadow: 0 0 0 2px var(--color-accent-strong);
 }
 
-/* HTMX request indicator (htmx 4 uses Constructable Stylesheets for its
-   default indicator; ours is explicit) */
-.htmx-indicator {
-  opacity: 0;
-  transition: opacity 150ms ease-in;
-}
-
-.htmx-request .htmx-indicator,
-.htmx-request.htmx-indicator {
-  opacity: 1;
-}
 [x-cloak] { display: none !important; }

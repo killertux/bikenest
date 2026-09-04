@@ -1,3 +1,15 @@
+{% if oob %}
+<h1 id="search-heading" hx-swap-oob="true" class="font-display text-2xl font-bold tracking-tight sm:text-3xl">
+  {% if let Some(label) = results.destination_label %}
+    {{ tr.t("search.heading.near") }} <span class="text-accent-strong">“{{ label }}”</span>
+  {% else %}
+    {{ tr.t("search.heading.generic") }}
+  {% endif %}
+</h1>
+<p id="result-count" hx-swap-oob="true" aria-live="polite" class="text-sm text-muted">
+  {% if results.error.is_some() %}{% else %}{{ results.total_label }}{% endif %}
+</p>
+{% endif %}
 <script type="application/json" id="search-data">{{ results.map_json|safe }}</script>
 
 {% if let Some(err) = results.error %}

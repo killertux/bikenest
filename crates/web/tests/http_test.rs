@@ -129,6 +129,26 @@ async fn csp_is_strict_no_unsafe_eval(_tx: &mut TestTx) {
 }
 
 #[db_test]
+async fn csp_img_src_includes_configured_media_host(_tx: &mut TestTx) {
+    // Photos are served from direct S3/MinIO presigned URLs; the CSP `img-src`
+    // must allow the configured object-storage origin(s) or the browser blocks
+    // every photo. Env mutation is scoped to this one request; no other test
+    // reads or asserts on `CSP_MEDIA_HOSTS`.
+    unsafe { std::env::set_var("CSP_MEDIA_HOSTS", "http://localhost:9000") };
+    let headers = get_headers("/").await;
+    unsafe { std::env::remove_var("CSP_MEDIA_HOSTS") };
+    let csp = headers["content-security-policy"].to_str().unwrap();
+    let img_src = csp
+        .split(';')
+        .find(|d| d.trim_start().starts_with("img-src"))
+        .unwrap_or_else(|| panic!("no img-src directive in csp: {csp}"));
+    assert!(
+        img_src.contains("http://localhost:9000"),
+        "img-src: {img_src}"
+    );
+}
+
+#[db_test]
 async fn hsts_absent_in_dev_without_tls(_tx: &mut TestTx) {
     // `TLS_ON` is unset in the test environment → no HSTS header.
     let headers = get_headers("/").await;
@@ -236,6 +256,14 @@ async fn home_renders_hero_and_search_form(_tx: &mut TestTx) {
 }
 
 #[db_test]
+async fn skip_link_targets_main_content(_tx: &mut TestTx) {
+    let (status, body) = get("/").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains(r##"href="#content""##), "skip link");
+    assert!(body.contains(r#"id="content""#), "main landmark");
+}
+
+#[db_test]
 async fn about_renders_how_it_works(_tx: &mut TestTx) {
     let (status, body) = get("/about").await;
     assert_eq!(status, StatusCode::OK);
@@ -289,6 +317,30 @@ async fn htmx_request_gets_fragment_without_full_page(_tx: &mut TestTx) {
         html.contains("search-data"),
         "fragment still embeds map data"
     );
+}
+
+#[db_test]
+async fn htmx_search_fragment_updates_result_count_out_of_band(_tx: &mut TestTx) {
+    // The result count / destination heading live outside `#results` in
+    // search.html, so the fragment response must carry `hx-swap-oob` copies
+    // for htmx to patch them in place.
+    let app = test_app().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/search?q=x")
+                .header("HX-Request", "true")
+                .header("Accept-Language", "en")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains(r#"id="result-count""#), "fragment: {html}");
+    assert!(html.contains("hx-swap-oob"), "fragment: {html}");
 }
 
 #[db_test]
@@ -3074,4 +3126,39 @@ async fn approved_review_photo_renders_on_p3(tx: &mut bikenest_test_support::Tes
         .unwrap();
     cleanup_user_contributions(AUTHOR).await;
     cleanup_user_contributions(MOD).await;
+}
+
+// ---------------------------------------------------------------------------
+// Template hygiene (pure filesystem scan, no DB)
+// ---------------------------------------------------------------------------
+
+/// `--color-error` was renamed to `--color-danger` in input.css; any
+/// `text-error`/`bg-error`/`border-error`/`hover:border-error` utility left in
+/// a template renders as dead CSS (no matching Tailwind class exists).
+#[test]
+fn no_error_colour_classes_remain_in_templates() {
+    let templates_dir =
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates"));
+    let pattern = regex::Regex::new(r"\b(text|bg|border|hover:border)-error\b").unwrap();
+    let mut offenders = Vec::new();
+    let mut stack = vec![templates_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
+        {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(contents) = std::fs::read_to_string(&path) {
+                for m in pattern.find_iter(&contents) {
+                    offenders.push(format!("{}: {}", path.display(), m.as_str()));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "found dead `-error` colour classes:\n{}",
+        offenders.join("\n")
+    );
 }

@@ -645,7 +645,11 @@ async fn search(
     };
 
     if is_htmx {
-        let vm = SearchResultsVm { tr, results };
+        let vm = SearchResultsVm {
+            tr,
+            results,
+            oob: true,
+        };
         render(vm, StatusCode::OK)
     } else {
         let vm = SearchPageVm {
@@ -661,6 +665,7 @@ async fn search(
             form: params.0.clone(),
             security_options: view::security_options(tr, Some(&params.security)),
             type_options: view::type_options(tr, Some(&params.parking_type)),
+            oob: false,
         };
         render(vm, StatusCode::OK)
     }
