@@ -30,7 +30,7 @@ pub use community::{
 pub use config::{
     AppEnv, Config, ConfigError, DbConfig, EmailConfig, FakeOAuthConfig, GeocodeLimits,
     GeocoderConfig, JobConfig, MapConfig, ModerationConfig, PhotoConfig, PolicySeedConfig,
-    RateLimiterBackend, RateLimiterConfig, S3Config, SecurityConfig,
+    RateLimiterBackend, RateLimiterConfig, S3Config, SecurityConfig, TEST_MEDIA_ORIGIN,
 };
 pub use db::Db;
 pub use db_error::{DbFailure, classify, classify_and_log, classify_code};

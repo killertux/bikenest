@@ -38,8 +38,7 @@ pub const HX_REDIRECT: &str = "hx-redirect";
 
 /// The response varies by every header that selects between the fragment and
 /// the full document, plus the two that select the locale/session rendering.
-pub const VARY_FRAGMENT: &str =
-    "HX-Request, HX-Request-Type, HX-Boosted, Accept-Language, Cookie";
+pub const VARY_FRAGMENT: &str = "HX-Request, HX-Request-Type, HX-Boosted, Accept-Language, Cookie";
 
 /// The subset that every HTML response varies by (added by the security-header
 /// middleware; fragment endpoints add [`VARY_FRAGMENT`] instead).
@@ -96,10 +95,7 @@ pub fn safe_local_path(s: &str) -> Option<&str> {
     if matches!(bytes.get(1), Some(b'/') | Some(b'\\')) {
         return None;
     }
-    if bytes
-        .iter()
-        .any(|&b| b == b'\\' || b < 0x20 || b == 0x7F)
-    {
+    if bytes.iter().any(|&b| b == b'\\' || b < 0x20 || b == 0x7F) {
         return None;
     }
     Some(s)
@@ -151,9 +147,7 @@ pub fn login_next(method: &Method, uri: &Uri, headers: &HeaderMap) -> String {
     match path.rfind('/') {
         // `/parking/7/favorite` → `/parking/7`; `/reports` → `/`.
         Some(0) | None => "/".to_string(),
-        Some(i) => safe_local_path(&path[..i])
-            .unwrap_or("/")
-            .to_string(),
+        Some(i) => safe_local_path(&path[..i]).unwrap_or("/").to_string(),
     }
 }
 

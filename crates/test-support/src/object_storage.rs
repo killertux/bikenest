@@ -2,21 +2,24 @@
 //!
 //! Used by the web/infrastructure test suite so media flows (upload → gallery)
 //! run without a filesystem or a real S3/MinIO, storing bytes in a `HashMap`.
-//! `presigned_get` returns a `/media/...`-shaped URL purely as a stable,
-//! inspectable string for gallery-link assertions — nothing actually serves
-//! that path (the app has no media proxy; the real store's presigned URLs
-//! point straight at the bucket).
+//! `presigned_get` returns an absolute `http://media.test.invalid/...`-shaped
+//! URL — the same shape a real presigned S3/MinIO URL has (a full, foreign
+//! origin the app never proxies) — purely as a stable, inspectable string for
+//! gallery-link assertions; nothing actually serves that origin.
+//!
+//! [`bikenest_infrastructure::TEST_MEDIA_ORIGIN`] is the single source of
+//! truth for that origin: `Config::for_tests` puts the same string in
+//! `security.media_hosts`, so a rendered `<img src>` here and the CSP's
+//! `img-src` allowlist are asserting on the same host by construction (see
+//! `crates/web/tests/csp_test.rs`).
 
 use async_trait::async_trait;
 use bikenest_application::{ObjectInfo, ObjectPage, ObjectStorage, PutObject, StorageError};
+use bikenest_infrastructure::TEST_MEDIA_ORIGIN;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-/// The URL path prefix under which signed objects are served (matches the app's
-/// `/media` route).
-pub const MEDIA_BASE_PATH: &str = "/media";
 
 /// One stored object: bytes, content type, and the `last_modified` the
 /// [`ObjectStorage::list`] walk reports. Tests set it explicitly through
@@ -117,7 +120,7 @@ impl ObjectStorage for TestObjectStorage {
             .unwrap_or(0)
             + ttl.as_secs().max(1);
         // Signature is a sentinel; `verify_get` always accepts (test-only store).
-        Ok(format!("{MEDIA_BASE_PATH}/{key}?exp={exp}&sig=testsig"))
+        Ok(format!("{TEST_MEDIA_ORIGIN}/{key}?exp={exp}&sig=testsig"))
     }
 
     async fn delete(&self, key: &str) -> Result<(), StorageError> {

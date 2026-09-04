@@ -216,7 +216,10 @@ async fn write_security_upserts_all_features_and_updates_states_in_place(
     let indoor = after_edit.iter().find(|(c, _)| c == "indoor").unwrap();
     assert_eq!(indoor.1, 1, "indoor flipped to Yes");
     let well_lit = after_edit.iter().find(|(c, _)| c == "well_lit").unwrap();
-    assert_eq!(well_lit.1, 0, "features absent from the edit fall back to Unknown");
+    assert_eq!(
+        well_lit.1, 0,
+        "features absent from the edit fall back to Unknown"
+    );
 
     cleanup_user(email).await;
 }
@@ -242,12 +245,13 @@ async fn write_hours_replaces_ranges_on_edit(tx: &mut bikenest_test_support::Tes
     let id = repo.create(&input, user, chrono::Utc::now()).await.unwrap();
 
     async fn day_rows(id: i64) -> Vec<i16> {
-        let mut days: Vec<(i16,)> =
-            sqlx::query_as("SELECT day_of_week FROM opening_hours WHERE location_id = $1 ORDER BY day_of_week")
-                .bind(id)
-                .fetch_all(&pool().await)
-                .await
-                .unwrap();
+        let mut days: Vec<(i16,)> = sqlx::query_as(
+            "SELECT day_of_week FROM opening_hours WHERE location_id = $1 ORDER BY day_of_week",
+        )
+        .bind(id)
+        .fetch_all(&pool().await)
+        .await
+        .unwrap();
         days.sort();
         days.into_iter().map(|(d,)| d).collect()
     }
@@ -295,9 +299,7 @@ async fn write_hours_replaces_ranges_on_edit(tx: &mut bikenest_test_support::Tes
 }
 
 #[db_test]
-async fn edit_is_refused_for_a_location_that_is_not_active(
-    tx: &mut bikenest_test_support::TestTx,
-) {
+async fn edit_is_refused_for_a_location_that_is_not_active(tx: &mut bikenest_test_support::TestTx) {
     let email = "c-edit-inactive@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -361,9 +363,7 @@ async fn edit_is_refused_for_a_location_that_is_not_active(
 }
 
 #[db_test]
-async fn edit_revision_snapshot_holds_the_row_after_state(
-    tx: &mut bikenest_test_support::TestTx,
-) {
+async fn edit_revision_snapshot_holds_the_row_after_state(tx: &mut bikenest_test_support::TestTx) {
     let email = "c-edit-snapshot@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -657,13 +657,12 @@ async fn review_upsert_survives_a_repeated_first_review(tx: &mut bikenest_test_s
     assert_eq!(own.body.as_str(), "segunda versão");
 
     // review_revision holds every published version, newest last.
-    let history: Vec<(i16, String)> = sqlx::query_as(
-        "SELECT rating, body FROM review_revision WHERE review_id = $1 ORDER BY id",
-    )
-    .bind(own.id)
-    .fetch_all(db.pool())
-    .await
-    .unwrap();
+    let history: Vec<(i16, String)> =
+        sqlx::query_as("SELECT rating, body FROM review_revision WHERE review_id = $1 ORDER BY id")
+            .bind(own.id)
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
     assert_eq!(history.len(), 2);
     assert_eq!(history[0], (4, "primeira versão".to_string()));
     assert_eq!(
@@ -723,7 +722,10 @@ async fn review_edit_does_not_unhide_a_hidden_review(tx: &mut bikenest_test_supp
         .fetch_one(&pool().await)
         .await
         .unwrap();
-    assert_eq!(state, "HIDDEN", "an author edit never restores a hidden review");
+    assert_eq!(
+        state, "HIDDEN",
+        "an author edit never restores a hidden review"
+    );
     assert!(
         reviews.list_active(id, None, 50).await.unwrap().is_empty(),
         "a hidden review stays out of the public list"
@@ -841,9 +843,15 @@ async fn favorite_toggle_reports_the_state_it_wrote(tx: &mut bikenest_test_suppo
     // added → removed → added, with the row count agreeing after each toggle.
     assert!(fav.toggle(user, id).await.unwrap(), "first toggle adds");
     assert_eq!(rows(user, id).await, 1);
-    assert!(!fav.toggle(user, id).await.unwrap(), "second toggle removes");
+    assert!(
+        !fav.toggle(user, id).await.unwrap(),
+        "second toggle removes"
+    );
     assert_eq!(rows(user, id).await, 0);
-    assert!(fav.toggle(user, id).await.unwrap(), "third toggle adds again");
+    assert!(
+        fav.toggle(user, id).await.unwrap(),
+        "third toggle adds again"
+    );
     assert_eq!(rows(user, id).await, 1);
     assert!(fav.is_favorited(user, id).await.unwrap());
 

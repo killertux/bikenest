@@ -9,8 +9,8 @@ use bikenest_application::{
     AddParkingLocationOutcome, AttributeSummary, AuthenticatedUser, Clock, ContributionDeps,
     ContributionError, ContributionHistoryReader, ContributionItem, ContributionService,
     DuplicateCandidate, FavoriteRepository, NewParkingLocation, NewVerification,
-    ParkingContributionRepository, ParkingEdit, Review, ReviewRepository,
-    TimezoneError, TimezoneResolver, VerificationRepository,
+    ParkingContributionRepository, ParkingEdit, Review, ReviewRepository, TimezoneError,
+    TimezoneResolver, VerificationRepository,
 };
 use bikenest_domain::{
     AccountState, Confidence, Cost, ExistenceResult, ExistenceSignal, GeoPoint, ModerationState,
@@ -709,10 +709,7 @@ async fn community_details_computes_confidence_and_favorite() {
         fav,
     );
 
-    let details = svc
-        .community_details(loc, Some(UserId(1)))
-        .await
-        .unwrap();
+    let details = svc.community_details(loc, Some(UserId(1))).await.unwrap();
     assert_eq!(details.confidence, Confidence::Conflicting);
     assert!(details.is_favorited);
 }

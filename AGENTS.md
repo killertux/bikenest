@@ -89,7 +89,20 @@ npm run build:css                        # Tailwind → web/static/css/app.css
 - **Background jobs** (M9) are a Postgres-backed queue (`background_job` table)
   with an in-process worker; handlers live in `crates/infrastructure/src/job/`
   and implement `bikenest_application::JobHandler`. Set `JOBS_ENABLED=false` for
-  web-only instances.
+  web-only instances. A test that claims jobs directly (rather than simulating
+  a claim with a plain `UPDATE`) must use `SqlxJobRepository::claim_kinds` with
+  a kind unique to that test, not the unscoped `claim` — see "Job-queue test
+  isolation" in `TESTING.md`.
+- **New fragment endpoints** need the `is_fragment_request` tests (a request
+  without the htmx fragment headers gets a 303 to the whole page, not a bare
+  partial — see the `p3_fragment_endpoints_*`/`moderation_fragment_endpoints_*`
+  tests in `crates/web/tests/http_test.rs` for the pattern to copy).
+- **New colour tokens** go in `web/static/css/input.css`'s `@theme` block
+  before a template uses them —
+  `no_undefined_tailwind_color_tokens_remain_in_templates` (`http_test.rs`)
+  fails on any `text|bg|border|...-<name>` utility whose `<name>` isn't a
+  defined token, a Tailwind colour keyword, or on that test's own
+  non-colour-utility allowlist.
 - **Legacy references (`§N` / `Ledger #N`):** some `docs/`, `.env.example`,
   code comments and templates still carry `§N` (section numbers from the
   now-removed spec) and `Ledger #N` (the old milestone plan's bookkeeping) as

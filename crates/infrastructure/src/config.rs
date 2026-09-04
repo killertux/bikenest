@@ -430,6 +430,14 @@ pub struct Config {
 
 const DEV_BASE_URL: &str = "http://localhost:8080";
 const DEV_S3_ENDPOINT: &str = "http://localhost:9000";
+/// The fake origin `Config::for_tests` puts in `security.media_hosts`, and
+/// what `bikenest_test_support::TestObjectStorage::presigned_get` signs its
+/// URLs under — a single source of truth so the CSP test's rendered-photo
+/// origin and its configured `media_hosts` can never drift apart. Deliberately
+/// not `http://localhost:9000` (the real dev MinIO origin): a test that hits
+/// this exact string is asserting on the *test double's* URL shape, not on
+/// dev/MinIO wiring, and `.invalid` (RFC 2606) can never resolve to a real host.
+pub const TEST_MEDIA_ORIGIN: &str = "http://media.test.invalid";
 pub const DEFAULT_S3_REGION: &str = "us-east-1";
 pub const DEFAULT_S3_BUCKET: &str = "bikenest";
 const DEV_S3_KEY: &str = "minioadmin";
@@ -669,7 +677,7 @@ impl Config {
             security: SecurityConfig {
                 tile_hosts: vec![DEFAULT_TILE_HOST.to_string()],
                 geocode_hosts: Vec::new(),
-                media_hosts: vec![DEV_S3_ENDPOINT.to_string()],
+                media_hosts: vec![TEST_MEDIA_ORIGIN.to_string()],
             },
             map: MapConfig {
                 style_url: DEFAULT_MAP_STYLE_URL.to_string(),

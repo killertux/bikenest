@@ -15,7 +15,7 @@ use tokio::sync::OnceCell;
 pub use bikenest_test_macros::db_test;
 
 pub mod object_storage;
-pub use object_storage::{MEDIA_BASE_PATH, TestObjectStorage};
+pub use object_storage::TestObjectStorage;
 
 // ---------------------------------------------------------------------------
 // Shared runtime + pool
@@ -37,6 +37,27 @@ fn shared_runtime() -> &'static tokio::runtime::Runtime {
 fn shared_pool() -> &'static OnceCell<PgPool> {
     static POOL: OnceCell<PgPool> = OnceCell::const_new();
     &POOL
+}
+
+/// Installs a `tracing` subscriber that writes to the test harness's captured
+/// output (`with_test_writer()`, so it only shows up under `--nocapture` or
+/// for a failing test), filtered by `RUST_LOG` (default `warn`).
+///
+/// Without this, every `tracing::error!`/`warn!` a repository logs through
+/// [`bikenest_infrastructure::classify_and_log`] is silently dropped: no
+/// subscriber means no destination, not "printed and ignored". `try_init` +
+/// `OnceLock` make this safe to call once per test (via [`run_db_test`]) even
+/// though every test in the binary shares the same process.
+pub fn init_test_tracing() {
+    static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    INIT.get_or_init(|| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_test_writer()
+            .try_init();
+    });
 }
 
 fn database_url() -> String {
@@ -237,6 +258,7 @@ pub async fn audit_mutation_tx(pool: &PgPool) -> Transaction<'static, Postgres> 
 /// Entry point behind `#[db_test]`: runs `f` on the shared runtime with a
 /// fresh transaction; the transaction rolls back afterwards no matter what.
 pub fn run_db_test(f: impl AsyncFnOnce(&mut TestTx)) {
+    init_test_tracing();
     shared_runtime().block_on(async {
         let pool = shared_pool().get_or_init(connect_and_migrate).await;
         let mut tx = TestTx {

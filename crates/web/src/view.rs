@@ -421,10 +421,7 @@ pub async fn build_results(
     }
 
     // Trimmed to what search.js reads (WP14) — see `MapItemVm`.
-    let map_items: Vec<MapItemVm> = items
-        .iter()
-        .map(|c| MapItemVm::from_card(c, c.n))
-        .collect();
+    let map_items: Vec<MapItemVm> = items.iter().map(|c| MapItemVm::from_card(c, c.n)).collect();
     let map_json = escape_script_json(
         serde_json::json!({
             "origin": hit.map(|h| serde_json::json!({"lat": h.point.lat(), "lon": h.point.lon(), "label": h.label})),

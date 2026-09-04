@@ -236,9 +236,9 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         } = row;
         let point = GeoPoint::new(lat.unwrap_or(0.0), lon.unwrap_or(0.0))
             .map_err(|e| ContributionError::InvalidField(e.to_string()))?;
-        let tz: chrono_tz::Tz = timezone
-            .parse()
-            .map_err(|_| ContributionError::InvalidField(format!("unknown timezone: {timezone}")))?;
+        let tz: chrono_tz::Tz = timezone.parse().map_err(|_| {
+            ContributionError::InvalidField(format!("unknown timezone: {timezone}"))
+        })?;
 
         write_hours(&mut tx, id, &edit.hours).await?;
         write_security(&mut tx, id, &edit.security).await?;

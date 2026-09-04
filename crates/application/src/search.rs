@@ -93,7 +93,11 @@ impl SearchParking {
         &self,
         input: &SearchInput,
     ) -> Result<(BoundsQuery, BoundsPage), SearchError> {
-        if input.cursor.as_deref().is_some_and(|c| !c.trim().is_empty()) {
+        if input
+            .cursor
+            .as_deref()
+            .is_some_and(|c| !c.trim().is_empty())
+        {
             return Err(SearchError::BoundsNotPaginated);
         }
         let query = BoundsQuery::parse(

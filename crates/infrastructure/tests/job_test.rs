@@ -246,11 +246,20 @@ async fn gc_deletes_only_old_terminal_rows(_tx: &mut bikenest_test_support::Test
 async fn concurrent_claims_are_disjoint(_tx: &mut bikenest_test_support::TestTx) {
     let r = repo().await;
     let now = Utc::now();
+    // A kind unique to this test run: `claim_kinds` scopes both workers to it,
+    // so no concurrently-running test (in this binary or another) can crowd
+    // our rows out, or be crowded out by our large batch. That is what lets
+    // the assertions below be exact instead of "claimed by *someone*".
+    let kind = format!(
+        "test.{}.concurrent_claims_are_disjoint.{}",
+        module_path!(),
+        std::process::id()
+    );
     // Seed a handful of due, unique-kind rows.
     let mut ids = Vec::new();
     for i in 0..6 {
         let id = r
-            .enqueue("jobtest.disjoint", &json!({"i": i}), now, Some(5), None)
+            .enqueue(&kind, &json!({"i": i}), now, Some(5), None)
             .await
             .unwrap()
             .unwrap();
@@ -258,22 +267,33 @@ async fn concurrent_claims_are_disjoint(_tx: &mut bikenest_test_support::TestTx)
     }
 
     // Two workers claim concurrently, each with a large batch so the whole due
-    // set is covered (avoids a concurrent test's due rows crowding ours out).
+    // set is covered — safe now that `claim_kinds` confines both to our kind.
     let repo_a = r.clone();
     let repo_b = r.clone();
+    let (kind_a, kind_b) = (kind.clone(), kind.clone());
     let a = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let b = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let (a2, b2) = (a.clone(), b.clone());
     let h1 = tokio::spawn(async move {
         let got = repo_a
-            .claim(1000, "worker-a", std::time::Duration::from_secs(60))
+            .claim_kinds(
+                1000,
+                "worker-a",
+                std::time::Duration::from_secs(60),
+                &[&kind_a],
+            )
             .await
             .unwrap();
         *a2.lock().await = got;
     });
     let h2 = tokio::spawn(async move {
         let got = repo_b
-            .claim(1000, "worker-b", std::time::Duration::from_secs(60))
+            .claim_kinds(
+                1000,
+                "worker-b",
+                std::time::Duration::from_secs(60),
+                &[&kind_b],
+            )
             .await
             .unwrap();
         *b2.lock().await = got;
@@ -290,10 +310,16 @@ async fn concurrent_claims_are_disjoint(_tx: &mut bikenest_test_support::TestTx)
         "two workers must never claim the same job ({ids_a:?} vs {ids_b:?})"
     );
 
-    // Each of OUR rows was claimed exactly once (state running, attempts 1, held by a
-    // worker). We only assert on our own rows: the claim also picks up OTHER
-    // concurrently-running tests' due rows, which those tests may delete before we
-    // inspect them (hence no assertion over the full union).
+    // Kind-scoped claims mean nothing else could have touched these rows:
+    // every one of them must be claimed by exactly worker-a or worker-b, no
+    // more, no less.
+    let all_ids: std::collections::HashSet<i64> = ids.iter().copied().collect();
+    let claimed: std::collections::HashSet<i64> = ids_a.union(&ids_b).copied().collect();
+    assert_eq!(
+        claimed, all_ids,
+        "every seeded row must be claimed by exactly worker-a or worker-b"
+    );
+
     for id in &ids {
         let (state, attempts, claimed_by): (String, i32, Option<String>) =
             sqlx::query_as("SELECT state, attempts, claimed_by FROM background_job WHERE id=$1")
@@ -303,23 +329,25 @@ async fn concurrent_claims_are_disjoint(_tx: &mut bikenest_test_support::TestTx)
                 .unwrap();
         assert_eq!(state, "running");
         assert_eq!(attempts, 1);
-        assert!(claimed_by.is_some(), "claimed row must be held by a worker");
+        assert!(
+            matches!(claimed_by.as_deref(), Some("worker-a") | Some("worker-b")),
+            "claimed row must be held by one of this test's own workers, got {claimed_by:?}"
+        );
     }
-    // Note: a row can end up claimed by neither `worker-a` nor `worker-b` if some
-    // other concurrently-running test also calls `claim` (it is not scoped by
-    // kind) and wins the race for it first — the per-row loop above already
-    // confirms every seeded row was claimed by *someone*, which is the
-    // meaningful invariant; we don't additionally require it be one of this
-    // test's own two workers.
-    clear_kind("jobtest.disjoint").await;
+    clear_kind(&kind).await;
 }
 
 #[db_test]
 async fn claim_reclaims_a_crashed_workers_running_job(_tx: &mut bikenest_test_support::TestTx) {
     let r = repo().await;
     let now = Utc::now();
+    let kind = format!(
+        "test.{}.claim_reclaims_a_crashed_workers_running_job.{}",
+        module_path!(),
+        std::process::id()
+    );
     let id = r
-        .enqueue("jobtest.reclaim", &json!({}), now, Some(5), None)
+        .enqueue(&kind, &json!({}), now, Some(5), None)
         .await
         .unwrap()
         .unwrap();
@@ -334,14 +362,10 @@ async fn claim_reclaims_a_crashed_workers_running_job(_tx: &mut bikenest_test_su
     .await
     .unwrap();
 
-    // `claim` is not scoped by kind, so — since this row is now a candidate —
-    // a concurrently-running test's own (larger) claim batch could in theory
-    // win the race and reclaim it before this call does. Either way proves the
-    // property under test (a running job past its lease is reclaimable), so
-    // the assertions below check the row's resulting state rather than
-    // requiring that *this* call was the one that claimed it.
+    // `claim_kinds` scopes this call to our own unique kind, so — unlike the
+    // unscoped `claim` — nothing else in the suite can compete for this row.
     let claimed = r
-        .claim(10, "worker-b", std::time::Duration::from_secs(60))
+        .claim_kinds(10, "worker-b", std::time::Duration::from_secs(60), &[&kind])
         .await
         .unwrap();
     let we_claimed_it = claimed.iter().any(|j| j.id == id);
@@ -369,15 +393,19 @@ async fn claim_reclaims_a_crashed_workers_running_job(_tx: &mut bikenest_test_su
         lease_expires_at.is_some_and(|t| t > Utc::now()),
         "the reclaiming worker holds a fresh, unexpired lease"
     );
-    if we_claimed_it {
-        assert_eq!(claimed_by.as_deref(), Some("worker-b"));
-        assert_eq!(attempts, 2);
-    }
+    // Kind-scoped, so `worker-b` must be the one that reclaimed it — no other
+    // actor in the suite can hold this kind.
+    assert!(
+        we_claimed_it,
+        "worker-b's claim_kinds is scoped to our own kind; it must be the reclaimer"
+    );
+    assert_eq!(claimed_by.as_deref(), Some("worker-b"));
+    assert_eq!(attempts, 2);
 
     // A second claim right after must NOT pick it up again — it now holds a
-    // fresh, unexpired lease (held by whichever worker won the reclaim).
+    // fresh, unexpired lease (held by worker-b).
     let claimed_again = r
-        .claim(10, "worker-c", std::time::Duration::from_secs(60))
+        .claim_kinds(10, "worker-c", std::time::Duration::from_secs(60), &[&kind])
         .await
         .unwrap();
     assert!(
@@ -385,7 +413,7 @@ async fn claim_reclaims_a_crashed_workers_running_job(_tx: &mut bikenest_test_su
         "a freshly (re)claimed job must not be claimed again"
     );
 
-    clear_kind("jobtest.reclaim").await;
+    clear_kind(&kind).await;
 }
 
 #[db_test]

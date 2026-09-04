@@ -993,7 +993,11 @@ mod tests {
 
     #[test]
     fn review_author_pool_covers_the_highest_seeded_rating_count() {
-        let max_count = mock_parkings().iter().map(|m| m.rating_count).max().unwrap_or(0);
+        let max_count = mock_parkings()
+            .iter()
+            .map(|m| m.rating_count)
+            .max()
+            .unwrap_or(0);
         assert!(
             REVIEW_AUTHORS.len() as i64 >= max_count,
             "need at least {max_count} distinct authors, have {}",

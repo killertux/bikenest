@@ -689,8 +689,13 @@ fn filter_binds(
         CostFilter::Paid => "paid".to_string(),
         CostFilter::Unknown => "unknown".to_string(),
     });
-    let types = (!filters.types.is_empty())
-        .then(|| filters.types.iter().map(|t| t.as_code().to_string()).collect());
+    let types = (!filters.types.is_empty()).then(|| {
+        filters
+            .types
+            .iter()
+            .map(|t| t.as_code().to_string())
+            .collect()
+    });
     let security_all = (!filters.security_all.is_empty()).then(|| filters.security_all.clone());
     (cost, types, security_all)
 }

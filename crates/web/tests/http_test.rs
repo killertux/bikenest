@@ -529,7 +529,10 @@ async fn browsing_a_box_lists_numbered_cards_and_no_next_page(tx: &mut TestTx) {
     let fragment = res.into_body().collect().await.unwrap().to_bytes();
     let fragment = String::from_utf8_lossy(&fragment).to_string();
     assert!(!fragment.contains("<!DOCTYPE"), "fragment: {fragment}");
-    assert!(fragment.contains("Browse Box Fixture"), "fragment: {fragment}");
+    assert!(
+        fragment.contains("Browse Box Fixture"),
+        "fragment: {fragment}"
+    );
     assert!(
         fragment.contains("Parking in this area"),
         "the out-of-band heading names the area too"
@@ -589,7 +592,10 @@ async fn every_entry_point_offers_the_map(_tx: &mut TestTx) {
     // The empty prompt: a way in that needs no destination typed.
     let (status, body) = get("/search").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("Explore the map"), "the prompt offers the map");
+    assert!(
+        body.contains("Explore the map"),
+        "the prompt offers the map"
+    );
     assert!(
         body.contains("/search?bbox=-49.2905,-25.4497,-49.2505,-25.4097"),
         "…pointed at the centre box: {body}"
@@ -2298,6 +2304,12 @@ async fn multiple_security_values_and_major_unit_price(tx: &mut bikenest_test_su
 // M4 photos — upload → queue → moderate → publish (§30/§44/§80)
 // ---------------------------------------------------------------------------
 
+/// The origin `TestObjectStorage::presigned_get` signs every URL under (see
+/// `bikenest_infrastructure::TEST_MEDIA_ORIGIN`) — the same origin
+/// `Config::for_tests` puts in `security.media_hosts`, so a gallery `<img
+/// src>` found here and the CSP's `img-src` allowlist agree by construction.
+const MEDIA_ORIGIN: &str = bikenest_infrastructure::TEST_MEDIA_ORIGIN;
+
 fn tiny_jpeg() -> Vec<u8> {
     let img = image::RgbImage::from_pixel(32, 32, image::Rgb([20, 40, 60]));
     let mut b = Vec::new();
@@ -2565,7 +2577,7 @@ async fn verified_upload_enters_queue_not_gallery(tx: &mut bikenest_test_support
     let (s, gallery) = get_c(&app, &format!("/parking/{loc}"), None).await;
     assert_eq!(s, StatusCode::OK);
     assert!(
-        !gallery.contains("/media/uploads/"),
+        !gallery.contains(&format!("{MEDIA_ORIGIN}/uploads/")),
         "pending photo not in gallery"
     );
     let _ = tx;
@@ -2649,7 +2661,7 @@ async fn moderator_approve_publishes_to_gallery(tx: &mut bikenest_test_support::
     // Now the gallery serves the derivative.
     let (_, gallery) = get_c(&app, &format!("/parking/{loc}"), None).await;
     assert!(
-        gallery.contains("/media/uploads/"),
+        gallery.contains(&format!("{MEDIA_ORIGIN}/uploads/")),
         "approved photo appears in gallery"
     );
     let _ = tx;
@@ -2800,8 +2812,8 @@ async fn served_derivative_has_no_exif(tx: &mut bikenest_test_support::TestTx) {
     // presigned URLs point straight at the bucket (no app media proxy), so
     // there is no route in the app itself to fetch them through.
     let (_, gallery) = get_c(&app, &format!("/parking/{loc}"), None).await;
-    let anchor = r#"src="/media/uploads/"#;
-    let start = gallery.find(anchor).expect("media thumb URL present");
+    let anchor = format!(r#"src="{MEDIA_ORIGIN}/uploads/"#);
+    let start = gallery.find(&anchor).expect("media thumb URL present");
     let after = &gallery[start + anchor.len()..];
     let url_tail = &after[..after.find('"').expect("closing quote")];
     // Askama escapes `&` in the src attribute; the key itself precedes the
@@ -3567,7 +3579,7 @@ async fn approved_review_photo_renders_on_p3(tx: &mut bikenest_test_support::Tes
     // Pending → not yet rendered on the public P3.
     let (_, pub_page) = get_c(&app, &format!("/parking/{loc}"), None).await;
     assert!(
-        !pub_page.contains("/media/uploads/"),
+        !pub_page.contains(&format!("{MEDIA_ORIGIN}/uploads/")),
         "pending review photo not rendered"
     );
 
@@ -3587,7 +3599,7 @@ async fn approved_review_photo_renders_on_p3(tx: &mut bikenest_test_support::Tes
     // Now the approved review photo renders on P3.
     let (_, pub_page) = get_c(&app, &format!("/parking/{loc}"), None).await;
     assert!(
-        pub_page.contains("/media/uploads/"),
+        pub_page.contains(&format!("{MEDIA_ORIGIN}/uploads/")),
         "approved review photo renders on P3"
     );
 
@@ -4914,8 +4926,14 @@ fn the_search_map_is_built_lazily_and_resized_on_reveal() {
     let js = read_static("js/search.js");
     // A map built inside a hidden panel measures 0×0 and renders blank.
     assert!(js.contains("resize("), "the map is resized: {js}");
-    assert!(js.contains("bikenest:map-toggle"), "the reveal is announced");
-    assert!(js.contains("ResizeObserver"), "belt and braces for the reveal");
+    assert!(
+        js.contains("bikenest:map-toggle"),
+        "the reveal is announced"
+    );
+    assert!(
+        js.contains("ResizeObserver"),
+        "belt and braces for the reveal"
+    );
     assert!(js.contains("bikenest:map-moved"), "moves offer a new area");
     let app = read_static("js/app.js");
     assert!(
@@ -4935,7 +4953,10 @@ fn map_markers_are_controls_and_their_popups_are_built_as_nodes() {
     assert!(js.contains(r#"setAttribute("tabindex", "0")"#), "{js}");
     assert!(js.contains("keydown"), "Enter/Space open the popup");
     // A location's name is user content: it may only ever be written as text.
-    assert!(js.contains("createElement") && js.contains("textContent"), "{js}");
+    assert!(
+        js.contains("createElement") && js.contains("textContent"),
+        "{js}"
+    );
     assert!(
         !js.contains(".innerHTML") && !js.contains("innerHTML ="),
         "popup content must never be assembled as markup: {js}"
@@ -7133,6 +7154,21 @@ fn opening_tag_with_id<'a>(body: &'a str, id: &str) -> &'a str {
     &body[start..end]
 }
 
+/// The full opening tag containing `marker` anywhere in its attributes — same
+/// substring-of-the-tag technique as [`opening_tag_with_id`], keyed on an
+/// arbitrary marker instead of an `id=` value (the login error banner has no
+/// id of its own).
+fn opening_tag_containing<'a>(body: &'a str, marker: &str) -> &'a str {
+    let at = body
+        .find(marker)
+        .unwrap_or_else(|| panic!("{marker:?} not found in body"));
+    let start = body[..at]
+        .rfind('<')
+        .expect("a tag opens before the marker");
+    let end = at + body[at..].find('>').expect("the tag closes") + 1;
+    &body[start..end]
+}
+
 #[db_test]
 async fn login_wrong_password_banner_is_an_alert(tx: &mut bikenest_test_support::TestTx) {
     let (app, _) = auth_app().await;
@@ -7149,7 +7185,7 @@ async fn login_wrong_password_banner_is_an_alert(tx: &mut bikenest_test_support:
     let (s, login_page) = get_c(&app, "/login", None).await;
     assert_eq!(s, StatusCode::OK);
     assert!(
-        !login_page.contains(r#"role="alert""#),
+        !login_page.contains("bg-danger/10"),
         "no error banner before any attempt: {login_page}"
     );
 
@@ -7161,7 +7197,15 @@ async fn login_wrong_password_banner_is_an_alert(tx: &mut bikenest_test_support:
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    assert!(body.contains(r#"role="alert""#), "{body}");
+    // Pinned to the banner element itself (the `bg-danger/10` div), not just
+    // `role="alert"` anywhere on the page — a field-level `<p role="alert">`
+    // would otherwise satisfy a looser assertion even if the banner itself
+    // lost its role.
+    let banner = opening_tag_containing(&body, "bg-danger/10");
+    assert!(
+        banner.contains(r#"role="alert""#),
+        "the login error banner must itself carry role=\"alert\": {banner}"
+    );
     // The generic message never says which of the two was wrong, but a
     // failure still flags both inputs (WP21 a11y pass) rather than neither.
     assert!(
@@ -7198,7 +7242,10 @@ async fn register_with_an_invalid_email_flags_the_email_field(
     assert_eq!(s, StatusCode::OK, "the invalid-email re-render: {body}");
     assert!(body.contains(r#"role="alert""#), "the banner too: {body}");
     let email_input = opening_tag_with_id(&body, "email");
-    assert!(email_input.contains(r#"aria-invalid="true""#), "{email_input}");
+    assert!(
+        email_input.contains(r#"aria-invalid="true""#),
+        "{email_input}"
+    );
     assert!(
         email_input.contains(r#"aria-describedby="email-error""#),
         "{email_input}"
@@ -7249,7 +7296,10 @@ async fn parking_new_bad_currency_code_flags_the_price_field(
         "the invalid currency code is rejected: {body}"
     );
     let price_input = opening_tag_with_id(&body, "price");
-    assert!(price_input.contains(r#"aria-invalid="true""#), "{price_input}");
+    assert!(
+        price_input.contains(r#"aria-invalid="true""#),
+        "{price_input}"
+    );
     assert!(
         price_input.contains(r#"aria-describedby="price-error""#),
         "{price_input}"
@@ -7282,7 +7332,10 @@ async fn review_with_an_empty_body_flags_the_body_field(tx: &mut bikenest_test_s
     .await;
     assert_eq!(s, StatusCode::OK, "the empty body is rejected: {body}");
     let body_field = opening_tag_with_id(&body, "body");
-    assert!(body_field.contains(r#"aria-invalid="true""#), "{body_field}");
+    assert!(
+        body_field.contains(r#"aria-invalid="true""#),
+        "{body_field}"
+    );
     assert!(
         body_field.contains(r#"aria-describedby="body-error""#),
         "{body_field}"
@@ -7337,7 +7390,10 @@ async fn parking_details_dialogs_and_swap_targets_are_accessible(
     // Report modal: role/aria-modal/aria-labelledby, and the target exists.
     let report_modal = opening_tag_with_id(&body, "report-modal");
     assert!(report_modal.contains(r#"role="dialog""#), "{report_modal}");
-    assert!(report_modal.contains(r#"aria-modal="true""#), "{report_modal}");
+    assert!(
+        report_modal.contains(r#"aria-modal="true""#),
+        "{report_modal}"
+    );
     assert!(
         report_modal.contains(r#"aria-labelledby="report-modal-title""#),
         "{report_modal}"
@@ -7361,7 +7417,11 @@ async fn parking_details_dialogs_and_swap_targets_are_accessible(
     );
 
     // Swap targets: aria-live + a focus anchor.
-    for id in ["verification-panel", "photo-upload-result", "report-modal-feedback"] {
+    for id in [
+        "verification-panel",
+        "photo-upload-result",
+        "report-modal-feedback",
+    ] {
         let tag = opening_tag_with_id(&body, id);
         assert!(tag.contains(r#"aria-live="polite""#), "{id}: {tag}");
         assert!(tag.contains(r#"tabindex="-1""#), "{id}: {tag}");
@@ -7486,8 +7546,8 @@ fn no_tiny_text_xs_buttons_remain_in_templates() {
     let templates_dir =
         std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates"));
     let button = regex::Regex::new(r"(?s)<button\b[^>]*>").unwrap();
-    let tiny_py = regex::Regex::new(r#"(?:^|[\s"])py-0\.5(?:[\s"]|$)|(?:^|[\s"])py-1(?:[\s"]|$)"#)
-        .unwrap();
+    let tiny_py =
+        regex::Regex::new(r#"(?:^|[\s"])py-0\.5(?:[\s"]|$)|(?:^|[\s"])py-1(?:[\s"]|$)"#).unwrap();
     let mut offenders = Vec::new();
     let mut stack = vec![templates_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -7613,5 +7673,181 @@ fn app_js_has_the_focus_trap_and_after_swap_focus_listener() {
     assert!(
         js.contains(r#"document.getElementById("search-data")"#),
         "readData() must query by id from `document`, not a page-specific root: {js}"
+    );
+}
+
+/// Generalises [`no_error_colour_classes_remain_in_templates`] (which only
+/// ever covered the one renamed `-error` token) to every Tailwind
+/// colour-utility prefix: any `text|bg|border|...-<name>` utility in a
+/// template must name a token this app actually defines (`--color-<name>` in
+/// `web/static/css/input.css`'s `@theme` block), one of Tailwind's own
+/// colour keywords (`white`/`black`/`transparent`/`current`/`inherit`), or a
+/// value on the small, commented allowlist of same-prefix utilities that are
+/// not colours at all (`text-sm`, `border-t`, `outline-none`, …). A colour
+/// renamed or dropped from `@theme` without updating every template now fails
+/// here instead of silently rendering as dead CSS.
+#[test]
+fn no_undefined_tailwind_color_tokens_remain_in_templates() {
+    let css_path = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../web/static/css/input.css"
+    ));
+    let css = std::fs::read_to_string(css_path).expect("read input.css");
+    let theme_start = css.find("@theme").expect("input.css must declare @theme");
+    let theme_open = theme_start
+        + css[theme_start..]
+            .find('{')
+            .expect("@theme block opens with {");
+    let theme_close = css[theme_open..]
+        .find("\n}")
+        .map(|i| theme_open + i)
+        .unwrap_or(css.len());
+    let theme_block = &css[theme_open..theme_close];
+
+    let token_re = regex::Regex::new(r"--color-([a-z][a-z0-9-]*)\s*:").unwrap();
+    let tokens: std::collections::HashSet<&str> = token_re
+        .captures_iter(theme_block)
+        .map(|c| c.get(1).unwrap().as_str())
+        .collect();
+    assert!(
+        !tokens.is_empty(),
+        "must find at least one --color-* token in input.css's @theme block"
+    );
+
+    // Tailwind keywords usable on any colour utility without being one of
+    // this app's own tokens. The numeric default palette (`red-500`,
+    // `slate-100`, …) is not in this allowlist because grepping the
+    // templates tree shows it is never used here — a real `text-red-500`
+    // sneaking in should fail this test, not be silently allowed.
+    const BUILTIN_COLOR_WORDS: &[&str] = &["white", "black", "transparent", "current", "inherit"];
+
+    // Same-prefix Tailwind utilities that are not a colour name, so the scan
+    // (which matches on prefix alone, not on knowing Tailwind's whole
+    // grammar) would otherwise misreport them. Each is a real utility used in
+    // the current templates; add to this list only with a one-line reason.
+    const NON_COLOR_SUFFIXES: &[&str] = &[
+        // text- size/alignment
+        "base",
+        "sm",
+        "lg",
+        "xl",
+        "xs",
+        "center",
+        "left",
+        "right",
+        // border side / divide axis (`border-t`, `divide-y`, …)
+        "t",
+        "b",
+        "l",
+        "r",
+        "x",
+        "y",
+        "l-2",
+        // border/outline style keywords
+        "dashed",
+        "none",
+        // `bg-gradient-to-*` is a fixed Tailwind direction keyword, not
+        // `bg-<color>`
+        "gradient-to-b",
+        "gradient-to-t",
+        "gradient-to-l",
+        "gradient-to-r",
+        "gradient-to-tr",
+        "gradient-to-tl",
+        "gradient-to-br",
+        "gradient-to-bl",
+        // Raw inline-SVG attributes (`stroke-width="2"`, `stroke-linecap=
+        // "round"`, `stroke-linejoin="round"`) that this whole-file text scan
+        // matches the same way it would a class, since it does not parse HTML
+        // attributes.
+        "width",
+        "linecap",
+        "linejoin",
+    ];
+
+    let templates_dir =
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates"));
+    let utility_re = regex::Regex::new(
+        r"\b(text|bg|border|ring|outline|from|to|fill|stroke|placeholder|divide|hover:text|hover:bg|hover:border|peer-checked:bg|peer-checked:text|focus-visible:ring)-([a-z][a-z0-9-]*)(?:/\d+)?",
+    )
+    .unwrap();
+
+    let mut offenders = Vec::new();
+    let mut stack = vec![templates_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
+        {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Ok(contents) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for caps in utility_re.captures_iter(&contents) {
+                let prefix = caps.get(1).unwrap().as_str();
+                let name = caps.get(2).unwrap().as_str();
+                if tokens.contains(name)
+                    || BUILTIN_COLOR_WORDS.contains(&name)
+                    || NON_COLOR_SUFFIXES.contains(&name)
+                {
+                    continue;
+                }
+                offenders.push(format!("{}: {prefix}-{name}", path.display()));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "these utilities name a colour absent from input.css's @theme (and not on the \
+         built-in/non-colour allowlists) — first offender wins, add the token or fix the \
+         template:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// Static UI copy belongs in the i18n catalog and reaches JS through a
+/// server-rendered `data-*` attribute (see `search.js`'s `ds.label*` reads),
+/// never as a literal in the script itself — a hardcoded string here ships in
+/// whatever language the developer typed it in, for every locale.
+///
+/// Heuristic only (a quoted, capitalised two-word literal), not a real
+/// natural-language detector: it does not even match `app.js`'s "Copy to all
+/// days" (a `/* … */` comment naming a feature, four words with no quote
+/// immediately after the second — never a candidate). It does match
+/// `search.js`'s `ds.labelDetails || "View details"`, which is an intentional
+/// last-resort fallback for when the translated dataset attribute is absent,
+/// not copy shown in the normal path — allowlisted below with that reason.
+#[test]
+fn no_hardcoded_english_sentences_in_static_js() {
+    const ALLOWED: &[(&str, &str)] = &[(
+        "search.js",
+        "View details", // fallback default for a missing `data-label-details`, not shown copy
+    )];
+    let js_dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/static/js"));
+    let sentence_re = regex::Regex::new(r#""[A-Z][a-z]+ [a-z]+""#).unwrap();
+    let mut offenders = Vec::new();
+    for entry in std::fs::read_dir(js_dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "js") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let contents = std::fs::read_to_string(&path).expect("read JS source file");
+        for m in sentence_re.find_iter(&contents) {
+            let text = m.as_str().trim_matches('"');
+            if ALLOWED.iter().any(|(f, t)| *f == name && *t == text) {
+                continue;
+            }
+            offenders.push(format!("{name}: {text:?}"));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "quoted English sentence-like literals in static JS (translatable copy belongs in the \
+         i18n catalog, read from a server-rendered data attribute):\n{}",
+        offenders.join("\n")
     );
 }

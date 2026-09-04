@@ -74,7 +74,8 @@ impl FormError {
     fn field_errors(&self, tr: Translator) -> view::FieldErrors {
         let mut out = view::FieldErrors::new();
         if let FormError::Contribution(ContributionError::InvalidField(raw)) = self {
-            let message = contribution_error_message(tr, &ContributionError::InvalidField(raw.clone()));
+            let message =
+                contribution_error_message(tr, &ContributionError::InvalidField(raw.clone()));
             for field in invalid_field_names(raw) {
                 out.push(field, message.clone());
             }
