@@ -99,6 +99,49 @@ impl std::fmt::Display for UserEmail {
     }
 }
 
+/// The language a user reads (REQUIREMENTS §12). Stored on the account so
+/// anything written *outside* a request — a transactional email rendered by a
+/// background job — can still address the person in their own language.
+///
+/// This is a validated code, not a presentation object: the domain and
+/// application layers pass it around, and only the layers that actually render
+/// text (web, infrastructure) turn it into a `bikenest_i18n::Locale`. That is
+/// what keeps the message catalog out of the inner layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LocaleCode {
+    /// Brazilian Portuguese — the product default.
+    #[default]
+    PtBr,
+    En,
+}
+
+impl LocaleCode {
+    /// Parse a stored/incoming code. Accepts the canonical forms plus the
+    /// lowercase URL spelling (`/lang/pt-br`) and a bare `pt`.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "pt-br" | "pt" => Some(LocaleCode::PtBr),
+            "en" => Some(LocaleCode::En),
+            _ => None,
+        }
+    }
+
+    /// The canonical code, as persisted in `users.locale` and as the email
+    /// renderer parses it back.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LocaleCode::PtBr => "pt-BR",
+            LocaleCode::En => "en",
+        }
+    }
+}
+
+impl std::fmt::Display for LocaleCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +150,22 @@ mod tests {
     fn email_is_trimmed_and_lowercased() {
         let email = UserEmail::parse("  Ada@Example.COM ").expect("valid");
         assert_eq!(email.as_str(), "ada@example.com");
+    }
+
+    #[test]
+    fn locale_code_parses_every_spelling_the_app_uses() {
+        // Canonical (`users.locale`), the lowercase URL form (`/lang/pt-br`)
+        // and the bare primary subtag all resolve.
+        assert_eq!(LocaleCode::parse("pt-BR"), Some(LocaleCode::PtBr));
+        assert_eq!(LocaleCode::parse("pt-br"), Some(LocaleCode::PtBr));
+        assert_eq!(LocaleCode::parse("pt"), Some(LocaleCode::PtBr));
+        assert_eq!(LocaleCode::parse("en"), Some(LocaleCode::En));
+        assert_eq!(LocaleCode::parse("EN"), Some(LocaleCode::En));
+        assert_eq!(LocaleCode::parse("fr"), None);
+        // `as_str` emits exactly what the `users.locale` CHECK constraint allows.
+        assert_eq!(LocaleCode::PtBr.as_str(), "pt-BR");
+        assert_eq!(LocaleCode::En.as_str(), "en");
+        assert_eq!(LocaleCode::default(), LocaleCode::PtBr);
     }
 
     #[test]

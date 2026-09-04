@@ -46,7 +46,7 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | `VALKEY_URL` | **Rate limiter** (Ledger #6) single node, e.g. `valkey://valkey:6379`. Shared across auth/photo/contribution/moderation, survives restarts, aggregates across instances |
 | `VALKEY_CLUSTER_URLS` | comma-separated node URLs → **cluster** mode (wins over `VALKEY_URL`) |
 | `RATE_LIMIT_FAIL_OPEN` | `true` (default) → a ValKey outage **allows** requests (goes fail-open); `false` → **denies** (429s the rate-limited endpoints) |
-| `JOBS_ENABLED` | **Background job queue** (M9): `true` (default) spawns an in-process worker that claims/run/retries `background_job` rows; `false` for web-only instances |
+| `JOBS_ENABLED` | **Background job queue** (M9): `true` (default) spawns an in-process worker that claims/run/retries `background_job` rows; `false` for web-only instances — transactional email then sends inline on the request path instead of being queued (§5d) |
 | `JOBS_POLL_INTERVAL_MS` / `JOBS_BATCH_SIZE` / `JOBS_LEASE_TTL_MS` | queue poll cadence, batch size, and lease length (defaults 5000 / 4 / 600000) |
 | `JOBS_MAX_ATTEMPTS` / `JOBS_BACKOFF_BASE_MS` | retry budget (default 5) and exponential-backoff base (default 2000) before dead-letter |
 | `JOBS_HISTORY_RETENTION_DAYS` | `jobs.gc` deletes `succeeded`/`failed` rows older than this (default 7) |
@@ -225,12 +225,13 @@ authorizes the read (no app-side proxy, no app signing secret). Selectable by
 `S3_ENDPOINT`/`S3_BUCKET`; the compose MinIO is the DEVELOPMENT default only —
 production must set every `S3_*` value (see §2a).
 
-**Email (Ledger #4) — done in code.** Provider is selected by `EMAIL_PROVIDER`
+**Email — done in code.** Provider is selected by `EMAIL_PROVIDER`
 (`fake` | `smtp` | `resend`, default `fake`; dev uses `smtp` → Mailpit). Asking
 for `smtp`/`resend` without its credentials is a startup error, never a silent
 fallback to the fake. For
 production set `EMAIL_PROVIDER=resend` + `RESEND_API_KEY`/`RESEND_FROM`, or
 `smtp` + `SMTP_*`. Only the production relay/ESP credentials remain (ops).
+Delivery itself goes through the job queue — see §5d.
 
 **Other providers (tiles, Google OAuth) still use dev impls —**
 **tiles are now configurable** (Ledger #3):
@@ -302,6 +303,36 @@ The always-on recurring jobs (`retention`, `jobs.gc`) are bootstrapped by the
 worker at startup (idempotent via a stable `idempotency_key`), so no manual
 seeding is required. The legacy `cargo run -- retention` subcommand still works
 as a manual escape hatch.
+
+## 5d. Transactional email goes through the queue
+
+Verification, password-reset and e-mail-change messages are **queued, not sent
+inline**. A request writes one `email.send` job (a single INSERT, in the same
+database as the account and token rows) and returns; the worker delivers it with
+the queue's retry budget (`JOBS_MAX_ATTEMPTS`), exponential backoff and
+dead-lettering. A slow or failing relay/ESP therefore cannot hold an HTTP
+request open, and cannot fail a registration *after* the account already exists.
+
+- **Language.** The message carries the recipient's locale (`users.locale`, set
+  at registration from the page's language and updated by the header language
+  toggle for signed-in users). Subject and body are rendered from the message
+  catalog *at send time* — pt-BR and en, never a hard-coded English string.
+- **No double sends.** Each job is enqueued under `email:{kind}:{sha256(link)}`,
+  so a retried or double-submitted request collapses onto the existing row. A
+  genuine re-send issues a new token, hence a new link and a new job.
+- **Dead letters.** An exhausted job logs at `error!` with the message kind and
+  the recipient's *domain* only (never the address, never the link) and stays in
+  `background_job` as `failed` with `last_error` until `jobs.gc` removes it.
+  Alert on that log line: it means someone is stuck without a verification or
+  reset link and needs a re-send.
+- **`JOBS_ENABLED=false`.** No worker runs, so nothing would ever claim an
+  `email.send` row. The app detects this at wiring time and sends **inline** on
+  the request path instead (same provider, same localized rendering) — mail is
+  never silently queued into a void. The trade-off returns with it: a slow ESP
+  is back on the user's request. Prefer leaving the worker on; if you run
+  web-only instances, make sure at least one instance (or a dedicated worker
+  deployment) has `JOBS_ENABLED=true`. Startup validation needs no new rule
+  here: both wirings deliver, so neither is a misconfiguration.
 
 ## 6. Rolling deploy + rollback
 

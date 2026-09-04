@@ -3,12 +3,12 @@
 //! calls [`AuthService`] for every auth/account/role action.
 
 use crate::audit::{AuditEvent, AuditLog};
-use crate::email::{EmailProvider, OutboundEmail};
+use crate::email::{EmailKind, EmailMessage, EmailQueue};
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use async_trait::async_trait;
 use bikenest_domain::{
-    AccountState, AuthenticationProvider, CsrfToken, Password, PasswordPolicy, ProviderIdentity,
-    Role, SessionId, User, UserEmail, UserId, VerificationToken,
+    AccountState, AuthenticationProvider, CsrfToken, LocaleCode, Password, PasswordPolicy,
+    ProviderIdentity, Role, SessionId, User, UserEmail, UserId, VerificationToken,
 };
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -132,6 +132,10 @@ pub struct NewAccount<'a> {
     pub display_name: Option<&'a str>,
     pub password_hash: &'a str,
     pub state: AccountState,
+    /// The language the signup happened in. Persisted on the row so the
+    /// verification mail — and every later message, sent by a background job
+    /// with no request in scope — is written in it.
+    pub locale: LocaleCode,
 }
 
 /// Activity counters the admin user list shows next to each account, so a
@@ -177,6 +181,9 @@ pub trait AccountRepository: Send + Sync {
         email: &UserEmail,
     ) -> Result<(), AuthError>;
     async fn set_password(&self, id: UserId, hash: &str) -> Result<(), AuthError>;
+    /// Persist the account's reading language (the header language toggle, for
+    /// a signed-in user). Transactional email is rendered from this value.
+    async fn set_locale(&self, id: UserId, locale: LocaleCode) -> Result<(), AuthError>;
     async fn link_identity(
         &self,
         user_id: UserId,
@@ -350,7 +357,7 @@ pub struct AuthService {
     hasher: Box<dyn PasswordHasher>,
     tokens_gen: Box<dyn TokenGenerator>,
     clock: Box<dyn Clock>,
-    email: Box<dyn EmailProvider>,
+    email: Box<dyn EmailQueue>,
     oauth: Box<dyn OAuthProvider>,
     rate_limiter: Box<dyn RateLimiter>,
     audit: Box<dyn AuditLog>,
@@ -367,7 +374,7 @@ impl AuthService {
         hasher: Box<dyn PasswordHasher>,
         tokens_gen: Box<dyn TokenGenerator>,
         clock: Box<dyn Clock>,
-        email: Box<dyn EmailProvider>,
+        email: Box<dyn EmailQueue>,
         oauth: Box<dyn OAuthProvider>,
         rate_limiter: Box<dyn RateLimiter>,
         audit: Box<dyn AuditLog>,
@@ -409,30 +416,54 @@ impl AuthService {
         )
     }
 
-    /// Assemble the verification email for a token link.
-    fn verification_email(&self, to: &UserEmail, token: &VerificationToken) -> OutboundEmail {
-        let link = self.verification_link(token);
-        OutboundEmail {
-            to: to.clone(),
-            subject: "Verify your email".to_string(),
-            text: format!(
-                "Welcome to BikeNest. Confirm your email address to activate your account:\n\n{link}\n\nIf you did not create an account, you can ignore this email."
-            ),
-            html: None,
-        }
+    /// Describe the verification email for a token link. Subject and body are
+    /// *not* built here: the message names its kind and locale, and the
+    /// provider renders both from the catalog when it sends.
+    fn verification_email(
+        &self,
+        to: &UserEmail,
+        locale: LocaleCode,
+        token: &VerificationToken,
+    ) -> EmailMessage {
+        EmailMessage::new(
+            to.as_str(),
+            locale,
+            EmailKind::VerifyEmail {
+                link: self.verification_link(token),
+            },
+        )
     }
 
-    /// Assemble the password-reset email for a token link.
-    fn reset_email(&self, to: &UserEmail, token: &VerificationToken) -> OutboundEmail {
-        let link = self.reset_link(token);
-        OutboundEmail {
-            to: to.clone(),
-            subject: "Reset your password".to_string(),
-            text: format!(
-                "We received a request to reset your password. Choose a new one here:\n\n{link}\n\nIf you did not ask for this, you can safely ignore this email."
-            ),
-            html: None,
-        }
+    /// Describe the "confirm your new address" email of an email change.
+    fn change_email_message(
+        &self,
+        to: &UserEmail,
+        locale: LocaleCode,
+        token: &VerificationToken,
+    ) -> EmailMessage {
+        EmailMessage::new(
+            to.as_str(),
+            locale,
+            EmailKind::ConfirmEmailChange {
+                link: self.verification_link(token),
+            },
+        )
+    }
+
+    /// Describe the password-reset email for a token link.
+    fn reset_email(
+        &self,
+        to: &UserEmail,
+        locale: LocaleCode,
+        token: &VerificationToken,
+    ) -> EmailMessage {
+        EmailMessage::new(
+            to.as_str(),
+            locale,
+            EmailKind::ResetPassword {
+                link: self.reset_link(token),
+            },
+        )
     }
 
     async fn allowed(
@@ -461,6 +492,7 @@ impl AuthService {
         raw_email: &str,
         display_name: Option<&str>,
         raw_password: &str,
+        locale: LocaleCode,
     ) -> Result<(), AuthError> {
         self.allowed(
             &format!("register:ip:{ip}"),
@@ -491,6 +523,7 @@ impl AuthService {
                 display_name,
                 password_hash: &hash,
                 state: AccountState::PendingEmailVerification,
+                locale,
             })
             .await?;
 
@@ -498,8 +531,17 @@ impl AuthService {
         self.tokens
             .issue_verification(user_id, email.as_str(), &token, now)
             .await?;
+        // Hand the mail to the queue, never to a provider: a slow or broken
+        // ESP can no longer hold this request open, nor fail it *after* the
+        // account and token exist. The durable queue is one INSERT into the
+        // same database that just wrote those two rows, but not in the same
+        // transaction — the repository ports expose none — so a crash in
+        // between can still leave an account with no mail queued. That is
+        // recoverable by design: the address is unverified, and "resend
+        // verification" issues a fresh token. An enqueue *error* fails the
+        // whole registration, so nobody is told to watch an empty inbox.
         self.email
-            .send(self.verification_email(&email, &token))
+            .enqueue(self.verification_email(&email, locale, &token))
             .await?;
         self.audit
             .record(AuditEvent::success(
@@ -586,7 +628,7 @@ impl AuthService {
             .issue_verification(user.id, email.as_str(), &token, self.now())
             .await?;
         self.email
-            .send(self.verification_email(email, &token))
+            .enqueue(self.verification_email(email, user.locale, &token))
             .await?;
         Ok(())
     }
@@ -741,7 +783,9 @@ impl AuthService {
         };
         let token = VerificationToken::new(self.tokens_gen.generate());
         self.tokens.issue_reset(user.id, &token, self.now()).await?;
-        self.email.send(self.reset_email(email, &token)).await?;
+        self.email
+            .enqueue(self.reset_email(email, user.locale, &token))
+            .await?;
         Ok(())
     }
 
@@ -858,7 +902,7 @@ impl AuthService {
             .issue_verification(user_id, new_email.as_str(), &token, self.now())
             .await?;
         self.email
-            .send(self.verification_email(new_email, &token))
+            .enqueue(self.change_email_message(new_email, user.locale, &token))
             .await?;
         self.audit
             .record(AuditEvent::success(
@@ -869,6 +913,14 @@ impl AuthService {
             ))
             .await?;
         Ok(())
+    }
+
+    /// Persist the language a signed-in user just chose with the header
+    /// toggle. The cookie already switched the interface; this is what makes
+    /// the *next* transactional email — rendered by a background job, with no
+    /// request and no `Accept-Language` in scope — speak the same language.
+    pub async fn set_locale(&self, user_id: UserId, locale: LocaleCode) -> Result<(), AuthError> {
+        self.accounts.set_locale(user_id, locale).await
     }
 
     // -----------------------------------------------------------------------
@@ -921,6 +973,10 @@ impl AuthService {
                 display_name: None,
                 password_hash: "",
                 state,
+                // No page was rendered for this signup (it is a provider
+                // callback), so the account starts on the product default and
+                // the language toggle updates it on the first visit.
+                locale: LocaleCode::default(),
             })
             .await?;
         self.accounts

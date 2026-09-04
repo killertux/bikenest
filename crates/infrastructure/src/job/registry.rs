@@ -3,10 +3,13 @@
 use crate::Db;
 use crate::auth::{SqlxAuditLog, SystemClock};
 use crate::config::Config;
+use crate::job::email::SendEmailHandler;
 use crate::job::repo::SqlxJobRepository;
 use crate::privacy::SqlxRetentionRepository;
 use async_trait::async_trait;
-use bikenest_application::{JOB_JOBS_GC, JOB_RETENTION, JobError, JobHandler, JobPayload};
+use bikenest_application::{
+    EmailProvider, JOB_JOBS_GC, JOB_RETENTION, JobError, JobHandler, JobPayload,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -54,11 +57,17 @@ pub struct JobServices {
 }
 
 /// Build the built-in job handlers from the real infrastructure. Wires
-/// retention (backed by `RetentionJob`) and `jobs.gc`.
+/// retention (backed by `RetentionJob`), `jobs.gc` and `email.send`.
+///
+/// `email` is the same provider instance the router holds, so a deployment
+/// running with `JOBS_ENABLED=false` (where the inline `EmailQueue` sends on
+/// the request path) and one running with the worker talk to one configured
+/// relay/ESP, not two.
 pub fn job_services(
     db: Db,
     config: &Config,
     storage: Arc<dyn bikenest_application::ObjectStorage>,
+    email: Arc<dyn EmailProvider>,
 ) -> JobServices {
     let repo = SqlxJobRepository::new(db.clone());
     let handlers: Vec<Box<dyn JobHandler>> = vec![
@@ -67,6 +76,7 @@ pub fn job_services(
             repo.clone(),
             config.jobs.history_retention_days,
         )),
+        Box::new(SendEmailHandler::new(email)),
     ];
     let recurring = vec![
         RecurringKind {

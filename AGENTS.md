@@ -24,8 +24,10 @@ that data. Bilingual (en + pt-BR). Works on mobile and desktop browsers.
 - **Every external dependency is behind a port** (a `trait` in
   `crates/application`). Replacing a provider = new impl + wiring change, never
   a domain change.
-- **User-facing strings** live only in `crates/web/src/i18n.rs` (en + pt-BR
-  catalogs), never hard-coded in domain/application/web logic.
+- **User-facing strings** live only in the `bikenest-i18n` catalog
+  (`crates/i18n/src/lib.rs`, en + pt-BR; re-exported as `crates/web/src/i18n.rs`
+  and used by infrastructure to render emails), never hard-coded in
+  domain/application/web logic.
 
 ## Index — where to find things
 

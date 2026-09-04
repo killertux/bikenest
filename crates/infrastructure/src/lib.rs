@@ -34,11 +34,14 @@ pub use config::{
 pub use db::Db;
 pub use db_error::{DbFailure, classify, classify_and_log, classify_code};
 pub use email::{
-    CapturedEmail, FakeEmailProvider, ResendEmailProvider, SmtpEmailProvider,
-    from_config as email_from_config,
+    APP_NAME, CapturedEmail, FakeEmailProvider, InlineEmailQueue, JobEmailQueue, RenderedEmail,
+    ResendEmailProvider, SmtpEmailProvider, from_config as email_from_config,
+    render as render_email,
 };
 pub use geocoding::{FakeGeocoder, MapboxGeocoder, geocoder_from_config};
-pub use job::{ClaimedJob, JobRegistry, JobServices, SqlxJobRepository, Worker, job_services};
+pub use job::{
+    ClaimedJob, JobRegistry, JobServices, SendEmailHandler, SqlxJobRepository, Worker, job_services,
+};
 pub use moderation::{SqlxAuditLogReader, SqlxModerationRepository, SqlxReportRepository};
 pub use parking::{SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader};
 pub use photo::{LocalImageProcessor, SqlxPhotoRepository, SqlxReviewPhotosReader};

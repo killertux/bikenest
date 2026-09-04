@@ -787,6 +787,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bikenest-i18n"
+version = "0.1.0"
+dependencies = [
+ "axum",
+]
+
+[[package]]
 name = "bikenest-infrastructure"
 version = "0.1.0"
 dependencies = [
@@ -798,6 +805,7 @@ dependencies = [
  "aws-smithy-types",
  "bikenest-application",
  "bikenest-domain",
+ "bikenest-i18n",
  "bikenest-test-support",
  "chrono",
  "chrono-tz",
@@ -850,6 +858,7 @@ dependencies = [
  "axum",
  "bikenest-application",
  "bikenest-domain",
+ "bikenest-i18n",
  "bikenest-infrastructure",
  "bikenest-test-support",
  "chrono",

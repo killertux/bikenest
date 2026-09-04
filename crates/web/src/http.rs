@@ -12,11 +12,12 @@ use axum::{
 };
 use bikenest_application::{
     AuditFilter, AuthError, AuthService, CheckReadiness, ContributionDeps, ContributionError,
-    ContributionService, EmailProvider, FreshnessConfig, GetParkingDetails, ModerationDeps,
-    ModerationError, ModerationService, NewParkingLocation, NewVerification, ObjectStorage,
-    POLICY_FALLBACK_LOCALE, ParkingEdit, ParkingPhotoReader, PasswordHasher, PhotoDeps, PhotoError,
-    PhotoKind, PhotoService, PhotoTarget, PrivacyDeps, PrivacyError, PrivacyService, ProposalField,
-    ProposalOverride, RateLimiter, Readiness, SearchInput, SearchParking, TokenGenerator,
+    ContributionService, EmailProvider, EmailQueue, FreshnessConfig, GetParkingDetails,
+    ModerationDeps, ModerationError, ModerationService, NewParkingLocation, NewVerification,
+    ObjectStorage, POLICY_FALLBACK_LOCALE, ParkingEdit, ParkingPhotoReader, PasswordHasher,
+    PhotoDeps, PhotoError, PhotoKind, PhotoService, PhotoTarget, PrivacyDeps, PrivacyError,
+    PrivacyService, ProposalField, ProposalOverride, RateLimiter, Readiness, SearchInput,
+    SearchParking, TokenGenerator,
 };
 use bikenest_domain::{
     Cost, CurrencyCode, GeoPoint, ModerationState, Money, OpeningHours, ParkingLocation,
@@ -25,19 +26,21 @@ use bikenest_domain::{
     is_known_attribute_code, is_known_security_code,
 };
 use bikenest_domain::{
-    ExistenceResult, ProposalKind, ProposalPayload, ProposedChange, Role, UserEmail, UserId,
+    ExistenceResult, LocaleCode, ProposalKind, ProposalPayload, ProposedChange, Role, UserEmail,
+    UserId,
 };
 use bikenest_infrastructure::probe::SqlxDatabaseProbe;
 use bikenest_infrastructure::{
-    Argon2PasswordHasher, Config, ConfigError, Db, FakeOAuthProvider, LocalImageProcessor,
-    MapConfig, OfflineTimezoneResolver, RealTokenGenerator, S3ObjectStorage, SharedObjectStorage,
-    SharedRateLimiter, SqlxAccountRepository, SqlxAnonymizationRepository, SqlxAuditLog,
-    SqlxAuditLogReader, SqlxContributionHistoryReader, SqlxExportRepository,
-    SqlxFavoriteRepository, SqlxModerationRepository, SqlxParkingContributionRepository,
-    SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader, SqlxPhotoRepository,
-    SqlxPolicyReader, SqlxPrivacyRequestRepository, SqlxReportRepository, SqlxReviewPhotosReader,
-    SqlxReviewRepository, SqlxSessionStore, SqlxTokenStore, SqlxVerificationRepository,
-    SystemClock, email_from_config, geocoder_from_config, rate_limiter_from_config,
+    Argon2PasswordHasher, Config, ConfigError, Db, FakeOAuthProvider, InlineEmailQueue,
+    JobEmailQueue, LocalImageProcessor, MapConfig, OfflineTimezoneResolver, RealTokenGenerator,
+    S3ObjectStorage, SharedObjectStorage, SharedRateLimiter, SqlxAccountRepository,
+    SqlxAnonymizationRepository, SqlxAuditLog, SqlxAuditLogReader, SqlxContributionHistoryReader,
+    SqlxExportRepository, SqlxFavoriteRepository, SqlxModerationRepository,
+    SqlxParkingContributionRepository, SqlxParkingDetailsReader, SqlxParkingPhotoReader,
+    SqlxParkingSearchReader, SqlxPhotoRepository, SqlxPolicyReader, SqlxPrivacyRequestRepository,
+    SqlxReportRepository, SqlxReviewPhotosReader, SqlxReviewRepository, SqlxSessionStore,
+    SqlxTokenStore, SqlxVerificationRepository, SystemClock, email_from_config,
+    geocoder_from_config, rate_limiter_from_config,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -99,7 +102,10 @@ pub struct AppState {
 /// The doubles a test injects. Production passes [`RouterDeps::from_config`],
 /// which builds every one of them from the parsed configuration.
 pub struct RouterDeps<H: PasswordHasher + Clone + 'static> {
-    pub email: Box<dyn EmailProvider>,
+    /// The mail provider. Shared (not owned): `main` hands the same instance to
+    /// `job_services` so the `email.send` handler and the inline queue talk to
+    /// one configured relay/ESP.
+    pub email: Arc<dyn EmailProvider>,
     /// `None` builds the deterministic stub from `Config::fake_oauth`.
     pub oauth: Option<FakeOAuthProvider>,
     pub hasher: H,
@@ -113,7 +119,7 @@ impl RouterDeps<Argon2PasswordHasher> {
     /// built.
     pub fn from_config(config: &Config) -> Result<Self, ConfigError> {
         Ok(Self {
-            email: email_from_config(&config.email)?,
+            email: Arc::from(email_from_config(&config.email)?),
             oauth: None,
             hasher: Argon2PasswordHasher,
             rate_limiter: rate_limiter_from_config(&config.rate_limiter)?,
@@ -162,6 +168,20 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         Box::new(SqlxParkingDetailsReader::new(db.clone())),
         config.freshness,
     );
+    // Transactional mail leaves the request path when there is a worker to
+    // pick it up: `JOBS_ENABLED=true` (the default) queues an `email.send` job,
+    // so a slow ESP cannot hold a registration open or fail it after the
+    // account row exists. With the worker disabled nothing would ever claim
+    // that row, so the same port sends inline instead — queuing it would be
+    // indistinguishable from dropping the mail.
+    let email_queue: Box<dyn EmailQueue> = if config.jobs.enabled {
+        Box::new(JobEmailQueue::new(
+            bikenest_infrastructure::SqlxJobRepository::new(db.clone()),
+            config.jobs.max_attempts,
+        ))
+    } else {
+        Box::new(InlineEmailQueue::new(email))
+    };
     let auth_service = AuthService::new(
         Box::new(SqlxAccountRepository::new(db.clone())),
         Box::new(SqlxSessionStore::new(db.clone())),
@@ -169,7 +189,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         Box::new(hasher.clone()), // password hasher (Argon2 in prod, fast fake in tests)
         Box::new(RealTokenGenerator),
         Box::new(SystemClock),
-        email,
+        email_queue,
         Box::new(oauth),
         Box::new(SharedRateLimiter::new(rate_limiter.clone())), // shared ValKey store
         Box::new(SqlxAuditLog::new(db.clone())),
@@ -2309,9 +2329,20 @@ struct LangParams {
     next: String,
 }
 
+/// The request locale as the code an account stores. `Locale` is the
+/// presentation type (it selects catalog strings and drives templates);
+/// `LocaleCode` is what the domain persists and what a queued email carries,
+/// which is how mail sent later — with no request in scope — still finds the
+/// right language.
+fn locale_code(locale: Locale) -> LocaleCode {
+    LocaleCode::parse(locale.html_lang()).unwrap_or_default()
+}
+
 async fn set_lang(
+    State(state): State<AppState>,
     Path(code): Path<String>,
     Query(params): Query<LangParams>,
+    auth: Auth,
     headers: HeaderMap,
 ) -> Response {
     // Return the user to where they were: explicit `next`, else the page htmx
@@ -2337,6 +2368,16 @@ async fn set_lang(
     let Some(locale) = Locale::from_code(&code) else {
         return axum::response::Redirect::to(&next).into_response();
     };
+    // Persist the choice for a signed-in user. The cookie only changes what
+    // this browser renders; `users.locale` is what the background job that
+    // sends their next verification or password-reset mail reads. A write
+    // failure is not worth failing the redirect over — the interface has
+    // already switched, and the language toggle is not a transaction.
+    if let Some(user) = auth.user.as_ref()
+        && let Err(err) = state.auth.set_locale(user.id, locale_code(locale)).await
+    {
+        tracing::warn!(error = %err, "could not persist the account language");
+    }
     let cookie = format!(
         "lang={}; Path=/; Max-Age=31536000; SameSite=Lax",
         locale.code()
@@ -2438,7 +2479,13 @@ async fn register_post(
     };
     match state
         .auth
-        .register(&ip, &form.email, display_name, &form.password)
+        .register(
+            &ip,
+            &form.email,
+            display_name,
+            &form.password,
+            locale_code(locale),
+        )
         .await
     {
         Ok(()) => axum::response::Redirect::to("/login?registered=1").into_response(),

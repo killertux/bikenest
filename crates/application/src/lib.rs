@@ -35,8 +35,8 @@ pub use community::{
     NewVerification, ParkingContributionRepository, ParkingEdit, Reason, Review, ReviewRepository,
     VerificationRepository, recommendation_reasons,
 };
-pub use email::{EmailError, EmailProvider, OutboundEmail};
-pub use jobs::{JOB_JOBS_GC, JOB_RETENTION, JobError, JobHandler, JobPayload};
+pub use email::{EmailError, EmailKind, EmailMessage, EmailProvider, EmailQueue};
+pub use jobs::{JOB_EMAIL_SEND, JOB_JOBS_GC, JOB_RETENTION, JobError, JobHandler, JobPayload};
 pub use moderation::{
     ModerationDeps, ModerationError, ModerationRepository, ModerationService, NewReport, Proposal,
     ProposalApplication, ProposalField, ProposalOverride, QueueCounts, REVIEW_EXCERPT_CHARS,

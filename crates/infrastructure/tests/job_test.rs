@@ -472,3 +472,192 @@ async fn cancelling_the_token_stops_an_idle_worker(_tx: &mut bikenest_test_suppo
     .unwrap();
     assert_eq!(running, 0, "a stopped worker must leave no job running");
 }
+
+// ---------------------------------------------------------------------------
+// email.send: the queued transactional email
+// ---------------------------------------------------------------------------
+
+use async_trait::async_trait;
+use bikenest_application::{
+    EmailError, EmailKind, EmailMessage, EmailProvider, EmailQueue, JobError, JobHandler,
+};
+use bikenest_domain::LocaleCode;
+use bikenest_infrastructure::email::idempotency_key;
+use bikenest_infrastructure::{FakeEmailProvider, JobEmailQueue, SendEmailHandler};
+use std::sync::Arc;
+
+/// A token nothing else in the suite (or a previous run) can collide with:
+/// the idempotency key is derived from it, and the key is UNIQUE forever.
+fn unique_token(tag: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("emailtest-{tag}-{nanos}")
+}
+
+fn verify_message(token: &str) -> EmailMessage {
+    EmailMessage::new(
+        "ada@example.com",
+        LocaleCode::PtBr,
+        EmailKind::VerifyEmail {
+            link: format!("http://localhost:8080/verify-email?token={token}"),
+        },
+    )
+}
+
+async fn row_for_key(key: &str) -> Option<(i64, serde_json::Value, i32)> {
+    sqlx::query_as(
+        "SELECT id, payload, max_attempts FROM background_job WHERE idempotency_key = $1",
+    )
+    .bind(key)
+    .fetch_optional(&pool().await)
+    .await
+    .unwrap()
+}
+
+async fn delete_job(id: i64) {
+    sqlx::query("DELETE FROM background_job WHERE id = $1")
+        .bind(id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+/// Simulate a claim with a direct `UPDATE` rather than calling `claim` — which
+/// is not scoped by kind and would race the other tests in this file.
+async fn simulate_claim(id: i64, worker: &str, attempt: i32) {
+    sqlx::query(
+        "UPDATE background_job SET state='running', claimed_by=$2,
+            lease_expires_at=now()+interval '60 seconds', attempts=$3 WHERE id=$1",
+    )
+    .bind(id)
+    .bind(worker)
+    .bind(attempt)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+}
+
+/// A provider that always fails, so the queue's retry path is exercised.
+struct BrokenProvider;
+#[async_trait]
+impl EmailProvider for BrokenProvider {
+    async fn send(&self, _msg: &EmailMessage) -> Result<(), EmailError> {
+        Err(EmailError::Unavailable)
+    }
+}
+
+/// The idempotency key is what stops a double-submitted form (or a retried
+/// request) from mailing the same verification link twice: the second enqueue
+/// collapses onto the existing row. A *fresh* token is a different message and
+/// must still get its own job.
+#[db_test]
+async fn queueing_one_message_twice_creates_a_single_job(_tx: &mut bikenest_test_support::TestTx) {
+    let queue = JobEmailQueue::new(repo().await, 3);
+    let msg = verify_message(&unique_token("dedupe"));
+
+    queue.enqueue(msg.clone()).await.unwrap();
+    queue.enqueue(msg.clone()).await.unwrap();
+
+    let key = idempotency_key(&msg);
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM background_job WHERE idempotency_key = $1")
+            .bind(&key)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(n, 1, "the same token must never be queued twice");
+
+    // Running that single job delivers exactly one message, rendered in the
+    // locale the payload carries.
+    let (id, payload, max_attempts) = row_for_key(&key).await.expect("queued row");
+    assert_eq!(
+        max_attempts, 3,
+        "the row carries the configured attempt budget"
+    );
+    let mail = FakeEmailProvider::with_root(None);
+    SendEmailHandler::new(Arc::new(mail.clone()))
+        .run(&payload)
+        .await
+        .unwrap();
+    assert_eq!(mail.emails().len(), 1);
+    assert_eq!(mail.emails()[0].subject, "Confirme seu e-mail no BikeNest");
+
+    // A re-send issues a new token → a new job, not a swallowed duplicate.
+    let resend = verify_message(&unique_token("dedupe-resend"));
+    queue.enqueue(resend.clone()).await.unwrap();
+    let resend_key = idempotency_key(&resend);
+    assert_ne!(resend_key, key);
+    let (resend_id, _, _) = row_for_key(&resend_key).await.expect("second job queued");
+
+    delete_job(id).await;
+    delete_job(resend_id).await;
+}
+
+/// A provider outage is transient: the job is retried while its budget lasts
+/// and dead-lettered when it runs out. The stored error names the message kind
+/// and the recipient's domain — never the address, never the link.
+#[db_test]
+async fn a_failing_email_send_is_retried_then_dead_lettered(
+    _tx: &mut bikenest_test_support::TestTx,
+) {
+    // A deliberately small budget (production's default is 5).
+    let jobs = repo().await;
+    let queue = JobEmailQueue::new(jobs.clone(), 2);
+    let msg = verify_message(&unique_token("deadletter"));
+    queue.enqueue(msg.clone()).await.unwrap();
+
+    let key = idempotency_key(&msg);
+    let (id, payload, max_attempts) = row_for_key(&key).await.expect("queued row");
+    assert_eq!(max_attempts, 2);
+    let handler = SendEmailHandler::new(Arc::new(BrokenProvider));
+
+    // Attempt 1 of 2 → within budget → requeued with the error recorded.
+    simulate_claim(id, "worker-mail", 1).await;
+    let first = handler.run(&payload).await.unwrap_err();
+    assert!(
+        matches!(first, JobError::Failed(_)),
+        "a provider outage must be retryable, not permanent: {first:?}"
+    );
+    let run_at = Utc::now() + Duration::seconds(30);
+    jobs.retry(id, "worker-mail", &first.to_string(), run_at)
+        .await
+        .unwrap();
+    let (state, attempts): (String, i32) =
+        sqlx::query_as("SELECT state, attempts FROM background_job WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "pending", "still retryable");
+    assert_eq!(attempts, 1);
+
+    // Attempt 2 == the budget → the worker dead-letters instead of retrying.
+    simulate_claim(id, "worker-mail", 2).await;
+    let last = handler.run(&payload).await.unwrap_err();
+    handler.on_dead_letter(&payload, &last.to_string()).await;
+    jobs.fail(id, "worker-mail", &last.to_string())
+        .await
+        .unwrap();
+
+    let (state, finished, last_error): (String, Option<chrono::DateTime<Utc>>, Option<String>) =
+        sqlx::query_as("SELECT state, finished_at, last_error FROM background_job WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "failed", "a spent budget dead-letters the job");
+    assert!(finished.is_some());
+    let recorded = last_error.unwrap_or_default();
+    assert!(
+        recorded.contains("verify") && recorded.contains("example.com"),
+        "the dead-letter row must say what failed and to which domain: {recorded}"
+    );
+    assert!(
+        !recorded.contains("ada@") && !recorded.contains("token="),
+        "no address and no live link in a stored error: {recorded}"
+    );
+
+    delete_job(id).await;
+}

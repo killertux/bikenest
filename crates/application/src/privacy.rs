@@ -1166,6 +1166,13 @@ mod tests {
         async fn set_password(&self, _i: UserId, _h: &str) -> Result<(), AuthError> {
             Ok(())
         }
+        async fn set_locale(
+            &self,
+            _i: UserId,
+            _l: bikenest_domain::LocaleCode,
+        ) -> Result<(), AuthError> {
+            Ok(())
+        }
         async fn link_identity(
             &self,
             _u: UserId,

@@ -5,7 +5,9 @@ use async_trait::async_trait;
 use bikenest_application::{
     AccountRepository, AuthError, IdentityRecord, NewAccount, UserActivity, UserSearch,
 };
-use bikenest_domain::{AccountState, AuthenticationProvider, Role, User, UserEmail, UserId};
+use bikenest_domain::{
+    AccountState, AuthenticationProvider, LocaleCode, Role, User, UserEmail, UserId,
+};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
@@ -33,6 +35,10 @@ impl SqlxAccountRepository {
             account_state,
             email_verified_at: row.email_verified_at,
             roles,
+            // The column is CHECK-constrained to the two codes `LocaleCode`
+            // parses; an unparseable value would be a hand-edited row, and
+            // falling back to the product default beats failing every read.
+            locale: LocaleCode::parse(&row.locale).unwrap_or_default(),
         };
         if !user.roles.contains(&Role::User) {
             user.roles.push(Role::User);
@@ -71,6 +77,7 @@ struct UserRow {
     display_name: Option<String>,
     account_state: String,
     email_verified_at: Option<DateTime<Utc>>,
+    locale: String,
 }
 
 #[async_trait]
@@ -78,7 +85,7 @@ impl AccountRepository for SqlxAccountRepository {
     async fn find_by_email(&self, email: &UserEmail) -> Result<Option<User>, AuthError> {
         let row = sqlx::query_as::<_, UserRow>(
             r#"
-            SELECT id, email, display_name, account_state, email_verified_at
+            SELECT id, email, display_name, account_state, email_verified_at, locale
             FROM users
             WHERE lower(email) = $1
             "#,
@@ -96,7 +103,7 @@ impl AccountRepository for SqlxAccountRepository {
     async fn find_by_id(&self, id: UserId) -> Result<Option<User>, AuthError> {
         let row = sqlx::query_as::<_, UserRow>(
             r#"
-            SELECT id, email, display_name, account_state, email_verified_at
+            SELECT id, email, display_name, account_state, email_verified_at, locale
             FROM users
             WHERE id = $1
             "#,
@@ -120,14 +127,15 @@ impl AccountRepository for SqlxAccountRepository {
             .map_err(|e| db_err("account.create", e))?;
         let (id,): (i64,) = sqlx::query_as(
             r#"
-            INSERT INTO users (email, display_name, account_state, updated_at)
-            VALUES ($1, $2, $3, now())
+            INSERT INTO users (email, display_name, account_state, locale, updated_at)
+            VALUES ($1, $2, $3, $4, now())
             RETURNING id
             "#,
         )
         .bind(new.email.as_str())
         .bind(new.display_name)
         .bind(new.state.as_code())
+        .bind(new.locale.as_str())
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| db_err("account.create", e))?;
@@ -260,6 +268,16 @@ impl AccountRepository for SqlxAccountRepository {
         Ok(())
     }
 
+    async fn set_locale(&self, id: UserId, locale: LocaleCode) -> Result<(), AuthError> {
+        sqlx::query("UPDATE users SET locale = $2, updated_at = now() WHERE id = $1")
+            .bind(id.0)
+            .bind(locale.as_str())
+            .execute(self.db.pool())
+            .await
+            .map_err(|e| db_err("account.set_locale", e))?;
+        Ok(())
+    }
+
     async fn link_identity(
         &self,
         user_id: UserId,
@@ -366,7 +384,7 @@ impl AccountRepository for SqlxAccountRepository {
     async fn list_users(&self) -> Result<Vec<User>, AuthError> {
         let rows = sqlx::query_as::<_, UserRow>(
             r#"
-            SELECT id, email, display_name, account_state, email_verified_at
+            SELECT id, email, display_name, account_state, email_verified_at, locale
             FROM users
             ORDER BY id DESC
             "#,
@@ -383,7 +401,7 @@ impl AccountRepository for SqlxAccountRepository {
         let pattern = search.query.map(|q| format!("%{}%", escape_like(q)));
         let rows = sqlx::query_as::<_, UserRow>(
             r#"
-            SELECT id, email, display_name, account_state, email_verified_at
+            SELECT id, email, display_name, account_state, email_verified_at, locale
             FROM users
             WHERE ($1::text IS NULL OR email ILIKE $1::text ESCAPE '!'
                                     OR display_name ILIKE $1::text ESCAPE '!')

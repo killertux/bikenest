@@ -49,6 +49,7 @@ async fn account_repo_round_trip(_tx: &mut bikenest_test_support::TestTx) {
             display_name: Some("Ada"),
             password_hash: "$argon2id$test",
             state: AccountState::Active,
+            locale: bikenest_domain::LocaleCode::PtBr,
         })
         .await
         .unwrap();
@@ -97,6 +98,7 @@ async fn update_canonical_email_keeps_identity_in_sync(_tx: &mut bikenest_test_s
             display_name: None,
             password_hash: "h",
             state: AccountState::Active,
+            locale: bikenest_domain::LocaleCode::PtBr,
         })
         .await
         .unwrap();
@@ -382,6 +384,7 @@ async fn search_users_matches_email_or_name_and_pages_by_keyset(
                 display_name: Some(&format!("Wp13 Person {n}")),
                 password_hash: "$argon2id$test",
                 state: AccountState::Active,
+                locale: bikenest_domain::LocaleCode::PtBr,
             })
             .await
             .unwrap();
@@ -469,6 +472,7 @@ async fn search_users_matches_email_or_name_and_pages_by_keyset(
         display_name: Some("Wp13 Under_score"),
         password_hash: "$argon2id$test",
         state: AccountState::Active,
+        locale: bikenest_domain::LocaleCode::PtBr,
     })
     .await
     .unwrap();
@@ -531,6 +535,7 @@ async fn activity_for_reports_last_seen_and_a_contribution_total(
             display_name: None,
             password_hash: "$argon2id$test",
             state: AccountState::Active,
+            locale: bikenest_domain::LocaleCode::PtBr,
         })
         .await
         .unwrap()
@@ -603,5 +608,55 @@ async fn activity_for_reports_last_seen_and_a_contribution_total(
         .execute(&pool().await)
         .await
         .unwrap();
+    cleanup_user(&email).await;
+}
+
+/// `users.locale` round-trips: the registration locale is persisted, every read
+/// model carries it, and the language toggle updates it. This column is the
+/// only thing a background job can read to know which language to write in.
+#[db_test]
+async fn account_locale_is_persisted_and_updatable(_tx: &mut bikenest_test_support::TestTx) {
+    use bikenest_domain::LocaleCode;
+
+    let db = Db::from_pool(pool().await);
+    let repo = SqlxAccountRepository::new(db);
+    let email = marker_email("locale");
+    cleanup_user(&email).await;
+    let eu = UserEmail::parse(&email).unwrap();
+
+    let id = repo
+        .create(bikenest_application::NewAccount {
+            email: &eu,
+            display_name: None,
+            password_hash: "$argon2id$test",
+            state: AccountState::Active,
+            locale: LocaleCode::En,
+        })
+        .await
+        .unwrap();
+
+    // Both read paths hydrate it (they are separate queries).
+    assert_eq!(
+        repo.find_by_id(id).await.unwrap().unwrap().locale,
+        LocaleCode::En
+    );
+    assert_eq!(
+        repo.find_by_email(&eu).await.unwrap().unwrap().locale,
+        LocaleCode::En
+    );
+
+    repo.set_locale(id, LocaleCode::PtBr).await.unwrap();
+    assert_eq!(
+        repo.find_by_id(id).await.unwrap().unwrap().locale,
+        LocaleCode::PtBr
+    );
+    // Stored in the canonical spelling the CHECK constraint allows.
+    let stored: String = sqlx::query_scalar("SELECT locale FROM users WHERE id = $1")
+        .bind(id.0)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    assert_eq!(stored, "pt-BR");
+
     cleanup_user(&email).await;
 }

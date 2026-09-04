@@ -12,6 +12,8 @@ askama = { workspace = true }
 axum = { workspace = true, features = ["multipart"] }
 bikenest-application = { workspace = true }
 bikenest-domain = { workspace = true }
+# `axum`: makes `Locale` a request extractor (web-only concern).
+bikenest-i18n = { workspace = true, features = ["axum"] }
 bikenest-infrastructure = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = "0.10"

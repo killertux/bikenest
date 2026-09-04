@@ -20,7 +20,7 @@ async fn test_app() -> axum::Router {
     let db = Db::from_pool(pool().await);
     let config = std::sync::Arc::new(bikenest_test_support::test_config());
     let deps = RouterDeps {
-        email: Box::new(bikenest_infrastructure::FakeEmailProvider::with_root(None)),
+        email: std::sync::Arc::new(bikenest_infrastructure::FakeEmailProvider::with_root(None)),
         oauth: None,
         hasher: bikenest_test_support::TestPasswordHasher,
         rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),

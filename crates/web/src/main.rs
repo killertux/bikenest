@@ -235,7 +235,11 @@ async fn serve(config: Config, db: Db) {
     let worker_task = if config.jobs.enabled {
         let storage: Arc<dyn bikenest_application::ObjectStorage> =
             Arc::new(S3ObjectStorage::from_config(&config.storage));
-        let services = bikenest_infrastructure::job_services(db.clone(), &config, storage);
+        // The worker gets the same provider instance the router holds, so the
+        // `email.send` handler mails through the configured relay/ESP rather
+        // than a second copy of it.
+        let services =
+            bikenest_infrastructure::job_services(db.clone(), &config, storage, deps.email.clone());
         let worker =
             bikenest_infrastructure::Worker::new(services.repo, services.registry, config.jobs);
         tracing::info!(jobs = "enabled", "background worker started");

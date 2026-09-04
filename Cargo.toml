@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/domain",
     "crates/application",
+    "crates/i18n",
     "crates/infrastructure",
     "crates/web",
     "crates/test-support",
@@ -17,6 +18,9 @@ license = "UNLICENSED"
 [workspace.dependencies]
 bikenest-domain = { path = "crates/domain" }
 bikenest-application = { path = "crates/application" }
+# The message catalog: shared by the web layer (pages) and infrastructure
+# (transactional emails rendered in the recipient's stored locale).
+bikenest-i18n = { path = "crates/i18n" }
 bikenest-infrastructure = { path = "crates/infrastructure" }
 bikenest-web = { path = "crates/web" }
 bikenest-test-support = { path = "crates/test-support" }

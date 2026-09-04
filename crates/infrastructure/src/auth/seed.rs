@@ -78,6 +78,9 @@ pub async fn seed_admin(db: &Db) -> Result<SeedOutcome, SeedAdminError> {
                 display_name: Some("Administrator"),
                 password_hash: &hash,
                 state: AccountState::Active,
+                // Seeded from the CLI, with no page and no request behind it:
+                // the product default, changeable from the language toggle.
+                locale: bikenest_domain::LocaleCode::default(),
             })
             .await?;
         repo.mark_email_verified(id, now).await?;

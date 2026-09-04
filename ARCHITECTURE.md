@@ -48,7 +48,8 @@ browser ──> reverse proxy / TLS ──> axum (web) ──> application servi
 | `bikenest-domain` (`crates/domain`) | pure business concepts: value objects, enums, rules (hours, freshness, confidence, cost, security), the typed proposal payload | nothing framework-level (chrono, thiserror, serde_json for the proposal payload) |
 | `bikenest-application` (`crates/application`) | use cases (services) + ports (`trait`s). Orchestrates domain objects; no I/O of its own | `domain` |
 | `bikenest-infrastructure` (`crates/infrastructure`) | SQLx repositories, config loading, providers (S3, SMTP, Mapbox, ValKey, image, timezone), seeders, job worker | `domain`, `application` |
-| `bikenest-web` (`crates/web`) | axum router, handlers, middleware, view models, i18n catalog, Askama templates. **The binary** (`bikenest-web`) | `domain`, `application`, `infrastructure` |
+| `bikenest-i18n` (`crates/i18n`) | the en + pt-BR string catalog (`Locale`, `Translator`); the axum request extractor sits behind the `axum` feature so infrastructure can render emails without it | nothing framework-level (axum only with the feature) |
+| `bikenest-web` (`crates/web`) | axum router, handlers, middleware, view models, Askama templates; re-exports the i18n catalog. **The binary** (`bikenest-web`) | `domain`, `application`, `infrastructure`, `i18n` |
 | `bikenest-test-support` (`crates/test-support`) | shared `#[db_test]` harness, pool fixture, domain-rich builders, fast test doubles | `domain`, `application`, `infrastructure`, `test-macros` |
 | `bikenest-test-macros` (`crates/test-macros`) | the `#[db_test]` proc macro | (proc-macro deps) |
 

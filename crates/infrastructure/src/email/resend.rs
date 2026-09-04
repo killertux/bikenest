@@ -3,8 +3,9 @@
 
 use crate::config::{ConfigError, EmailConfig};
 
+use crate::email::templates::render;
 use async_trait::async_trait;
-use bikenest_application::{EmailError, EmailProvider, OutboundEmail};
+use bikenest_application::{EmailError, EmailMessage, EmailProvider};
 use reqwest::Client;
 
 #[derive(Clone)]
@@ -16,8 +17,9 @@ pub struct ResendEmailProvider {
 
 impl ResendEmailProvider {
     pub fn new(api_key: impl Into<String>, from: impl Into<String>) -> Self {
-        // 10s timeout: an email send runs inline behind a user action (register,
-        // resend, password reset); don't let a slow Resend response hang it.
+        // 10s timeout: the send runs in a background job with its own retry
+        // budget, so a hung request would hold a worker slot and a job lease
+        // rather than a user's page — still not something to wait forever on.
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
@@ -42,24 +44,22 @@ impl ResendEmailProvider {
 }
 
 impl ResendEmailProvider {
-    fn payload(&self, email: &OutboundEmail) -> serde_json::Value {
-        let mut body = serde_json::json!({
+    /// The API body for `msg`, rendered in the recipient's locale.
+    fn payload(&self, msg: &EmailMessage) -> serde_json::Value {
+        let rendered = render(msg);
+        serde_json::json!({
             "from": self.from,
-            "to": [email.to.to_string()],
-            "subject": email.subject,
-            "text": email.text,
-        });
-        if let Some(html) = &email.html {
-            body["html"] = serde_json::Value::String(html.clone());
-        }
-        body
+            "to": [msg.to],
+            "subject": rendered.subject,
+            "text": rendered.text,
+        })
     }
 }
 
 #[async_trait]
 impl EmailProvider for ResendEmailProvider {
-    async fn send(&self, email: OutboundEmail) -> Result<(), EmailError> {
-        let body = self.payload(&email);
+    async fn send(&self, msg: &EmailMessage) -> Result<(), EmailError> {
+        let body = self.payload(msg);
         let res = self
             .client
             .post("https://api.resend.com/emails")
@@ -85,35 +85,41 @@ impl EmailProvider for ResendEmailProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bikenest_domain::UserEmail;
+    use bikenest_application::EmailKind;
+    use bikenest_domain::LocaleCode;
 
     fn provider() -> ResendEmailProvider {
         ResendEmailProvider::new("test-key", "no-reply@bikenest.local")
     }
 
     #[test]
-    fn payload_omits_html_when_absent() {
-        let email = OutboundEmail {
-            to: UserEmail::parse("a@example.com").unwrap(),
-            subject: "Subject".into(),
-            text: "Body".into(),
-            html: None,
-        };
-        let p = provider().payload(&email);
+    fn payload_carries_the_rendered_message() {
+        let msg = EmailMessage::new(
+            "a@example.com",
+            LocaleCode::En,
+            EmailKind::VerifyEmail {
+                link: "https://bikenest.test/verify-email?token=t".into(),
+            },
+        );
+        let p = provider().payload(&msg);
         assert_eq!(p["from"], "no-reply@bikenest.local");
         assert_eq!(p["to"][0], "a@example.com");
+        assert_eq!(p["subject"], "Confirm your BikeNest email");
+        assert!(p["text"].as_str().unwrap().contains("verify-email?token=t"));
+        // Plain text only: there is no HTML template for any kind.
         assert!(p.get("html").is_none());
     }
 
     #[test]
-    fn payload_includes_html_when_present() {
-        let email = OutboundEmail {
-            to: UserEmail::parse("a@example.com").unwrap(),
-            subject: "Subject".into(),
-            text: "Body".into(),
-            html: Some("<p>Dear</p>".into()),
-        };
-        let p = provider().payload(&email);
-        assert_eq!(p["html"], "<p>Dear</p>");
+    fn payload_is_rendered_in_the_recipients_locale() {
+        let msg = EmailMessage::new(
+            "a@example.com",
+            LocaleCode::PtBr,
+            EmailKind::VerifyEmail {
+                link: "https://bikenest.test/verify-email?token=t".into(),
+            },
+        );
+        let p = provider().payload(&msg);
+        assert_eq!(p["subject"], "Confirme seu e-mail no BikeNest");
     }
 }

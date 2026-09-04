@@ -566,7 +566,7 @@ async fn auth_app_opts(google_oauth_enabled: bool) -> (axum::Router, FakeEmailPr
         ..test_config()
     };
     let deps = RouterDeps {
-        email: Box::new(email.clone()),
+        email: std::sync::Arc::new(email.clone()),
         oauth: Some(FakeOAuthProvider::new(
             "oauth.user@example.com",
             "sub-oauth-1",
@@ -593,7 +593,7 @@ async fn auth_app_with_storage() -> (
     let config = test_config();
     let storage = std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new());
     let deps = RouterDeps {
-        email: Box::new(email.clone()),
+        email: std::sync::Arc::new(email.clone()),
         oauth: Some(FakeOAuthProvider::new(
             "oauth.user@example.com",
             "sub-oauth-1",
@@ -3564,7 +3564,7 @@ async fn a_trusted_proxys_forwarded_for_does_key_the_bucket(_tx: &mut TestTx) {
         std::sync::Arc::new(config),
         db,
         RouterDeps {
-            email: Box::new(FakeEmailProvider::with_root(None)),
+            email: std::sync::Arc::new(FakeEmailProvider::with_root(None)),
             oauth: None,
             hasher: TestPasswordHasher,
             rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
@@ -5972,4 +5972,234 @@ fn templates_reference_css_and_js_only_through_asset() {
         "css/js must be referenced through layout.asset(), not a literal /static/ path:\n{}",
         offenders.join("\n")
     );
+}
+
+// ---------------------------------------------------------------------------
+// Localised transactional email
+// ---------------------------------------------------------------------------
+
+/// A registration POST with an explicit `Accept-Language`. The shared
+/// [`post_form`] pins that header to `en`, and the header is exactly what is
+/// under test here.
+async fn register_with_language(
+    app: &axum::Router,
+    email: &str,
+    accept_language: &str,
+) -> (StatusCode, Option<String>) {
+    let (cookie_line, token) = anon_csrf(app, "/register").await.expect("anon csrf");
+    let body = format!(
+        "email={}&display_name=&password=password123&csrf={}",
+        urlencode(email),
+        urlencode(&token)
+    );
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/register")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Accept-Language", accept_language)
+                .header("cookie", cookie_line)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let set_cookie = res
+        .headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    (res.status(), set_cookie)
+}
+
+async fn stored_locale(email: &str) -> String {
+    sqlx::query_scalar("SELECT locale FROM users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap()
+}
+
+/// The bug this work package fixes: a Portuguese signup used to get an English
+/// "Verify your email". The subject now follows the language the form was
+/// rendered in, and that language is stored on the account so later messages
+/// (sent with no request in scope) keep speaking it.
+#[db_test]
+async fn the_verification_email_is_written_in_the_signup_language(_tx: &mut TestTx) {
+    const PT: &str = "locale-pt@example.com";
+    const EN: &str = "locale-en@example.com";
+
+    let (app, mail) = auth_app().await;
+    cleanup_user(PT).await;
+    let (status, _) = register_with_language(&app, PT, "pt-BR,pt;q=0.9").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        mail.subject_for_kind("verify").as_deref(),
+        Some("Confirme seu e-mail no BikeNest"),
+        "a pt-BR signup must be greeted in Portuguese"
+    );
+    assert_eq!(stored_locale(PT).await, "pt-BR");
+    cleanup_user(PT).await;
+
+    // A fresh app (and outbox) for the English signup.
+    let (app_en, mail_en) = auth_app().await;
+    cleanup_user(EN).await;
+    let (status, _) = register_with_language(&app_en, EN, "en-GB,en;q=0.8").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        mail_en.subject_for_kind("verify").as_deref(),
+        Some("Confirm your BikeNest email")
+    );
+    assert_eq!(stored_locale(EN).await, "en");
+    cleanup_user(EN).await;
+}
+
+/// `GET /lang/{code}` sets the cookie for everyone; for a signed-in user it
+/// also writes `users.locale`, which is the only thing a background job can
+/// read. The mail that follows switches language with it.
+#[db_test]
+async fn the_language_toggle_persists_for_a_signed_in_user(_tx: &mut TestTx) {
+    const EMAIL: &str = "locale-toggle@example.com";
+    let (app, mail) = auth_app().await;
+    cleanup_user(EMAIL).await;
+
+    let (status, _) = register_with_language(&app, EMAIL, "pt-BR").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(stored_locale(EMAIL).await, "pt-BR");
+
+    let (_, _, cookie) = post_form(
+        &app,
+        "/login",
+        &[("email", EMAIL), ("password", "password123")],
+        None,
+    )
+    .await;
+    let session = cookie.expect("session cookie");
+
+    // Anonymous first: the cookie switches, no account is touched.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/lang/en")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        stored_locale(EMAIL).await,
+        "pt-BR",
+        "an anonymous toggle must not touch anyone's account"
+    );
+
+    // Signed in: the choice is persisted.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/lang/en")
+                .header("cookie", &session)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(
+        res.headers()
+            .get("set-cookie")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .contains("lang=en"),
+        "the toggle still sets the cookie"
+    );
+    assert_eq!(stored_locale(EMAIL).await, "en");
+
+    // The next message — a resend, with no page rendered for it — follows.
+    let (s, _, _) = post_form(&app, "/verify-email/resend", &[("email", EMAIL)], None).await;
+    assert_eq!(s, StatusCode::SEE_OTHER);
+    let subjects: Vec<String> = mail.emails().into_iter().map(|e| e.subject).collect();
+    assert_eq!(
+        subjects,
+        vec![
+            "Confirme seu e-mail no BikeNest".to_string(),
+            "Confirm your BikeNest email".to_string()
+        ],
+        "the signup mail stays Portuguese; the one after the toggle is English"
+    );
+
+    cleanup_user(EMAIL).await;
+}
+
+/// With the worker enabled (production's default) nothing is sent on the
+/// request path: registration writes an `email.send` job and returns. Running
+/// the handler over that row — what the worker does — produces the localised
+/// message.
+#[db_test]
+async fn with_the_worker_enabled_registration_queues_the_email(_tx: &mut TestTx) {
+    use bikenest_infrastructure::{JobConfig, SendEmailHandler};
+
+    const EMAIL: &str = "locale-queued@example.com";
+    let mail = FakeEmailProvider::with_root(None);
+    let db = Db::from_pool(pool().await);
+    let config = bikenest_infrastructure::Config {
+        jobs: JobConfig {
+            enabled: true,
+            ..JobConfig::default()
+        },
+        ..test_config()
+    };
+    let app = app_router_with(
+        std::sync::Arc::new(config),
+        db,
+        RouterDeps {
+            email: std::sync::Arc::new(mail.clone()),
+            oauth: None,
+            hasher: TestPasswordHasher,
+            rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
+            storage: std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
+        },
+    );
+    cleanup_user(EMAIL).await;
+
+    let (status, _) = register_with_language(&app, EMAIL, "pt-BR").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(
+        mail.emails().is_empty(),
+        "the provider must not be touched on the request path"
+    );
+
+    let (job_id, payload): (i64, serde_json::Value) = sqlx::query_as(
+        "SELECT id, payload FROM background_job
+         WHERE kind = 'email.send' AND payload->>'to' = $1",
+    )
+    .bind(EMAIL)
+    .fetch_one(&pool().await)
+    .await
+    .expect("registration queued an email.send job");
+    assert_eq!(payload["locale"], "pt-BR");
+    assert_eq!(payload["kind"], "verify_email");
+
+    // Drain it the way the worker would.
+    bikenest_application::JobHandler::run(
+        &SendEmailHandler::new(std::sync::Arc::new(mail.clone())),
+        &payload,
+    )
+    .await
+    .expect("the handler delivers the queued message");
+    assert_eq!(
+        mail.subject_for_kind("verify").as_deref(),
+        Some("Confirme seu e-mail no BikeNest")
+    );
+
+    sqlx::query("DELETE FROM background_job WHERE id = $1")
+        .bind(job_id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    cleanup_user(EMAIL).await;
 }

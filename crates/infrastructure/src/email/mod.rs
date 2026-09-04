@@ -1,14 +1,23 @@
-//! Generic email-provider implementations (§84). Selected at wiring time from
-//! the parsed `EMAIL_PROVIDER` setting (`fake` | `smtp` | `resend`), so swapping
-//! backends is a configuration change rather than a domain/app change.
+//! Transactional email: the provider implementations, the two `EmailQueue`
+//! implementations, and the renderer they share.
+//!
+//! The provider is selected at wiring time from the parsed `EMAIL_PROVIDER`
+//! setting (`fake` | `smtp` | `resend`), so swapping backends is a
+//! configuration change rather than a domain/app change. Whichever one is
+//! chosen, it renders the message from the catalog in the recipient's locale
+//! (`templates::render`) — no caller ever supplies a subject or a body.
 
 pub mod fake;
+pub mod queue;
 pub mod resend;
 pub mod smtp;
+pub mod templates;
 
 pub use fake::{CapturedEmail, FakeEmailProvider};
+pub use queue::{InlineEmailQueue, JobEmailQueue, idempotency_key};
 pub use resend::ResendEmailProvider;
 pub use smtp::SmtpEmailProvider;
+pub use templates::{APP_NAME, RenderedEmail, render};
 
 use crate::config::{ConfigError, EmailConfig};
 

@@ -329,6 +329,10 @@ pub struct User {
     pub account_state: AccountState,
     pub email_verified_at: Option<chrono::DateTime<chrono::Utc>>,
     pub roles: Vec<Role>,
+    /// The language this account reads. Transactional email is rendered from
+    /// it, so a message sent by a background job (no request, no
+    /// `Accept-Language`) still arrives in the user's own language.
+    pub locale: crate::LocaleCode,
 }
 
 impl User {
@@ -342,6 +346,7 @@ impl User {
             account_state: AccountState::PendingEmailVerification,
             email_verified_at: None,
             roles: vec![Role::User],
+            locale: crate::LocaleCode::default(),
         }
     }
 

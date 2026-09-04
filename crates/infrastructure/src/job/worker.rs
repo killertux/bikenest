@@ -162,11 +162,16 @@ impl Worker {
                         "job failed; will retry"
                     );
                 } else {
+                    // Give the handler its say before the row goes terminal:
+                    // only it can decode the payload (e.g. which email, to
+                    // which domain) into something operators can act on.
+                    handler.on_dead_letter(&job.payload, &e).await;
                     let _ = self.repo.fail(job.id, &self.id, &e).await;
                     tracing::warn!(error = %e, "job exhausted attempts; dead-lettered");
                 }
             }
             Err(JobError::Permanent(e)) => {
+                handler.on_dead_letter(&job.payload, &e).await;
                 let _ = self.repo.fail(job.id, &self.id, &e).await;
                 tracing::warn!(error = %e, "job failed permanently; dead-lettered");
             }
