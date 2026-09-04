@@ -45,7 +45,7 @@ browser ──> reverse proxy / TLS ──> axum (web) ──> application servi
 
 | Crate | Responsibility | May depend on |
 |---|---|---|
-| `bikenest-domain` (`crates/domain`) | pure business concepts: value objects, enums, rules (hours, freshness, confidence, cost, security) | nothing (chrono/thiserror only) |
+| `bikenest-domain` (`crates/domain`) | pure business concepts: value objects, enums, rules (hours, freshness, confidence, cost, security), the typed proposal payload | nothing framework-level (chrono, thiserror, serde_json for the proposal payload) |
 | `bikenest-application` (`crates/application`) | use cases (services) + ports (`trait`s). Orchestrates domain objects; no I/O of its own | `domain` |
 | `bikenest-infrastructure` (`crates/infrastructure`) | SQLx repositories, config loading, providers (S3, SMTP, Mapbox, ValKey, image, timezone), seeders, job worker | `domain`, `application` |
 | `bikenest-web` (`crates/web`) | axum router, handlers, middleware, view models, i18n catalog, Askama templates. **The binary** (`bikenest-web`) | `domain`, `application`, `infrastructure` |

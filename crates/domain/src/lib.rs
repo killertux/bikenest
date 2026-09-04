@@ -20,8 +20,8 @@ pub use auth::{
 };
 pub use community::{
     AttributeResult, ChangeKind, Confidence, ExistenceResult, ExistenceSignal, ProposalKind,
-    ProposalStatus, ReviewBody, RevisionSummary, StarRating, VerificationKind, confidence,
-    is_known_attribute_code,
+    ProposalPayload, ProposalStatus, ProposedChange, ReviewBody, RevisionSummary, StarRating,
+    VerificationKind, confidence, is_known_attribute_code,
 };
 pub use freshness::{DEFAULT_THRESHOLDS, FreshnessCategory, FreshnessThresholds, categorize};
 pub use hours::{OpenStatus, OpeningHours, TimeRange, hms};
@@ -40,8 +40,8 @@ pub use photo::{
     format_allowed,
 };
 pub use privacy::{
-    ExportState, PolicyKind, PrivacyRequestKind, PrivacyRequestState, RetentionPolicy,
-    anonymized_email,
+    ExportState, PRIVACY_REQUEST_SLA_DAYS, PolicyKind, PrivacyRequestKind, PrivacyRequestState,
+    RetentionPolicy, anonymized_email, privacy_request_days_left,
 };
 
 /// Database identifier of a user.

@@ -42,6 +42,14 @@
   height: 22px;
 }
 
+/* The "before" pin on a move proposal's mini-map: hollow and muted, so the
+   proposed position (a solid accent dot) reads as the change. */
+.marker-before {
+  background: transparent;
+  border: 2px dashed var(--color-muted, #888);
+  box-shadow: none;
+}
+
 .marker.selected {
   outline: 3px solid var(--color-accent-strong);
   outline-offset: 1px;

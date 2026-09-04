@@ -1203,6 +1203,24 @@ mod tests {
         async fn list_users(&self) -> Result<Vec<bikenest_domain::User>, AuthError> {
             Ok(vec![])
         }
+        async fn search_users(
+            &self,
+            _s: crate::auth::UserSearch<'_>,
+        ) -> Result<Vec<bikenest_domain::User>, AuthError> {
+            Ok(vec![])
+        }
+        async fn labels_for(
+            &self,
+            _ids: &[i64],
+        ) -> Result<std::collections::HashMap<i64, String>, AuthError> {
+            Ok(std::collections::HashMap::new())
+        }
+        async fn activity_for(
+            &self,
+            _ids: &[i64],
+        ) -> Result<std::collections::HashMap<i64, crate::auth::UserActivity>, AuthError> {
+            Ok(std::collections::HashMap::new())
+        }
     }
 
     struct FakeHasher;

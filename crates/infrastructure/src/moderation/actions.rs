@@ -7,9 +7,13 @@ use crate::Db;
 use async_trait::async_trait;
 use bikenest_application::{
     ModerationError, ModerationRepository, PhotoKind, Proposal, ProposalApplication,
+    ReportTargetPreview, review_excerpt,
 };
-use bikenest_domain::{ModerationState, ProposalKind, ProposalStatus, ReportTargetType, UserId};
+use bikenest_domain::{
+    ModerationState, ProposalKind, ProposalPayload, ProposalStatus, ReportTargetType, UserId,
+};
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
 pub struct SqlxModerationRepository {
     db: Db,
@@ -71,13 +75,31 @@ struct ProposalRow {
     id: i64,
     location_id: i64,
     location_name: String,
+    location_address: String,
     proposer_id: Option<i64>,
     base_version: i64,
+    location_version: i64,
     kind: String,
     proposed: serde_json::Value,
+    current_lat: Option<f64>,
+    current_lon: Option<f64>,
+    current_timezone: String,
+    current_state: String,
     status: String,
     created_at: DateTime<Utc>,
 }
+
+/// The columns every proposal read needs. The join already visits
+/// `parking_location`, so carrying its current values costs nothing and saves
+/// the moderation queue a second query per row to show a diff.
+const PROPOSAL_COLUMNS: &str = r#"
+    p.id, p.location_id, l.name AS location_name, l.address AS location_address,
+    p.proposer_id, p.base_version, l.version AS location_version,
+    p.kind, p.proposed,
+    l.lat AS current_lat, l.lon AS current_lon, l.timezone AS current_timezone,
+    l.moderation_state AS current_state,
+    p.status, p.created_at
+"#;
 
 #[derive(sqlx::FromRow)]
 struct ProposalLockRow {
@@ -105,6 +127,110 @@ struct LocationRow {
     version: i64,
 }
 
+/// One report target, whatever its kind. Every column is nullable because a
+/// single row shape serves all four queries; [`PreviewRow::into_preview`] keeps
+/// the branch-free mapping honest.
+#[derive(sqlx::FromRow)]
+struct PreviewRow {
+    target_id: i64,
+    location_id: Option<i64>,
+    location_name: Option<String>,
+    location_address: Option<String>,
+    review_id: Option<i64>,
+    review_author_id: Option<i64>,
+    review_rating: Option<i16>,
+    review_body: Option<String>,
+    photo_id: Option<i64>,
+    photo_key: Option<String>,
+    photo_thumbnail_key: Option<String>,
+    target_state: Option<String>,
+}
+
+impl PreviewRow {
+    fn into_preview(self) -> ReportTargetPreview {
+        ReportTargetPreview {
+            location_id: self.location_id,
+            location_name: self.location_name,
+            location_address: self.location_address,
+            review_id: self.review_id,
+            review_author_id: self.review_author_id.map(UserId),
+            review_rating: self.review_rating,
+            review_excerpt: self.review_body.as_deref().map(review_excerpt),
+            photo_id: self.photo_id,
+            photo_key: self.photo_key,
+            photo_thumbnail_key: self.photo_thumbnail_key,
+            target_state: self.target_state,
+        }
+    }
+}
+
+/// The preview query for one target kind. `target_state` is the reported
+/// entity's own moderation state, which is what decides whether the queue's
+/// "act on the content" button has anything left to do.
+///
+/// The body is cut down in SQL (`left(...)`) before it crosses the wire; the
+/// application layer then trims it to the exact character budget.
+fn preview_sql(target_type: ReportTargetType) -> &'static str {
+    match target_type {
+        ReportTargetType::Parking => {
+            r#"
+            SELECT l.id AS target_id, l.id AS location_id, l.name AS location_name,
+                   l.address AS location_address,
+                   NULL::bigint AS review_id, NULL::bigint AS review_author_id,
+                   NULL::smallint AS review_rating, NULL::text AS review_body,
+                   NULL::bigint AS photo_id, NULL::text AS photo_key,
+                   NULL::text AS photo_thumbnail_key,
+                   l.moderation_state AS target_state
+            FROM parking_location l
+            WHERE l.id = ANY($1)
+            "#
+        }
+        ReportTargetType::Review => {
+            r#"
+            SELECT r.id AS target_id, l.id AS location_id, l.name AS location_name,
+                   l.address AS location_address,
+                   r.id AS review_id, r.author_id AS review_author_id,
+                   r.rating AS review_rating, left(r.body, 400) AS review_body,
+                   NULL::bigint AS photo_id, NULL::text AS photo_key,
+                   NULL::text AS photo_thumbnail_key,
+                   r.moderation_state AS target_state
+            FROM review r
+            JOIN parking_location l ON l.id = r.location_id
+            WHERE r.id = ANY($1)
+            "#
+        }
+        ReportTargetType::ParkingPhoto => {
+            r#"
+            SELECT p.id AS target_id, l.id AS location_id, l.name AS location_name,
+                   l.address AS location_address,
+                   NULL::bigint AS review_id, NULL::bigint AS review_author_id,
+                   NULL::smallint AS review_rating, NULL::text AS review_body,
+                   p.id AS photo_id, p.storage_key AS photo_key,
+                   p.thumbnail_key AS photo_thumbnail_key,
+                   p.moderation_state AS target_state
+            FROM parking_photo p
+            JOIN parking_location l ON l.id = p.location_id
+            WHERE p.id = ANY($1)
+            "#
+        }
+        ReportTargetType::ReviewPhoto => {
+            r#"
+            SELECT rp.id AS target_id, l.id AS location_id, l.name AS location_name,
+                   l.address AS location_address,
+                   r.id AS review_id, r.author_id AS review_author_id,
+                   r.rating AS review_rating, left(r.body, 400) AS review_body,
+                   rp.id AS photo_id, rp.storage_key AS photo_key,
+                   rp.thumbnail_key AS photo_thumbnail_key,
+                   rp.moderation_state AS target_state
+            FROM review_photo rp
+            JOIN review r ON r.id = rp.review_id
+            JOIN parking_location l ON l.id = r.location_id
+            WHERE rp.id = ANY($1)
+            "#
+        }
+    }
+}
+
 #[async_trait]
 impl ModerationRepository for SqlxModerationRepository {
     async fn target_exists(
@@ -124,6 +250,39 @@ impl ModerationRepository for SqlxModerationRepository {
             .await
             .map_err(|e| db_err("moderation.target_exists", e))?;
         Ok(row.is_some())
+    }
+
+    /// One statement per distinct target type on the page (≤4 for a queue page
+    /// of any size), each an `= ANY($1)` over the ids of that type.
+    async fn report_previews(
+        &self,
+        targets: &[(ReportTargetType, i64)],
+    ) -> Result<HashMap<(ReportTargetType, i64), ReportTargetPreview>, ModerationError> {
+        let mut out = HashMap::with_capacity(targets.len());
+        for target_type in [
+            ReportTargetType::Parking,
+            ReportTargetType::ParkingPhoto,
+            ReportTargetType::Review,
+            ReportTargetType::ReviewPhoto,
+        ] {
+            let ids: Vec<i64> = targets
+                .iter()
+                .filter(|(t, _)| *t == target_type)
+                .map(|(_, id)| *id)
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            let rows = sqlx::query_as::<_, PreviewRow>(preview_sql(target_type))
+                .bind(&ids)
+                .fetch_all(self.db.pool())
+                .await
+                .map_err(|e| db_err("moderation.report_previews", e))?;
+            for row in rows {
+                out.insert((target_type, row.target_id), row.into_preview());
+            }
+        }
+        Ok(out)
     }
 
     async fn hide_review(&self, id: i64, moderator: UserId) -> Result<(), ModerationError> {
@@ -263,39 +422,24 @@ impl ModerationRepository for SqlxModerationRepository {
         limit: i64,
     ) -> Result<Vec<Proposal>, ModerationError> {
         let limit = limit.clamp(1, 200);
-        let rows = match after_id {
-            Some(after) => sqlx::query_as::<_, ProposalRow>(
-                r#"
-                SELECT p.id, p.location_id, l.name AS location_name, p.proposer_id, p.base_version,
-                       p.kind, p.proposed, p.status, p.created_at
-                FROM parking_proposal p
-                JOIN parking_location l ON l.id = p.location_id
-                WHERE p.status = 'PENDING' AND p.id > $1
-                ORDER BY p.id ASC
-                LIMIT $2
-                "#,
-            )
-            .bind(after)
+        // `after_id` of `None` still binds a parameter (a NULL) rather than
+        // switching to a second SQL string: one statement, one plan.
+        let sql = format!(
+            r#"
+            SELECT {PROPOSAL_COLUMNS}
+            FROM parking_proposal p
+            JOIN parking_location l ON l.id = p.location_id
+            WHERE p.status = 'PENDING' AND ($1::bigint IS NULL OR p.id > $1::bigint)
+            ORDER BY p.id ASC
+            LIMIT $2
+            "#
+        );
+        let rows = sqlx::query_as::<_, ProposalRow>(&sql)
+            .bind(after_id)
             .bind(limit)
             .fetch_all(self.db.pool())
             .await
-            .map_err(|e| db_err("moderation.list_pending_proposals", e))?,
-            None => sqlx::query_as::<_, ProposalRow>(
-                r#"
-                SELECT p.id, p.location_id, l.name AS location_name, p.proposer_id, p.base_version,
-                       p.kind, p.proposed, p.status, p.created_at
-                FROM parking_proposal p
-                JOIN parking_location l ON l.id = p.location_id
-                WHERE p.status = 'PENDING'
-                ORDER BY p.id ASC
-                LIMIT $1
-                "#,
-            )
-            .bind(limit)
-            .fetch_all(self.db.pool())
-            .await
-            .map_err(|e| db_err("moderation.list_pending_proposals", e))?,
-        };
+            .map_err(|e| db_err("moderation.list_pending_proposals", e))?;
         rows.into_iter().map(map_proposal).collect()
     }
 
@@ -306,19 +450,19 @@ impl ModerationRepository for SqlxModerationRepository {
     }
 
     async fn get_proposal(&self, id: i64) -> Result<Option<Proposal>, ModerationError> {
-        let row = sqlx::query_as::<_, ProposalRow>(
+        let sql = format!(
             r#"
-            SELECT p.id, p.location_id, l.name AS location_name, p.proposer_id, p.base_version,
-                   p.kind, p.proposed, p.status, p.created_at
+            SELECT {PROPOSAL_COLUMNS}
             FROM parking_proposal p
             JOIN parking_location l ON l.id = p.location_id
             WHERE p.id = $1
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(self.db.pool())
-        .await
-        .map_err(|e| db_err("moderation.get_proposal", e))?;
+            "#
+        );
+        let row = sqlx::query_as::<_, ProposalRow>(&sql)
+            .bind(id)
+            .fetch_optional(self.db.pool())
+            .await
+            .map_err(|e| db_err("moderation.get_proposal", e))?;
         match row {
             Some(r) => Ok(Some(map_proposal(r)?)),
             None => Ok(None),
@@ -501,15 +645,32 @@ impl ModerationRepository for SqlxModerationRepository {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Parse a proposal row at the boundary — this is the only place the stored
+/// JSON payload is interpreted.
+///
+/// `kind` and `status` are `CHECK`-constrained columns, so an unreadable one is
+/// a schema bug and still errors. The `proposed` JSON is not constrained, so it
+/// degrades to `ProposedChange::Unknown`: a row written by a future (or broken)
+/// version becomes a "needs manual review" card instead of failing the page.
 fn map_proposal(r: ProposalRow) -> Result<Proposal, ModerationError> {
+    let kind = ProposalKind::from_code(&r.kind).map_err(ModerationError::from)?;
+    let payload = ProposalPayload::from_json(kind, &r.proposed);
     Ok(Proposal {
         id: r.id,
         location_id: r.location_id,
         location_name: r.location_name,
+        location_address: r.location_address,
         proposer_id: r.proposer_id.map(UserId),
         base_version: r.base_version,
-        kind: ProposalKind::from_code(&r.kind).map_err(ModerationError::from)?,
-        proposed: r.proposed,
+        location_version: r.location_version,
+        kind,
+        change: payload.change,
+        reason: payload.reason,
+        current_lat: r.current_lat,
+        current_lon: r.current_lon,
+        current_timezone: r.current_timezone,
+        current_state: ModerationState::from_code(&r.current_state)
+            .map_err(ModerationError::from)?,
         status: ProposalStatus::from_code(&r.status).map_err(ModerationError::from)?,
         created_at: r.created_at,
     })

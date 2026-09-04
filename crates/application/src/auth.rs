@@ -11,6 +11,7 @@ use bikenest_domain::{
     Role, SessionId, User, UserEmail, UserId, VerificationToken,
 };
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -133,6 +134,29 @@ pub struct NewAccount<'a> {
     pub state: AccountState,
 }
 
+/// Activity counters the admin user list shows next to each account, so a
+/// suspend/grant decision is not made from an email address alone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UserActivity {
+    /// Newest `sessions.last_seen_at` for the account; `None` for an account
+    /// that has never signed in (or whose sessions have been purged).
+    pub last_active_at: Option<DateTime<Utc>>,
+    /// Locations added, edits, proposals, reviews, verifications and photos —
+    /// the same events the C5 contribution feed lists, counted.
+    pub contributions: i64,
+}
+
+/// One page of the admin user list, `limit`-capped, newest account first.
+#[derive(Debug, Clone, Default)]
+pub struct UserSearch<'a> {
+    /// Case-insensitive substring of email or display name. `None` lists all.
+    pub query: Option<&'a str>,
+    /// Keyset cursor: the smallest id already shown (the list runs `id DESC`,
+    /// so the next page is `id < after_id`).
+    pub after_id: Option<i64>,
+    pub limit: i64,
+}
+
 /// Port: account + role persistence. `Account` is the domain `User` with its
 /// roles already loaded.
 #[async_trait]
@@ -173,6 +197,15 @@ pub trait AccountRepository: Send + Sync {
     async fn revoke_role(&self, id: UserId, role: Role) -> Result<bool, AuthError>;
     /// All accounts (for the admin user list).
     async fn list_users(&self) -> Result<Vec<User>, AuthError>;
+    /// One keyset page of the admin user list, optionally filtered by a
+    /// search term. Replaces loading every account to render a table.
+    async fn search_users(&self, search: UserSearch<'_>) -> Result<Vec<User>, AuthError>;
+    /// Display labels ("Ada Lovelace", else the email) for a batch of ids —
+    /// **one** query for a whole page of audit rows or privacy requests, not
+    /// one per row. Ids that no longer exist are absent from the map.
+    async fn labels_for(&self, ids: &[i64]) -> Result<HashMap<i64, String>, AuthError>;
+    /// Last-seen + contribution counters for a batch of ids (one query).
+    async fn activity_for(&self, ids: &[i64]) -> Result<HashMap<i64, UserActivity>, AuthError>;
 }
 
 /// A resolved server-side session.
@@ -1070,6 +1103,45 @@ impl AuthService {
     pub async fn list_users(&self) -> Result<Vec<AuthenticatedUser>, AuthError> {
         let users = self.accounts.list_users().await?;
         Ok(users.iter().map(AuthenticatedUser::from_user).collect())
+    }
+
+    /// One searched, keyset-paginated page of the admin user list. `limit` is
+    /// clamped by the repository.
+    pub async fn search_users(
+        &self,
+        query: Option<&str>,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<AuthenticatedUser>, AuthError> {
+        let query = query.map(str::trim).filter(|q| !q.is_empty());
+        let users = self
+            .accounts
+            .search_users(UserSearch {
+                query,
+                after_id,
+                limit,
+            })
+            .await?;
+        Ok(users.iter().map(AuthenticatedUser::from_user).collect())
+    }
+
+    /// Display labels for a batch of user ids (audit rows, privacy requests).
+    pub async fn user_labels(&self, ids: &[i64]) -> Result<HashMap<i64, String>, AuthError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.accounts.labels_for(ids).await
+    }
+
+    /// Last-active + contribution counters for a batch of user ids.
+    pub async fn user_activity(
+        &self,
+        ids: &[i64],
+    ) -> Result<HashMap<i64, UserActivity>, AuthError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.accounts.activity_for(ids).await
     }
 
     pub async fn resolve_session(

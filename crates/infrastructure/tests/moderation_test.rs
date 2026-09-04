@@ -8,7 +8,8 @@ use bikenest_application::{
     ProposalApplication, ReportRepository,
 };
 use bikenest_domain::{
-    ModerationState, ReportDescription, ReportOutcome, ReportState, ReportTargetType, UserId,
+    ModerationState, ProposedChange, ReportDescription, ReportOutcome, ReportState,
+    ReportTargetType, UserId,
 };
 use bikenest_infrastructure::{
     Db, SqlxAuditLogReader, SqlxModerationRepository, SqlxReportRepository,
@@ -345,9 +346,7 @@ async fn proposal_approve_refuses_a_stale_base_version(tx: &mut bikenest_test_su
 }
 
 #[db_test]
-async fn report_dedupe_index_rejects_a_second_open_report(
-    tx: &mut bikenest_test_support::TestTx,
-) {
+async fn report_dedupe_index_rejects_a_second_open_report(tx: &mut bikenest_test_support::TestTx) {
     let reporter = committed_user(tx, "m5-infra-dupe-a@example.com", "USER").await;
     let other = committed_user(tx, "m5-infra-dupe-b@example.com", "USER").await;
     let moderator = committed_user(tx, "m5-infra-dupe-mod@example.com", "MODERATOR").await;
@@ -701,6 +700,278 @@ async fn queue_counts_on_reflects_an_exact_delta_race_free(tx: &mut bikenest_tes
         .unwrap();
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(moderator)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// WP13 — the proposal payload is parsed at the repository boundary, and the
+// queue rows carry the location's current values so a diff needs no extra
+// query. Legacy rows must keep reading correctly with no migration.
+// ---------------------------------------------------------------------------
+
+#[db_test]
+async fn proposal_rows_parse_the_stored_payload_and_carry_current_values(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let author = committed_user(tx, "wp13-infra-payload@example.com", "USER").await;
+    const MARK: &str = "wp13-infra-payload";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let loc = ParkingBuilder::new()
+        .with_name("Payload Spot")
+        .with_fixture_tag(MARK)
+        .create(tx.executor())
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+    let id = loc.id();
+    let (version,): (i64,) = sqlx::query_as("SELECT version FROM parking_location WHERE id = $1")
+        .bind(id)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+
+    // Exactly the three payload shapes the database holds: the seeded
+    // existence row, a move written by the M3 form, and a row this build
+    // cannot interpret.
+    let mut ids = Vec::new();
+    for (kind, payload) in [
+        ("change_existence", r#"{"existence": "exists"}"#),
+        (
+            "move_location",
+            r#"{"lat": -25.4284, "lon": -49.2733, "timezone": "America/Sao_Paulo", "reason": "pin is off"}"#,
+        ),
+        ("change_existence", r#"{"existence": "from_the_future"}"#),
+    ] {
+        let (pid,): (i64,) = sqlx::query_as(
+            "INSERT INTO parking_proposal (location_id, proposer_id, base_version, kind, proposed, status) \
+             VALUES ($1, $2, $3, $4, $5::jsonb, 'PENDING') RETURNING id",
+        )
+        .bind(id)
+        .bind(author)
+        .bind(version)
+        .bind(kind)
+        .bind(payload)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+        ids.push(pid);
+    }
+
+    let repo = SqlxModerationRepository::new(db().await);
+
+    let legacy = repo.get_proposal(ids[0]).await.unwrap().expect("row");
+    assert_eq!(
+        legacy.change,
+        ProposedChange::ChangeExistence { exists: true },
+        "the seeded legacy payload still parses without a migration"
+    );
+    assert_eq!(legacy.reason, None);
+    // The current values ride along, so the queue diffs without a second query.
+    assert_eq!(legacy.location_name, "Payload Spot");
+    assert_eq!(legacy.current_state, ModerationState::Active);
+    assert_eq!(legacy.location_version, version);
+    assert!(!legacy.is_stale(), "written against the live version");
+
+    let moved = repo.get_proposal(ids[1]).await.unwrap().expect("row");
+    assert_eq!(
+        moved.change,
+        ProposedChange::MoveLocation {
+            lat: -25.4284,
+            lon: -49.2733,
+            timezone: Some("America/Sao_Paulo".to_string()),
+        }
+    );
+    assert_eq!(
+        moved.reason.as_deref(),
+        Some("pin is off"),
+        "the proposer's note is lifted out of the payload"
+    );
+
+    let unreadable = repo.get_proposal(ids[2]).await.unwrap().expect("row");
+    assert_eq!(
+        unreadable.change,
+        ProposedChange::Unknown,
+        "an unreadable payload becomes a value, not an error"
+    );
+
+    // The list path parses the same way (and reaches these rows via its cursor).
+    let listed = repo
+        .list_pending_proposals(Some(ids[0] - 1), 50)
+        .await
+        .unwrap();
+    let mine: Vec<_> = listed.iter().filter(|p| ids.contains(&p.id)).collect();
+    assert_eq!(
+        mine.len(),
+        3,
+        "all three rows list without failing the page"
+    );
+
+    // A location that moves on makes the proposal stale, from the row alone.
+    sqlx::query("UPDATE parking_location SET version = version + 3 WHERE id = $1")
+        .bind(id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let now_stale = repo.get_proposal(ids[0]).await.unwrap().expect("row");
+    assert!(
+        now_stale.is_stale(),
+        "base_version {} against location version {}",
+        now_stale.base_version,
+        now_stale.location_version
+    );
+
+    sqlx::query("DELETE FROM parking_proposal WHERE location_id = $1")
+        .bind(id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(author)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+#[db_test]
+async fn report_previews_resolve_every_target_kind_to_its_location(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let author = committed_user(tx, "wp13-infra-preview@example.com", "USER").await;
+    const MARK: &str = "wp13-infra-preview";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let loc = ParkingBuilder::new()
+        .with_name("Preview Spot")
+        .with_fixture_tag(MARK)
+        .create(tx.executor())
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+    let id = loc.id();
+
+    let long_body = format!("{}END", "review ".repeat(60));
+    let (review,): (i64,) = sqlx::query_as(
+        "INSERT INTO review (location_id, author_id, rating, body, moderation_state) \
+         VALUES ($1, $2, 3, $3, 'ACTIVE') RETURNING id",
+    )
+    .bind(id)
+    .bind(author)
+    .bind(&long_body)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    let (photo,): (i64,) = sqlx::query_as(
+        "INSERT INTO parking_photo (location_id, uploader_id, storage_key, content_type, position, moderation_state) \
+         VALUES ($1, $2, 'uploads/wp13-preview.jpg', 'image/jpeg', 0, 'APPROVED') RETURNING id",
+    )
+    .bind(id)
+    .bind(author)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    let (review_photo,): (i64,) = sqlx::query_as(
+        "INSERT INTO review_photo (review_id, uploader_id, storage_key, position, moderation_state) \
+         VALUES ($1, $2, 'uploads/wp13-preview-r.jpg', 0, 'APPROVED') RETURNING id",
+    )
+    .bind(review)
+    .bind(author)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+
+    let repo = SqlxModerationRepository::new(db().await);
+    let previews = repo
+        .report_previews(&[
+            (ReportTargetType::Parking, id),
+            (ReportTargetType::Review, review),
+            (ReportTargetType::ParkingPhoto, photo),
+            (ReportTargetType::ReviewPhoto, review_photo),
+            // A target that no longer exists must simply be absent.
+            (ReportTargetType::Parking, -1),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(
+        previews.len(),
+        4,
+        "the deleted target is absent, not an error"
+    );
+
+    // Every kind resolves to the location a moderator recognizes.
+    for key in [
+        (ReportTargetType::Parking, id),
+        (ReportTargetType::Review, review),
+        (ReportTargetType::ParkingPhoto, photo),
+        (ReportTargetType::ReviewPhoto, review_photo),
+    ] {
+        let p = &previews[&key];
+        assert_eq!(p.location_id, Some(id), "{key:?}");
+        assert_eq!(p.location_name.as_deref(), Some("Preview Spot"), "{key:?}");
+        assert!(p.location_address.is_some(), "{key:?}");
+    }
+
+    let review_preview = &previews[&(ReportTargetType::Review, review)];
+    let excerpt = review_preview.review_excerpt.as_deref().expect("excerpt");
+    assert!(excerpt.starts_with("review review"));
+    assert!(
+        excerpt.chars().count() <= bikenest_application::REVIEW_EXCERPT_CHARS + 1,
+        "the excerpt is bounded: {} chars",
+        excerpt.chars().count()
+    );
+    assert!(!excerpt.contains("END"), "the tail of a long body is cut");
+    assert_eq!(review_preview.review_rating, Some(3));
+    assert_eq!(review_preview.target_state.as_deref(), Some("ACTIVE"));
+
+    let photo_preview = &previews[&(ReportTargetType::ParkingPhoto, photo)];
+    assert_eq!(
+        photo_preview.photo_key.as_deref(),
+        Some("uploads/wp13-preview.jpg"),
+        "the reported photo's key comes back so the queue can show it"
+    );
+    assert_eq!(photo_preview.target_state.as_deref(), Some("APPROVED"));
+
+    // A review photo carries its parent review, so the link can anchor at it.
+    let rp = &previews[&(ReportTargetType::ReviewPhoto, review_photo)];
+    assert_eq!(rp.review_id, Some(review));
+    assert_eq!(rp.photo_id, Some(review_photo));
+
+    // Hiding the review changes the state the queue reads to pick its action.
+    repo.hide_review(review, UserId(author)).await.unwrap();
+    let previews = repo
+        .report_previews(&[(ReportTargetType::Review, review)])
+        .await
+        .unwrap();
+    assert_eq!(
+        previews[&(ReportTargetType::Review, review)]
+            .target_state
+            .as_deref(),
+        Some("HIDDEN")
+    );
+
+    // An empty request does no work.
+    assert!(repo.report_previews(&[]).await.unwrap().is_empty());
+
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(author)
         .execute(&pool().await)
         .await
         .unwrap();

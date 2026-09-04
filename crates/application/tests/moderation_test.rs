@@ -7,12 +7,12 @@ use async_trait::async_trait;
 use bikenest_application::{
     AuditFilter, AuditLog, AuditLogReader, AuditPage, AuthenticatedUser, ContributionHistoryReader,
     ContributionItem, ModerationDeps, ModerationError, ModerationRepository, ModerationService,
-    PhotoKind, Proposal, ProposalApplication, RateLimitError, RateLimiter, Report,
-    ReportRepository,
+    PhotoKind, Proposal, ProposalApplication, ProposalField, ProposalOverride, RateLimitError,
+    RateLimiter, Report, ReportRepository, ReportTargetPreview,
 };
 use bikenest_domain::{
-    AccountState, ModerationLimits, ModerationState, ProposalKind, ProposalStatus, ReportOutcome,
-    ReportState, ReportTargetType, Role, UserEmail, UserId,
+    AccountState, ModerationLimits, ModerationState, ProposalKind, ProposalStatus, ProposedChange,
+    ReportOutcome, ReportState, ReportTargetType, Role, UserEmail, UserId,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -139,6 +139,9 @@ struct FakeModeration {
     restored_photos: Arc<Mutex<Vec<(PhotoKind, i64)>>>,
     parking_states: Arc<Mutex<HashMap<i64, ModerationState>>>,
     pending_proposals: Arc<Mutex<Vec<Proposal>>>,
+    /// What `approve_proposal` was actually asked to apply — the merge rule's
+    /// output, which is the thing under test.
+    applied: Arc<Mutex<Vec<ProposalApplication>>>,
 }
 
 impl Default for FakeModeration {
@@ -152,6 +155,7 @@ impl Default for FakeModeration {
             restored_photos: Arc::new(Mutex::new(Vec::new())),
             parking_states: Arc::new(Mutex::new(HashMap::new())),
             pending_proposals: Arc::new(Mutex::new(Vec::new())),
+            applied: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -160,6 +164,24 @@ impl Default for FakeModeration {
 impl ModerationRepository for FakeModeration {
     async fn target_exists(&self, _t: ReportTargetType, _id: i64) -> Result<bool, ModerationError> {
         Ok(*self.target_exists.lock().unwrap())
+    }
+    async fn report_previews(
+        &self,
+        targets: &[(ReportTargetType, i64)],
+    ) -> Result<HashMap<(ReportTargetType, i64), ReportTargetPreview>, ModerationError> {
+        Ok(targets
+            .iter()
+            .map(|&(t, id)| {
+                (
+                    (t, id),
+                    ReportTargetPreview {
+                        location_id: Some(id),
+                        location_name: Some(format!("Loc {id}")),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect())
     }
     async fn hide_review(&self, id: i64, _m: UserId) -> Result<(), ModerationError> {
         self.hidden_reviews.lock().unwrap().push(id);
@@ -246,7 +268,7 @@ impl ModerationRepository for FakeModeration {
             return Err(ModerationError::InvalidState);
         }
         p.status = ProposalStatus::Approved;
-        let _ = applied.kind();
+        self.applied.lock().unwrap().push(applied);
         Ok(())
     }
     async fn reject_proposal(&self, id: i64, _m: UserId, _r: &str) -> Result<(), ModerationError> {
@@ -334,17 +356,33 @@ fn reporter() -> AuthenticatedUser {
     user(1, vec![])
 }
 
-fn proposal(id: i64, kind: ProposalKind, proposed: serde_json::Value) -> Proposal {
+fn proposal(id: i64, kind: ProposalKind, change: ProposedChange) -> Proposal {
     Proposal {
         id,
         location_id: 10,
         location_name: "Test".to_string(),
+        location_address: "1 Test St".to_string(),
         proposer_id: Some(UserId(3)),
         base_version: 1,
+        location_version: 1,
         kind,
-        proposed,
+        change,
+        reason: None,
+        current_lat: Some(-25.0),
+        current_lon: Some(-49.0),
+        current_timezone: "America/Sao_Paulo".to_string(),
+        current_state: ModerationState::Active,
         status: ProposalStatus::Pending,
         created_at: chrono::Utc::now(),
+    }
+}
+
+/// A move proposal the merge tests share: the proposer asked for this.
+fn proposed_move() -> ProposedChange {
+    ProposedChange::MoveLocation {
+        lat: -25.5,
+        lon: -49.5,
+        timezone: Some("America/Sao_Paulo".to_string()),
     }
 }
 
@@ -641,11 +679,7 @@ async fn approve_and_reject_proposal() {
         .pending_proposals
         .lock()
         .unwrap()
-        .push(proposal(
-            1,
-            ProposalKind::MoveLocation,
-            serde_json::json!({ "lat": -25.0, "lon": -49.0, "timezone": "America/Sao_Paulo" }),
-        ));
+        .push(proposal(1, ProposalKind::MoveLocation, proposed_move()));
     h.moderation
         .pending_proposals
         .lock()
@@ -653,16 +687,11 @@ async fn approve_and_reject_proposal() {
         .push(proposal(
             2,
             ProposalKind::ChangeExistence,
-            serde_json::json!({ "existence": "removed" }),
+            ProposedChange::ChangeExistence { exists: false },
         ));
 
-    let applied = ProposalApplication::from_proposed(
-        ProposalKind::MoveLocation,
-        &serde_json::json!({ "lat": -25.0, "lon": -49.0, "timezone": "America/Sao_Paulo" }),
-    )
-    .unwrap();
     h.service
-        .approve_proposal(&moderator(), 1, applied)
+        .approve_proposal(&moderator(), 1, ProposalOverride::default())
         .await
         .unwrap();
     h.service
@@ -731,4 +760,316 @@ async fn submission_has_no_role_gate() {
             .await
             .is_ok()
     );
+}
+
+// ---------------------------------------------------------------------------
+// The override-merge rule (A-M6). It used to live in the HTTP handler, where no
+// test could reach it; these are the cases that rule has to get right.
+// ---------------------------------------------------------------------------
+
+/// Approve proposal 1 with `over` and return what the repository was handed.
+async fn approve_move_with(
+    change: ProposedChange,
+    over: ProposalOverride,
+) -> Result<ProposalApplication, ModerationError> {
+    let h = harness(true);
+    h.moderation
+        .pending_proposals
+        .lock()
+        .unwrap()
+        .push(proposal(1, ProposalKind::MoveLocation, change));
+    h.service.approve_proposal(&moderator(), 1, over).await?;
+    Ok(h.moderation.applied.lock().unwrap()[0].clone())
+}
+
+#[tokio::test]
+async fn no_override_applies_exactly_what_the_proposer_asked_for() {
+    let applied = approve_move_with(proposed_move(), ProposalOverride::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        applied,
+        ProposalApplication::MoveLocation {
+            lat: -25.5,
+            lon: -49.5,
+            timezone: chrono_tz::America::Sao_Paulo,
+        }
+    );
+}
+
+#[tokio::test]
+async fn an_override_wins_field_by_field() {
+    // Only latitude is retyped: longitude and timezone stay the proposer's.
+    let applied = approve_move_with(
+        proposed_move(),
+        ProposalOverride {
+            lat: Some(-26.0),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        applied,
+        ProposalApplication::MoveLocation {
+            lat: -26.0,
+            lon: -49.5,
+            timezone: chrono_tz::America::Sao_Paulo,
+        }
+    );
+
+    // All three retyped.
+    let applied = approve_move_with(
+        proposed_move(),
+        ProposalOverride {
+            lat: Some(38.72),
+            lon: Some(-9.14),
+            timezone: Some("Europe/Lisbon".to_string()),
+            exists: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        applied,
+        ProposalApplication::MoveLocation {
+            lat: 38.72,
+            lon: -9.14,
+            timezone: chrono_tz::Europe::Lisbon,
+        }
+    );
+}
+
+#[tokio::test]
+async fn an_unreadable_payload_needs_every_value_from_the_moderator() {
+    // No override at all: the missing latitude is reported as a typed field
+    // error, not as an English message assembled in the core.
+    let err = approve_move_with(ProposedChange::Unknown, ProposalOverride::default())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ModerationError::InvalidProposalField(ProposalField::Lat)
+        ),
+        "expected InvalidProposalField(Lat), got {err:?}"
+    );
+
+    // Latitude only: longitude is now the missing one.
+    let err = approve_move_with(
+        ProposedChange::Unknown,
+        ProposalOverride {
+            lat: Some(-25.0),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ModerationError::InvalidProposalField(ProposalField::Lon)
+        ),
+        "expected InvalidProposalField(Lon), got {err:?}"
+    );
+
+    // Coordinates but no timezone.
+    let err = approve_move_with(
+        ProposedChange::Unknown,
+        ProposalOverride {
+            lat: Some(-25.0),
+            lon: Some(-49.0),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ModerationError::InvalidProposalField(ProposalField::Timezone)
+        ),
+        "expected InvalidProposalField(Timezone), got {err:?}"
+    );
+
+    // Everything supplied: the moderator can still push it through.
+    let applied = approve_move_with(
+        ProposedChange::Unknown,
+        ProposalOverride {
+            lat: Some(-25.0),
+            lon: Some(-49.0),
+            timezone: Some("America/Sao_Paulo".to_string()),
+            exists: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        applied,
+        ProposalApplication::MoveLocation {
+            lat: -25.0,
+            lon: -49.0,
+            timezone: chrono_tz::America::Sao_Paulo,
+        }
+    );
+}
+
+#[tokio::test]
+async fn out_of_range_and_unknown_timezone_overrides_are_refused() {
+    for (over, field) in [
+        (
+            ProposalOverride {
+                lat: Some(120.0),
+                ..Default::default()
+            },
+            ProposalField::Lat,
+        ),
+        (
+            ProposalOverride {
+                lon: Some(-400.0),
+                ..Default::default()
+            },
+            ProposalField::Lon,
+        ),
+        (
+            ProposalOverride {
+                timezone: Some("Mars/Olympus".to_string()),
+                ..Default::default()
+            },
+            ProposalField::Timezone,
+        ),
+    ] {
+        let err = approve_move_with(proposed_move(), over).await.unwrap_err();
+        assert!(
+            matches!(err, ModerationError::InvalidProposalField(f) if f == field),
+            "expected InvalidProposalField({field:?}), got {err:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn existence_override_flips_the_proposers_choice() {
+    let h = harness(true);
+    h.moderation
+        .pending_proposals
+        .lock()
+        .unwrap()
+        .push(proposal(
+            1,
+            ProposalKind::ChangeExistence,
+            ProposedChange::ChangeExistence { exists: false },
+        ));
+    // The moderator disagrees: the spot is still there.
+    h.service
+        .approve_proposal(
+            &moderator(),
+            1,
+            ProposalOverride {
+                exists: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        h.moderation.applied.lock().unwrap()[0],
+        ProposalApplication::ChangeExistence { exists: true }
+    );
+}
+
+#[tokio::test]
+async fn an_unreadable_existence_payload_needs_an_explicit_choice() {
+    let h = harness(true);
+    h.moderation
+        .pending_proposals
+        .lock()
+        .unwrap()
+        .push(proposal(
+            1,
+            ProposalKind::ChangeExistence,
+            ProposedChange::Unknown,
+        ));
+    let err = h
+        .service
+        .approve_proposal(&moderator(), 1, ProposalOverride::default())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ModerationError::InvalidProposalField(ProposalField::Existence)
+        ),
+        "expected InvalidProposalField(Existence), got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn approving_a_missing_proposal_is_not_found() {
+    let h = harness(true);
+    let err = h
+        .service
+        .approve_proposal(&moderator(), 999, ProposalOverride::default())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, ModerationError::NotFound),
+        "expected NotFound, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_proposal_is_stale_when_the_location_moved_on() {
+    let fresh = proposal(1, ProposalKind::MoveLocation, proposed_move());
+    assert!(!fresh.is_stale());
+    let stale = Proposal {
+        location_version: 5,
+        ..proposal(2, ProposalKind::MoveLocation, proposed_move())
+    };
+    assert!(stale.is_stale(), "base_version 1 against a v5 location");
+}
+
+#[tokio::test]
+async fn report_previews_are_fetched_once_for_the_whole_page() {
+    let h = harness(true);
+    let reports = vec![
+        report_row(1, ReportTargetType::Parking, 10),
+        report_row(2, ReportTargetType::Parking, 10),
+        report_row(3, ReportTargetType::Review, 77),
+    ];
+    let previews = h
+        .service
+        .report_previews(&moderator(), &reports)
+        .await
+        .unwrap();
+    // Two reports on the same target ask for one preview, not two.
+    assert_eq!(previews.len(), 2);
+    assert_eq!(
+        previews[&(ReportTargetType::Parking, 10)]
+            .location_name
+            .as_deref(),
+        Some("Loc 10")
+    );
+
+    // The role gate applies to the preview lookup as much as to the list.
+    assert!(matches!(
+        h.service.report_previews(&user(9, vec![]), &reports).await,
+        Err(ModerationError::NotAuthorized)
+    ));
+}
+
+fn report_row(id: i64, target_type: ReportTargetType, target_id: i64) -> Report {
+    Report {
+        id,
+        reporter_id: Some(UserId(3)),
+        target_type,
+        target_id,
+        reason: "spam".to_string(),
+        description: None,
+        state: ReportState::Open,
+        claimed_by: None,
+        resolved_by: None,
+        resolution_note: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    }
 }

@@ -358,3 +358,250 @@ async fn resolve_throttles_the_last_seen_write(_tx: &mut bikenest_test_support::
 
     cleanup_user(&email).await;
 }
+
+// ---------------------------------------------------------------------------
+// WP13 — the admin user list is a searched, bounded page with batched
+// counters, instead of "load every account and render it".
+// ---------------------------------------------------------------------------
+
+#[db_test]
+async fn search_users_matches_email_or_name_and_pages_by_keyset(
+    _tx: &mut bikenest_test_support::TestTx,
+) {
+    let repo = SqlxAccountRepository::new(Db::from_pool(pool().await));
+    let needle = format!("wp13needle{}", std::process::id());
+    let mut ids = Vec::new();
+    let mut emails = Vec::new();
+    for n in 0..3 {
+        let email = format!("{needle}-{n}@bikenest.test");
+        cleanup_user(&email).await;
+        let eu = UserEmail::parse(&email).unwrap();
+        let id = repo
+            .create(bikenest_application::NewAccount {
+                email: &eu,
+                display_name: Some(&format!("Wp13 Person {n}")),
+                password_hash: "$argon2id$test",
+                state: AccountState::Active,
+            })
+            .await
+            .unwrap();
+        ids.push(id.0);
+        emails.push(email);
+    }
+    ids.sort_unstable();
+
+    let search = |query: Option<&'static str>, after_id, limit| {
+        repo.search_users(bikenest_application::UserSearch {
+            query,
+            after_id,
+            limit,
+        })
+    };
+
+    // Matching on the email substring finds exactly these three.
+    let hits = repo
+        .search_users(bikenest_application::UserSearch {
+            query: Some(&needle),
+            after_id: None,
+            limit: 50,
+        })
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 3, "the search finds every matching account");
+    // Newest id first — the order the keyset cursor walks.
+    let got: Vec<i64> = hits.iter().map(|u| u.id.0).collect();
+    let mut expected = ids.clone();
+    expected.reverse();
+    assert_eq!(got, expected);
+    assert!(
+        hits[0].has_role(Role::User),
+        "roles are hydrated for the page, as the table renders them"
+    );
+
+    // Matching on the display name works too.
+    let by_name = repo
+        .search_users(bikenest_application::UserSearch {
+            query: Some("Wp13 Person 1"),
+            after_id: None,
+            limit: 50,
+        })
+        .await
+        .unwrap();
+    assert_eq!(by_name.len(), 1, "display-name search narrows to one");
+
+    // Keyset paging: limit 2, then continue below the last id seen.
+    let page1 = repo
+        .search_users(bikenest_application::UserSearch {
+            query: Some(&needle),
+            after_id: None,
+            limit: 2,
+        })
+        .await
+        .unwrap();
+    assert_eq!(page1.len(), 2);
+    let page2 = repo
+        .search_users(bikenest_application::UserSearch {
+            query: Some(&needle),
+            after_id: Some(page1.last().unwrap().id.0),
+            limit: 2,
+        })
+        .await
+        .unwrap();
+    assert_eq!(page2.len(), 1, "the second page holds the remainder");
+    assert!(
+        !page2.iter().any(|u| page1.iter().any(|p| p.id == u.id)),
+        "the pages are disjoint"
+    );
+
+    // `_` matches only a literal underscore: the wildcards are escaped.
+    let underscore = search(Some("wp13_eedle"), None, 50).await.unwrap();
+    assert!(
+        underscore.is_empty(),
+        "`_` is escaped, so it does not match any character"
+    );
+    // …and a literal underscore in the term matches a literal underscore
+    // (the escape character must be the one the query declares).
+    let under_email = format!("{needle}-under@bikenest.test");
+    cleanup_user(&under_email).await;
+    let under = UserEmail::parse(&under_email).unwrap();
+    repo.create(bikenest_application::NewAccount {
+        email: &under,
+        display_name: Some("Wp13 Under_score"),
+        password_hash: "$argon2id$test",
+        state: AccountState::Active,
+    })
+    .await
+    .unwrap();
+    emails.push(under_email);
+    let literal = search(Some("Under_sc"), None, 50).await.unwrap();
+    assert_eq!(literal.len(), 1, "a literal `_` in the term matches itself");
+
+    // Batched labels: display name wins over email, unknown ids are absent.
+    let labels = repo.labels_for(&[ids[0], ids[1], -1]).await.unwrap();
+    assert_eq!(labels.len(), 2, "an unknown id is simply absent");
+    assert!(
+        labels[&ids[0]].starts_with("Wp13 Person"),
+        "the label prefers the display name: {:?}",
+        labels[&ids[0]]
+    );
+
+    // With no display name, the label falls back to the email.
+    sqlx::query("UPDATE users SET display_name = NULL WHERE id = $1")
+        .bind(ids[0])
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let labels = repo.labels_for(&[ids[0]]).await.unwrap();
+    assert!(
+        labels[&ids[0]].contains(&needle),
+        "no display name falls back to the email: {:?}",
+        labels[&ids[0]]
+    );
+    // A blank display name is not a label either.
+    sqlx::query("UPDATE users SET display_name = '   ' WHERE id = $1")
+        .bind(ids[1])
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let labels = repo.labels_for(&[ids[1]]).await.unwrap();
+    assert!(
+        labels[&ids[1]].contains(&needle),
+        "a whitespace-only name falls back too: {:?}",
+        labels[&ids[1]]
+    );
+
+    assert!(repo.labels_for(&[]).await.unwrap().is_empty());
+
+    for email in &emails {
+        cleanup_user(email).await;
+    }
+}
+
+#[db_test]
+async fn activity_for_reports_last_seen_and_a_contribution_total(
+    _tx: &mut bikenest_test_support::TestTx,
+) {
+    let repo = SqlxAccountRepository::new(Db::from_pool(pool().await));
+    let email = marker_email("wp13-activity");
+    cleanup_user(&email).await;
+    let eu = UserEmail::parse(&email).unwrap();
+    let id = repo
+        .create(bikenest_application::NewAccount {
+            email: &eu,
+            display_name: None,
+            password_hash: "$argon2id$test",
+            state: AccountState::Active,
+        })
+        .await
+        .unwrap()
+        .0;
+
+    // A brand-new account: present in the map, with nothing to report.
+    let activity = repo.activity_for(&[id]).await.unwrap();
+    let a = activity[&id];
+    assert_eq!(a.last_active_at, None, "never signed in");
+    assert_eq!(a.contributions, 0);
+
+    // A session gives it a last-seen; a location and a proposal give it two
+    // contributions, counted in the same statement.
+    let seen = Utc::now() - Duration::hours(2);
+    sqlx::query(
+        "INSERT INTO sessions (token_hash, user_id, csrf_token, last_seen_at, expires_at) \
+         VALUES ($1, $2, 'csrf', $3, $4)",
+    )
+    .bind(format!("wp13-hash-{id}"))
+    .bind(id)
+    .bind(seen)
+    .bind(Utc::now() + Duration::days(1))
+    .execute(&pool().await)
+    .await
+    .unwrap();
+    let (loc,): (i64,) = sqlx::query_as(
+        "INSERT INTO parking_location \
+           (name, address, parking_type, cost_kind, location, timezone, moderation_state, creator_id, seed_key) \
+         VALUES ('WP13 Activity', 'Rua X', 'rack', 'unknown', \
+                 ST_SetSRID(ST_MakePoint(-49.27, -25.43), 4326)::geography, \
+                 'America/Sao_Paulo', 'ACTIVE', $1, $2) RETURNING id",
+    )
+    .bind(id)
+    .bind(format!("wp13-activity-{id}"))
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO parking_proposal (location_id, proposer_id, base_version, kind, proposed, status) \
+         VALUES ($1, $2, 1, 'change_existence', '{\"existence\":\"removed\"}'::jsonb, 'PENDING')",
+    )
+    .bind(loc)
+    .bind(id)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+
+    let a = repo.activity_for(&[id]).await.unwrap()[&id];
+    assert!(
+        a.last_active_at
+            .is_some_and(|at| (at - seen).num_seconds().abs() < 2),
+        "last-seen comes from the newest session: {:?}",
+        a.last_active_at
+    );
+    assert_eq!(
+        a.contributions, 2,
+        "one location + one proposal, in a single batched query"
+    );
+
+    // Unknown ids come back with a zeroed row rather than being missing, so
+    // the admin table always has a value to render.
+    let batch = repo.activity_for(&[id, -1]).await.unwrap();
+    assert_eq!(batch.len(), 2);
+    assert_eq!(batch[&-1].contributions, 0);
+
+    assert!(repo.activity_for(&[]).await.unwrap().is_empty());
+
+    sqlx::query("DELETE FROM parking_location WHERE id = $1")
+        .bind(loc)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    cleanup_user(&email).await;
+}

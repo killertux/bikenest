@@ -147,4 +147,28 @@ document.addEventListener('alpine:init', function () {
       },
     };
   });
+
+  /* ---- admin_users.html: reveal one masked email ------------------------------- */
+  /* The row renders both the masked and the full address; this only flips which
+   * one is visible and relabels the button. The label strings come from
+   * `data-show`/`data-hide` so the copy stays in the i18n catalog. */
+  Alpine.data('revealEmail', function () {
+    return {
+      shown: false,
+      label: '',
+      init: function () { this.label = this.showLabel(); },
+      showLabel: function () {
+        var btn = this.$el.querySelector('button[data-show]');
+        return btn ? btn.dataset.show : '';
+      },
+      hideLabel: function () {
+        var btn = this.$el.querySelector('button[data-hide]');
+        return btn ? btn.dataset.hide : '';
+      },
+      toggle: function () {
+        this.shown = !this.shown;
+        this.label = this.shown ? this.hideLabel() : this.showLabel();
+      },
+    };
+  });
 });

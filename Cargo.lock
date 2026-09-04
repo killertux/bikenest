@@ -755,6 +755,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "chrono-tz",
+ "serde_json",
  "thiserror",
 ]
 

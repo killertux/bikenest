@@ -132,11 +132,14 @@
           <input type="hidden" name="kind" value="change_existence" />
           <label class="mb-1 block text-sm font-medium">{{ tr.t("edit.remove.title") }}</label>
           <label class="mt-2 flex items-center gap-2 text-sm text-muted">
-            <input type="radio" name="existence" value="no_longer_exists" class="rounded-full border-border" />
+            {# The payload's own codes. These radios used to post the
+               *verification* vocabulary, which the moderation queue read as
+               "still exists" — inverting every removal proposal. #}
+            <input type="radio" name="existence" value="removed" class="rounded-full border-border" />
             {{ tr.t("verify.no_longer_exists") }}
           </label>
           <label class="mt-2 flex items-center gap-2 text-sm text-muted">
-            <input type="radio" name="existence" value="info_changed" class="rounded-full border-border" />
+            <input type="radio" name="existence" value="exists" class="rounded-full border-border" />
             {{ tr.t("verify.info_changed") }}
           </label>
           <label class="mt-2 block text-sm text-muted">{{ tr.t("edit.reason") }}

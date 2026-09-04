@@ -2,9 +2,12 @@
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{AccountRepository, AuthError, IdentityRecord, NewAccount};
+use bikenest_application::{
+    AccountRepository, AuthError, IdentityRecord, NewAccount, UserActivity, UserSearch,
+};
 use bikenest_domain::{AccountState, AuthenticationProvider, Role, User, UserEmail, UserId};
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
 pub struct SqlxAccountRepository {
     db: Db,
@@ -35,6 +38,17 @@ impl SqlxAccountRepository {
             user.roles.push(Role::User);
         }
         Ok(user)
+    }
+
+    /// Hydrate a batch of rows. Roles are still one query per user (as they
+    /// always were); the admin list is now a bounded page, so that is a fixed
+    /// ≤50 lookups rather than one per account in the database.
+    async fn load_users(&self, rows: Vec<UserRow>) -> Result<Vec<User>, AuthError> {
+        let mut users = Vec::with_capacity(rows.len());
+        for row in rows {
+            users.push(self.load_user(row).await?);
+        }
+        Ok(users)
     }
 
     async fn roles_bysql(&self, id: UserId) -> Result<Vec<Role>, sqlx::Error> {
@@ -360,16 +374,147 @@ impl AccountRepository for SqlxAccountRepository {
         .fetch_all(self.db.pool())
         .await
         .map_err(|e| db_err("account.list_users", e))?;
-        let mut users = Vec::with_capacity(rows.len());
-        for row in rows {
-            users.push(self.load_user(row).await?);
-        }
-        Ok(users)
+        self.load_users(rows).await
     }
+
+    async fn search_users(&self, search: UserSearch<'_>) -> Result<Vec<User>, AuthError> {
+        // `ILIKE` with a bound `%term%`: the wildcards are added here, the
+        // term itself is never concatenated into the SQL.
+        let pattern = search.query.map(|q| format!("%{}%", escape_like(q)));
+        let rows = sqlx::query_as::<_, UserRow>(
+            r#"
+            SELECT id, email, display_name, account_state, email_verified_at
+            FROM users
+            WHERE ($1::text IS NULL OR email ILIKE $1::text ESCAPE '!'
+                                    OR display_name ILIKE $1::text ESCAPE '!')
+              AND ($2::bigint IS NULL OR id < $2::bigint)
+            ORDER BY id DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(pattern.as_deref())
+        .bind(search.after_id)
+        .bind(search.limit.clamp(1, 200))
+        .fetch_all(self.db.pool())
+        .await
+        .map_err(|e| db_err("account.search_users", e))?;
+        self.load_users(rows).await
+    }
+
+    async fn labels_for(&self, ids: &[i64]) -> Result<HashMap<i64, String>, AuthError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows: Vec<(i64, String)> = sqlx::query_as(
+            r#"
+            SELECT id, coalesce(nullif(btrim(display_name), ''), email) AS label
+            FROM users
+            WHERE id = ANY($1)
+            "#,
+        )
+        .bind(ids)
+        .fetch_all(self.db.pool())
+        .await
+        .map_err(|e| db_err("account.labels_for", e))?;
+        Ok(rows.into_iter().collect())
+    }
+
+    async fn activity_for(&self, ids: &[i64]) -> Result<HashMap<i64, UserActivity>, AuthError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query_as::<_, ActivityRow>(ACTIVITY_SQL)
+            .bind(ids)
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| db_err("account.activity_for", e))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.user_id,
+                    UserActivity {
+                        last_active_at: r.last_active_at,
+                        contributions: r.contributions.unwrap_or(0),
+                    },
+                )
+            })
+            .collect())
+    }
+}
+
+/// Last-seen plus one contribution total per account, for a whole page of the
+/// admin user list in one round trip. The counted events are the ones the C5
+/// contribution feed lists, so the number on the admin row and the number of
+/// rows on the user's own history page agree.
+const ACTIVITY_SQL: &str = r#"
+WITH ids AS (SELECT unnest($1::bigint[]) AS user_id),
+last_seen AS (
+    SELECT s.user_id, max(s.last_seen_at) AS last_active_at
+    FROM sessions s
+    JOIN ids ON ids.user_id = s.user_id
+    GROUP BY s.user_id
+),
+contributions AS (
+    SELECT user_id, sum(n)::bigint AS n FROM (
+        SELECT creator_id AS user_id, count(*) AS n FROM parking_location
+            WHERE creator_id = ANY($1) GROUP BY creator_id
+        UNION ALL
+        SELECT editor_id, count(*) FROM parking_revision
+            WHERE editor_id = ANY($1) AND change_kind = 'edit' GROUP BY editor_id
+        UNION ALL
+        SELECT proposer_id, count(*) FROM parking_proposal
+            WHERE proposer_id = ANY($1) GROUP BY proposer_id
+        UNION ALL
+        SELECT author_id, count(*) FROM review
+            WHERE author_id = ANY($1) GROUP BY author_id
+        UNION ALL
+        SELECT user_id, count(*) FROM verification
+            WHERE user_id = ANY($1) GROUP BY user_id
+        UNION ALL
+        SELECT uploader_id, count(*) FROM parking_photo
+            WHERE uploader_id = ANY($1) GROUP BY uploader_id
+        UNION ALL
+        SELECT uploader_id, count(*) FROM review_photo
+            WHERE uploader_id = ANY($1) GROUP BY uploader_id
+    ) parts
+    GROUP BY user_id
+)
+SELECT ids.user_id, last_seen.last_active_at, contributions.n AS contributions
+FROM ids
+LEFT JOIN last_seen ON last_seen.user_id = ids.user_id
+LEFT JOIN contributions ON contributions.user_id = ids.user_id
+"#;
+
+#[derive(sqlx::FromRow)]
+struct ActivityRow {
+    user_id: i64,
+    last_active_at: Option<DateTime<Utc>>,
+    contributions: Option<i64>,
+}
+
+/// Neutralize `%`, `_` and `\` so a search for "a_b" does not match "axb".
+/// Escapes LIKE metacharacters with `!`, matching the `ESCAPE '!'` clause the
+/// search query declares, so a literal `%` or `_` in the term matches itself.
+fn escape_like(term: &str) -> String {
+    term.replace('!', "!!")
+        .replace('%', "!%")
+        .replace('_', "!_")
 }
 
 /// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
 /// [`AuthError`]. `context` names the operation, e.g. `"account.create"`.
 fn db_err(context: &'static str, e: sqlx::Error) -> AuthError {
     crate::db_error::classify_and_log(context, e).into()
+}
+
+#[cfg(test)]
+mod like_tests {
+    use super::escape_like;
+
+    #[test]
+    fn like_metacharacters_are_escaped_with_the_declared_escape_char() {
+        assert_eq!(escape_like("a_b%c!"), "a!_b!%c!!");
+        assert_eq!(escape_like("plain"), "plain");
+    }
 }

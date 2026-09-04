@@ -85,8 +85,7 @@ impl PageLayout {
     /// `is_authenticated = false` even while carrying a double-submit token.
     pub fn for_request(title: String, current: &str, auth: &Auth, map: &MapConfig) -> Self {
         let is_moderator = auth.user.as_ref().is_some_and(|u| {
-            u.has_role(bikenest_domain::Role::Moderator)
-                || u.has_role(bikenest_domain::Role::Admin)
+            u.has_role(bikenest_domain::Role::Moderator) || u.has_role(bikenest_domain::Role::Admin)
         });
         let is_admin = auth
             .user
@@ -177,7 +176,12 @@ pub fn error_response(
             _ => "error.title",
         };
         ErrorPage {
-            layout: PageLayout::for_request(format!("{} — BikeNest", tr.t(title_key)), "", auth, map),
+            layout: PageLayout::for_request(
+                format!("{} — BikeNest", tr.t(title_key)),
+                "",
+                auth,
+                map,
+            ),
             tr,
             status: status.as_u16(),
             message: message.clone(),
@@ -480,8 +484,7 @@ impl DetailsPage {
         page.own_rating = c.own_review.map(|r| r.rating.value()).unwrap_or(0);
         page.reasons = c.reasons.iter().map(|r| view::reason_vm(tr, r)).collect();
         page.is_moderator = auth.user.as_ref().is_some_and(|u| {
-            u.has_role(bikenest_domain::Role::Moderator)
-                || u.has_role(bikenest_domain::Role::Admin)
+            u.has_role(bikenest_domain::Role::Moderator) || u.has_role(bikenest_domain::Role::Admin)
         });
         page
     }
@@ -614,6 +617,10 @@ pub struct AdminUsersPage {
     pub layout: PageLayout,
     pub tr: Translator,
     pub users: Vec<view::AdminUserVm>,
+    /// The current search term, echoed into the search box.
+    pub query: String,
+    /// Keyset "load more" link, present only when the page was full.
+    pub next_url: Option<String>,
     pub notice: Option<String>,
     pub error: Option<String>,
 }
@@ -930,7 +937,9 @@ mod tests {
     }
 
     async fn body_of(resp: axum::response::Response) -> String {
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         String::from_utf8_lossy(&bytes).to_string()
     }
 

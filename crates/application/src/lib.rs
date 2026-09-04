@@ -26,7 +26,7 @@ pub use audit::{
 pub use auth::{
     AccountRepository, AuthError, AuthService, AuthenticatedUser, Clock, IdentityRecord,
     LoginOutcome, NewAccount, OAuthProvider, PasswordHasher, ResolvedSession, Session,
-    SessionStore, TokenGenerator, TokenStore,
+    SessionStore, TokenGenerator, TokenStore, UserActivity, UserSearch,
 };
 pub use community::{
     AddParkingLocationOutcome, AttributeSummary, CommunityParkingDetails, ContributionDeps,
@@ -39,7 +39,8 @@ pub use email::{EmailError, EmailProvider, OutboundEmail};
 pub use jobs::{JOB_JOBS_GC, JOB_RETENTION, JobError, JobHandler, JobPayload};
 pub use moderation::{
     ModerationDeps, ModerationError, ModerationRepository, ModerationService, NewReport, Proposal,
-    ProposalApplication, QueueCounts, Report, ReportRepository,
+    ProposalApplication, ProposalField, ProposalOverride, QueueCounts, REVIEW_EXCERPT_CHARS,
+    Report, ReportRepository, ReportTargetPreview, review_excerpt,
 };
 pub use photo::{
     ImageProcessor, NewPendingPhoto, PendingPhoto, PhotoDeps, PhotoError, PhotoForModeration,

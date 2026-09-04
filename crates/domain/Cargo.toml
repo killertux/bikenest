@@ -10,4 +10,7 @@ workspace = true
 base64 = "0.22"
 chrono = { workspace = true }
 chrono-tz = "0.10"
+# The proposal payload is a JSON document in the database; its typed shape and
+# its legacy-compatible codec belong with the concept, not with the repository.
+serde_json = "1"
 thiserror = { workspace = true }

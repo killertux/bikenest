@@ -555,10 +555,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "We could not read that request. Please try again.",
             "Não conseguimos ler essa requisição. Tente novamente.",
         ),
-        "error.login_required" => (
-            "Log in to continue.",
-            "Entre na sua conta para continuar.",
-        ),
+        "error.login_required" => ("Log in to continue.", "Entre na sua conta para continuar."),
         "error.forbidden" => (
             "You do not have permission to do that.",
             "Você não tem permissão para fazer isso.",
@@ -571,10 +568,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "That action is not available here.",
             "Essa ação não está disponível aqui.",
         ),
-        "error.too_large" => (
-            "That upload is too large.",
-            "Esse envio é grande demais.",
-        ),
+        "error.too_large" => ("That upload is too large.", "Esse envio é grande demais."),
         "error.too_many" => (
             "Too many requests. Try again in a moment.",
             "Muitas requisições. Tente novamente em instantes.",
@@ -1057,6 +1051,29 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         ),
         "moderation.approved" => ("Photo approved.", "Foto aprovada."),
         "moderation.rejected" => ("Photo rejected.", "Foto rejeitada."),
+        "moderation.reject_missing" => ("Reject (file missing)", "Rejeitar (arquivo ausente)"),
+        "moderation.photo_unavailable" => ("Image unavailable", "Imagem indisponível"),
+        "moderation.photo_unavailable_hint" => (
+            "The file is no longer in storage, so it cannot be reviewed or published. Reject it to clear the queue.",
+            "O arquivo não está mais no armazenamento, então não pode ser revisado nem publicado. Rejeite-o para limpar a fila.",
+        ),
+        "moderation.photo_missing_reason" => (
+            "File missing from storage",
+            "Arquivo ausente no armazenamento",
+        ),
+        "moderation.target_gone" => ("(target deleted)", "(alvo excluído)"),
+        "moderation.action.hide_review" => ("Hide review", "Ocultar avaliação"),
+        "moderation.action.invalidate_parking" => ("Mark invalid", "Marcar como inválida"),
+        "moderation.action.hide_photo" => ("Hide photo", "Ocultar foto"),
+        "moderation.action.reject_photo" => ("Reject photo", "Rejeitar foto"),
+        "moderation.confirm.remove" => (
+            "Approve removal of \u{201c}{name}\u{201d}? It will disappear from search and the map.",
+            "Aprovar a remoção de \u{201c}{name}\u{201d}? Ela desaparecerá da busca e do mapa.",
+        ),
+        "moderation.confirm.act_on_content" => (
+            "{label} on \u{201c}{name}\u{201d}?",
+            "{label} em \u{201c}{name}\u{201d}?",
+        ),
         "moderation.err.approve" => ("Approve failed.", "Falha ao aprovar."),
         "moderation.err.reject" => ("Reject failed.", "Falha ao rejeitar."),
         "moderation.error.internal" => ("Moderation action failed.", "Ação de moderação falhou."),
@@ -1205,6 +1222,44 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "proposal.reject_placeholder" => ("Reason to reject", "Motivo da rejeição"),
         "proposal.approved" => ("Proposal approved.", "Proposta aprovada."),
         "proposal.rejected" => ("Proposal rejected.", "Proposta rejeitada."),
+        "proposal.reason.label" => ("Proposer's note", "Nota de quem propôs"),
+        "proposal.field.coordinates" => ("Coordinates", "Coordenadas"),
+        "proposal.field.timezone" => ("Timezone", "Fuso horário"),
+        "proposal.field.existence" => ("Existence", "Existência"),
+        "proposal.diff.unchanged" => ("unchanged", "sem alteração"),
+        "proposal.value.unknown" => ("not set", "não definido"),
+        "proposal.map.current" => ("Current position", "Posição atual"),
+        "proposal.map.proposed" => ("Proposed position", "Posição proposta"),
+        "proposal.map.aria" => (
+            "Map showing the current and proposed positions of the pin.",
+            "Mapa mostrando as posições atual e proposta do ponto.",
+        ),
+        "proposal.stale.badge" => ("Out of date", "Desatualizada"),
+        "proposal.stale.hint" => (
+            "The location changed after this proposal was written, so approving it would overwrite an edit the proposer never saw. Ask for a fresh proposal, or reject it.",
+            "A vaga mudou depois que esta proposta foi escrita, então aprová-la sobrescreveria uma edição que quem propôs nunca viu. Peça uma nova proposta ou rejeite-a.",
+        ),
+        "proposal.manual_review.badge" => ("Needs manual review", "Precisa de revisão manual"),
+        "proposal.manual_review.hint" => (
+            "This proposal's stored data could not be read. Fill in the values yourself to approve it, or reject it.",
+            "Não foi possível ler os dados desta proposta. Preencha os valores manualmente para aprová-la, ou rejeite-a.",
+        ),
+        "proposal.error.lat" => (
+            "Latitude is required and must be between -90 and 90.",
+            "A latitude é obrigatória e deve estar entre -90 e 90.",
+        ),
+        "proposal.error.lon" => (
+            "Longitude is required and must be between -180 and 180.",
+            "A longitude é obrigatória e deve estar entre -180 e 180.",
+        ),
+        "proposal.error.timezone" => (
+            "A valid IANA timezone is required (e.g. America/Sao_Paulo).",
+            "É necessário um fuso horário IANA válido (ex.: America/Sao_Paulo).",
+        ),
+        "proposal.error.existence" => (
+            "Choose whether the location exists or was removed.",
+            "Escolha se a vaga existe ou foi removida.",
+        ),
 
         // --- review / parking moderation toasts -----------------------
         "review.hidden" => ("Review hidden.", "Avaliação ocultada."),
@@ -1226,6 +1281,37 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         ),
         "admin.restored" => ("User restored to active.", "Usuário restaurado para ativo."),
         "admin.contrib_link" => ("Contributions", "Contribuições"),
+        "admin.last_active" => ("Last active", "Última atividade"),
+        "admin.contributions" => ("Contributions", "Contribuições"),
+        "admin.never" => ("never", "nunca"),
+        "admin.users_empty" => (
+            "No accounts match this search.",
+            "Nenhuma conta corresponde a esta busca.",
+        ),
+        "admin.search.label" => ("Search accounts", "Buscar contas"),
+        "admin.search.placeholder" => ("email or name", "e-mail ou nome"),
+        "admin.search.submit" => ("Search", "Buscar"),
+        "admin.search.clear" => ("Clear", "Limpar"),
+        "admin.email.show" => ("Show", "Mostrar"),
+        "admin.email.hide" => ("Hide", "Ocultar"),
+        "admin.confirm.suspend" => (
+            "Suspend {name}? Every session is revoked immediately.",
+            "Suspender {name}? Todas as sessões serão revogadas imediatamente.",
+        ),
+        "admin.confirm.restore" => ("Restore {name} to active?", "Restaurar {name} para ativo?"),
+        "admin.confirm.grant_moderator" => (
+            "Grant MODERATOR to {name}? They will be able to hide content and resolve reports.",
+            "Conceder MODERATOR a {name}? Poderá ocultar conteúdo e resolver denúncias.",
+        ),
+        "admin.confirm.revoke_moderator" => (
+            "Revoke MODERATOR from {name}?",
+            "Revogar MODERATOR de {name}?",
+        ),
+        "admin.confirm.grant_admin" => (
+            "Grant ADMIN to {name}? They will be able to manage every account and role.",
+            "Conceder ADMIN a {name}? Poderá gerenciar todas as contas e funções.",
+        ),
+        "admin.confirm.revoke_admin" => ("Revoke ADMIN from {name}?", "Revogar ADMIN de {name}?"),
         "admin.contrib.title" => ("Contributions", "Contribuições"),
         "admin.contrib.subtitle" => (
             "Inspection view of a user's contribution history.",
@@ -1239,8 +1325,12 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "admin.audit.action" => ("Action contains", "Ação contém"),
         "admin.audit.target_type" => ("Target type", "Tipo de alvo"),
         "admin.audit.actor" => ("Actor id", "Id do ator"),
-        "admin.audit.from" => ("From (ISO)", "De (ISO)"),
-        "admin.audit.to" => ("To (ISO)", "Até (ISO)"),
+        "admin.audit.from" => ("From", "De"),
+        "admin.audit.to" => ("To", "Até"),
+        "admin.audit.utc_note" => (
+            "Dates are read and shown in UTC, matching how events are stored.",
+            "As datas são lidas e exibidas em UTC, como os eventos são armazenados.",
+        ),
         "admin.audit.filter" => ("Apply", "Aplicar"),
         "admin.audit.empty" => (
             "No audit events match the filter.",
@@ -1389,6 +1479,18 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "No privacy requests.",
             "Nenhuma solicitação de privacidade.",
         ),
+        "admin.privacy_requests.subtitle" => (
+            "Data-subject requests, oldest first. The deadline is 15 days from the request (LGPD art. 19).",
+            "Solicitações de titulares, mais antigas primeiro. O prazo é de 15 dias a partir do pedido (LGPD art. 19).",
+        ),
+        "admin.privacy_requests.details" => ("What they asked for", "O que foi solicitado"),
+        "admin.privacy_requests.no_details" => (
+            "No further details were given.",
+            "Nenhum detalhe adicional foi informado.",
+        ),
+        "admin.privacy_requests.days_left" => ("{n} days left", "{n} dias restantes"),
+        "admin.privacy_requests.overdue" => ("{n} days overdue", "{n} dias em atraso"),
+        "privacy.subject.anonymized" => ("Anonymized account", "Conta anonimizada"),
         "admin.privacy_requests.fulfill" => ("Mark completed", "Marcar como concluída"),
 
         // Unknown key: a visible marker (all real keys are defined above, so

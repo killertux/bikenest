@@ -6,7 +6,7 @@ use bikenest_application::{
     AccountRepository, AuditEvent, AuditLog, AuthError, AuthService, AuthenticatedUser, Clock,
     EmailError, EmailProvider, IdentityRecord, LoginOutcome, NewAccount, OAuthProvider,
     OutboundEmail, PasswordHasher, RateLimitError, RateLimiter, Session, SessionStore,
-    TokenGenerator, TokenStore,
+    TokenGenerator, TokenStore, UserActivity, UserSearch,
 };
 use bikenest_domain::{
     AccountState, AuthenticationProvider, CsrfToken, Password, ProviderIdentity, Role, SessionId,
@@ -238,6 +238,54 @@ impl AccountRepository for FakeRepo {
     }
     async fn list_users(&self) -> Result<Vec<User>, AuthError> {
         Ok(self.db.lock().unwrap().users.clone())
+    }
+    async fn search_users(&self, search: UserSearch<'_>) -> Result<Vec<User>, AuthError> {
+        let needle = search.query.map(str::to_lowercase);
+        let mut users: Vec<User> = self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter()
+            .filter(|u| match &needle {
+                Some(n) => {
+                    u.email.as_str().to_lowercase().contains(n)
+                        || u.display_name
+                            .as_deref()
+                            .is_some_and(|d| d.to_lowercase().contains(n))
+                }
+                None => true,
+            })
+            .filter(|u| search.after_id.is_none_or(|after| u.id.0 < after))
+            .cloned()
+            .collect();
+        users.sort_by_key(|u| std::cmp::Reverse(u.id.0));
+        users.truncate(search.limit.clamp(1, 200) as usize);
+        Ok(users)
+    }
+    async fn labels_for(&self, ids: &[i64]) -> Result<HashMap<i64, String>, AuthError> {
+        Ok(self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter()
+            .filter(|u| ids.contains(&u.id.0))
+            .map(|u| {
+                (
+                    u.id.0,
+                    u.display_name
+                        .clone()
+                        .unwrap_or_else(|| u.email.as_str().to_string()),
+                )
+            })
+            .collect())
+    }
+    async fn activity_for(&self, ids: &[i64]) -> Result<HashMap<i64, UserActivity>, AuthError> {
+        Ok(ids
+            .iter()
+            .map(|id| (*id, UserActivity::default()))
+            .collect())
     }
 }
 

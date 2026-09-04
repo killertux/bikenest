@@ -2730,7 +2730,9 @@ async fn moderation_dashboard_renders_four_numeric_tiles(tx: &mut bikenest_test_
 /// WP11: a full page (== the limit) renders the "load more" keyset-pagination
 /// control; a fixture of `limit + 1` rows guarantees the first page is full.
 #[db_test]
-async fn moderation_reports_queue_shows_load_more_when_full(tx: &mut bikenest_test_support::TestTx) {
+async fn moderation_reports_queue_shows_load_more_when_full(
+    tx: &mut bikenest_test_support::TestTx,
+) {
     let (app, email) = auth_app().await;
     let moderator = moderator_cookie(&app, &email, "reports-more-mod@example.com").await;
     const REPORTER: &str = "reports-more-reporter@example.com";
@@ -3585,7 +3587,6 @@ async fn a_trusted_proxys_forwarded_for_does_key_the_bucket(_tx: &mut TestTx) {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // WP8: moderation state is enforced on the write path, not only on reads.
 // ---------------------------------------------------------------------------
@@ -3879,7 +3880,10 @@ async fn search_answers_a_history_restore_with_a_whole_document(_tx: &mut TestTx
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    assert!(body.contains("<header"), "history restore must get the page");
+    assert!(
+        body.contains("<header"),
+        "history restore must get the page"
+    );
 }
 
 #[db_test]
@@ -3940,7 +3944,10 @@ async fn p3_fragment_endpoints_redirect_a_whole_document_request(
     )
     .await;
     assert_eq!(s, StatusCode::OK, "htmx favorite");
-    assert!(body.contains(r#"id="favorite-button""#), "the button: {body}");
+    assert!(
+        body.contains(r#"id="favorite-button""#),
+        "the button: {body}"
+    );
     assert!(!is_document(&body), "fragment, not a page");
 
     let (s, _, _) = post_form(
@@ -4116,12 +4123,13 @@ async fn moderation_fragment_endpoints_redirect_to_their_queue(
     )
     .await;
     assert_eq!(s, StatusCode::OK, "upload queued");
-    let (photo_id,): (i64,) =
-        sqlx::query_as("SELECT id FROM parking_photo WHERE location_id = $1 ORDER BY id DESC LIMIT 1")
-            .bind(loc)
-            .fetch_one(&pool().await)
-            .await
-            .unwrap();
+    let (photo_id,): (i64,) = sqlx::query_as(
+        "SELECT id FROM parking_photo WHERE location_id = $1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(loc)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
 
     let mod_cookie = moderator_cookie(&app, &email, MOD).await;
     let (_, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
@@ -4365,7 +4373,12 @@ async fn login_refuses_an_off_site_next(tx: &mut bikenest_test_support::TestTx) 
     const EMAIL: &str = "wp10-next-evil@example.com";
     let _ = verified_cookie(&app, &email, EMAIL).await;
 
-    for evil in ["//evil.com", r"/\evil.com", "https://evil.com", "javascript:x"] {
+    for evil in [
+        "//evil.com",
+        r"/\evil.com",
+        "https://evil.com",
+        "javascript:x",
+    ] {
         let (cookie_line, token) = anon_csrf(&app, "/login").await.expect("anon csrf");
         let body = format!(
             "email={}&password=password123&csrf={}&next={}",
@@ -4424,9 +4437,7 @@ async fn head_requests_are_safe_and_not_csrf_checked(_tx: &mut TestTx) {
 }
 
 #[db_test]
-async fn multipart_review_accepts_the_token_from_the_query(
-    tx: &mut bikenest_test_support::TestTx,
-) {
+async fn multipart_review_accepts_the_token_from_the_query(tx: &mut bikenest_test_support::TestTx) {
     // The middleware must not drain a multipart body (the handler's `Multipart`
     // extractor needs it), so the form carries the token on its action.
     let (app, email) = auth_app().await;
@@ -4528,7 +4539,8 @@ async fn plain_text_endpoints_keep_their_plain_bodies(_tx: &mut TestTx) {
 // --- Template hygiene -------------------------------------------------------
 
 fn read_template(rel: &str) -> String {
-    let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates")).join(rel);
+    let path =
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates")).join(rel);
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
@@ -4555,7 +4567,10 @@ fn the_favorite_button_is_defined_exactly_once() {
         1,
         "the favorite control must live in one partial only: {hits:?}"
     );
-    assert!(hits[0].ends_with("partials/favorite_button.html"), "{hits:?}");
+    assert!(
+        hits[0].ends_with("partials/favorite_button.html"),
+        "{hits:?}"
+    );
 }
 
 #[test]
@@ -4785,9 +4800,7 @@ async fn signed_in_user_sees_account_links_on_policy_and_error_pages(
 }
 
 #[db_test]
-async fn header_shows_moderation_and_admin_links_by_role(
-    tx: &mut bikenest_test_support::TestTx,
-) {
+async fn header_shows_moderation_and_admin_links_by_role(tx: &mut bikenest_test_support::TestTx) {
     let (app, email) = auth_app().await;
 
     let moderator = moderator_cookie(&app, &email, "wp12-header-mod@example.com").await;
@@ -4853,7 +4866,11 @@ async fn add_spot_entry_points_are_gated_by_verification_status(
 
     // Verified user: the real entry point on every page named in the plan.
     let verified = verified_cookie(&app, &email, "wp12-add-spot-verified@example.com").await;
-    for uri in [Q.to_string(), "/about".to_string(), format!("/parking/{loc_id}")] {
+    for uri in [
+        Q.to_string(),
+        "/about".to_string(),
+        format!("/parking/{loc_id}"),
+    ] {
         let (s, body) = get_c(&app, &uri, Some(&verified)).await;
         assert_eq!(s, StatusCode::OK, "{uri}");
         assert!(
@@ -4894,9 +4911,7 @@ async fn add_spot_entry_points_are_gated_by_verification_status(
 }
 
 #[db_test]
-async fn about_page_links_entry_points_and_uses_present_tense_copy(
-    _tx: &mut TestTx,
-) {
+async fn about_page_links_entry_points_and_uses_present_tense_copy(_tx: &mut TestTx) {
     let (status, body) = get("/about").await;
     assert_eq!(status, StatusCode::OK);
     assert!(
@@ -4919,7 +4934,12 @@ async fn about_page_links_entry_points_and_uses_present_tense_copy(
     // pt-BR (default locale): the old "chegam conforme" copy must be gone too.
     let app = test_app().await;
     let res = app
-        .oneshot(Request::builder().uri("/about").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/about")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let body = res.into_body().collect().await.unwrap().to_bytes();
@@ -4935,9 +4955,7 @@ async fn about_page_links_entry_points_and_uses_present_tense_copy(
 }
 
 #[db_test]
-async fn moderation_dashboard_tiles_have_distinct_titles(
-    tx: &mut bikenest_test_support::TestTx,
-) {
+async fn moderation_dashboard_tiles_have_distinct_titles(tx: &mut bikenest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     let admin = admin_cookie(&app, &email, "wp12-mod-tiles@example.com").await;
     let (s, body) = get_c(&app, "/moderation", Some(&admin)).await;
@@ -5001,4 +5019,685 @@ async fn contributions_history_labels_parked_here_distinct_from_verified(
         .await
         .unwrap();
     cleanup_user_contributions("wp12-parked-here@example.com").await;
+}
+
+// ---------------------------------------------------------------------------
+// WP13 — moderation queues that show what they judge.
+// ---------------------------------------------------------------------------
+
+/// Insert a PENDING proposal directly, the way M3 wrote them: a JSONB payload
+/// whose shape the typed [`bikenest_domain::ProposedChange`] has to keep
+/// reading unchanged.
+async fn seed_proposal(
+    location_id: i64,
+    proposer_id: i64,
+    base_version: i64,
+    kind: &str,
+    proposed: &str,
+) -> i64 {
+    let (id,): (i64,) = sqlx::query_as(
+        "INSERT INTO parking_proposal (location_id, proposer_id, base_version, kind, proposed, status) \
+         VALUES ($1, $2, $3, $4, $5::jsonb, 'PENDING') RETURNING id",
+    )
+    .bind(location_id)
+    .bind(proposer_id)
+    .bind(base_version)
+    .bind(kind)
+    .bind(proposed)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    id
+}
+
+async fn user_id_for(email: &str) -> i64 {
+    let (id,): (i64,) = sqlx::query_as("SELECT id FROM users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    id
+}
+
+#[db_test]
+async fn wp13_proposal_queue_prefills_the_move_and_links_the_location(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    const MOD: &str = "wp13-prop-mod@example.com";
+    const PROPOSER: &str = "wp13-prop-author@example.com";
+    let (app, email) = auth_app().await;
+    let loc = fixture_location(tx, "wp13-prop", "WP13 Proposal Spot").await;
+    let proposer = verified_cookie(&app, &email, PROPOSER).await;
+    let _ = proposer;
+    let proposer_id = user_id_for(PROPOSER).await;
+    let (version,): (i64,) = sqlx::query_as("SELECT version FROM parking_location WHERE id = $1")
+        .bind(loc)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    let pid = seed_proposal(
+        loc,
+        proposer_id,
+        version,
+        "move_location",
+        r#"{"lat": -25.428400, "lon": -49.273300, "timezone": "America/Sao_Paulo", "reason": "the rack is across the street"}"#,
+    )
+    .await;
+
+    // The queue is FIFO (`id ASC`) over a 50-row page and the database already
+    // holds a backlog, so page straight to this fixture's own row with the
+    // handler's real keyset cursor.
+    let mod_cookie = moderator_cookie(&app, &email, MOD).await;
+    let (s, body) = get_c(
+        &app,
+        &format!("/moderation/proposals?after_id={}", pid - 1),
+        Some(&mod_cookie),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+
+    // The row names the location and links to it, instead of showing an id.
+    assert!(
+        body.contains("WP13 Proposal Spot"),
+        "the queue names the location"
+    );
+    assert!(
+        body.contains(&format!(r#"href="/parking/{loc}""#)),
+        "the row links to the location page"
+    );
+    // The proposer's note is the "why" a moderator needs.
+    assert!(
+        body.contains("the rack is across the street"),
+        "the proposer's reason is shown"
+    );
+    // The approve form is pre-filled: approving as-is must be one click, not a
+    // retyping exercise.
+    assert!(
+        body.contains(r#"name="lat" value="-25.428400""#),
+        "latitude is pre-filled with the proposed value"
+    );
+    assert!(
+        body.contains(r#"name="lon" value="-49.273300""#),
+        "longitude is pre-filled with the proposed value"
+    );
+    assert!(
+        body.contains(r#"name="timezone" value="America/Sao_Paulo""#),
+        "timezone is pre-filled with the proposed value"
+    );
+    // Current vs proposed, plus the two-marker mini-map.
+    assert!(
+        body.contains("data-current-lat=") && body.contains("proposal-map"),
+        "a move renders the before/after mini-map"
+    );
+
+    // Approving with the pre-filled values applies exactly them.
+    let csrf = extract_csrf(&body);
+    let (s, _, _) = post_form(
+        &app,
+        &format!("/moderation/proposals/{pid}/approve"),
+        &[
+            ("csrf", &csrf),
+            ("lat", "-25.428400"),
+            ("lon", "-49.273300"),
+            ("timezone", "America/Sao_Paulo"),
+        ],
+        Some(&mod_cookie),
+    )
+    .await;
+    assert!(
+        matches!(s, StatusCode::SEE_OTHER | StatusCode::OK),
+        "approval accepted: {s}"
+    );
+    let (lat, status): (Option<f64>, String) = sqlx::query_as(
+        "SELECT l.lat, p.status FROM parking_location l \
+         JOIN parking_proposal p ON p.id = $2 WHERE l.id = $1",
+    )
+    .bind(loc)
+    .bind(pid)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    assert_eq!(status, "APPROVED");
+    assert!(
+        lat.is_some_and(|v| (v - -25.4284).abs() < 1e-5),
+        "the proposed latitude was applied: {lat:?}"
+    );
+
+    let _ = tx;
+    cleanup_user_contributions(MOD).await;
+    cleanup_user_contributions(PROPOSER).await;
+}
+
+#[db_test]
+async fn wp13_proposal_queue_flags_stale_and_unreadable_proposals(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    const MOD: &str = "wp13-stale-mod@example.com";
+    let (app, email) = auth_app().await;
+    let loc = fixture_location(tx, "wp13-stale", "WP13 Stale Spot").await;
+    let mod_cookie = moderator_cookie(&app, &email, MOD).await;
+    let mod_id = user_id_for(MOD).await;
+
+    // Written against v1, but the location has moved on to v7: approving it
+    // would clobber an edit the proposer never saw.
+    sqlx::query("UPDATE parking_location SET version = 7 WHERE id = $1")
+        .bind(loc)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let stale = seed_proposal(
+        loc,
+        mod_id,
+        1,
+        "change_existence",
+        r#"{"existence":"removed"}"#,
+    )
+    .await;
+    // A payload this build cannot read must degrade to a card, not a 500.
+    let unreadable = seed_proposal(
+        loc,
+        mod_id,
+        7,
+        "change_existence",
+        r#"{"existence":"who_knows"}"#,
+    )
+    .await;
+
+    let queue_url = format!("/moderation/proposals?after_id={}", stale - 1);
+    let (s, body) = get_c(&app, &queue_url, Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK, "an unreadable payload does not 500");
+    assert!(
+        body.contains("Out of date"),
+        "the stale proposal carries a distinct badge"
+    );
+    assert!(
+        body.contains("Needs manual review"),
+        "the unreadable payload is flagged instead of crashing the page"
+    );
+
+    // `hx-confirm` is client-side only: the attribute must be in the markup,
+    // and the server must still accept the POST without it.
+    assert!(
+        body.contains("hx-confirm="),
+        "approving a removal asks for confirmation"
+    );
+    let csrf = extract_csrf(&body);
+    let (s, _, _) = post_form(
+        &app,
+        &format!("/moderation/proposals/{stale}/approve"),
+        &[("csrf", &csrf), ("existence", "removed")],
+        Some(&mod_cookie),
+    )
+    .await;
+    assert!(
+        matches!(s, StatusCode::SEE_OTHER | StatusCode::CONFLICT),
+        "a stale approval is refused server-side: {s}"
+    );
+    let (status,): (String,) = sqlx::query_as("SELECT status FROM parking_proposal WHERE id = $1")
+        .bind(stale)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    assert_eq!(status, "PENDING", "a refused approval changes nothing");
+
+    // An unreadable payload with the values supplied still goes through — the
+    // moderator is the fallback, not a dead end.
+    let (s, _, _) = post_form(
+        &app,
+        &format!("/moderation/proposals/{unreadable}/approve"),
+        &[("csrf", &csrf), ("existence", "removed")],
+        Some(&mod_cookie),
+    )
+    .await;
+    assert!(
+        matches!(s, StatusCode::SEE_OTHER | StatusCode::OK),
+        "the moderator can approve an unreadable payload by hand: {s}"
+    );
+    let (state,): (String,) =
+        sqlx::query_as("SELECT moderation_state FROM parking_location WHERE id = $1")
+            .bind(loc)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "REMOVED");
+
+    let _ = tx;
+    cleanup_user_contributions(MOD).await;
+}
+
+#[db_test]
+async fn wp13_report_queue_previews_and_links_its_targets(tx: &mut bikenest_test_support::TestTx) {
+    const MOD: &str = "wp13-rep-mod@example.com";
+    const AUTHOR: &str = "wp13-rep-author@example.com";
+    let (app, email) = auth_app().await;
+    let loc = fixture_location(tx, "wp13-rep", "WP13 Reported Spot").await;
+    let author_cookie = verified_cookie(&app, &email, AUTHOR).await;
+    let author_id = user_id_for(AUTHOR).await;
+
+    // A review to report, with a body long enough to be excerpted.
+    let long_body = format!("{} tail-that-must-be-cut", "spam ".repeat(60));
+    let (review_id,): (i64,) = sqlx::query_as(
+        "INSERT INTO review (location_id, author_id, rating, body, moderation_state) \
+         VALUES ($1, $2, 1, $3, 'ACTIVE') RETURNING id",
+    )
+    .bind(loc)
+    .bind(author_id)
+    .bind(&long_body)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    let _ = author_cookie;
+
+    let mut first_report = i64::MAX;
+    for (target_type, target_id) in [("parking", loc), ("review", review_id)] {
+        let (rid,): (i64,) = sqlx::query_as(
+            "INSERT INTO report (reporter_id, target_type, target_id, reason, state) \
+             VALUES ($1, $2, $3, 'spam', 'OPEN') RETURNING id",
+        )
+        .bind(author_id)
+        .bind(target_type)
+        .bind(target_id)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+        first_report = first_report.min(rid);
+    }
+
+    // FIFO queue, 50-row page, existing backlog: page to this fixture's rows.
+    let mod_cookie = moderator_cookie(&app, &email, MOD).await;
+    let queue_url = format!(
+        "/moderation/reports?state=OPEN&after_id={}",
+        first_report - 1
+    );
+    let (s, body) = get_c(&app, &queue_url, Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // The row names and links the target instead of printing `#4057`.
+    assert!(
+        body.contains("WP13 Reported Spot"),
+        "the row names the reported location"
+    );
+    assert!(
+        body.contains(&format!(r#"href="/parking/{loc}""#)),
+        "the parking report links to the location"
+    );
+    assert!(
+        body.contains(&format!(r#"href="/parking/{loc}#review-{review_id}""#)),
+        "the review report links to the review itself"
+    );
+    // The excerpt shows what is being judged, cut to a queue-sized length.
+    assert!(
+        body.contains("spam spam"),
+        "the review report shows a body excerpt"
+    );
+    assert!(
+        !body.contains("tail-that-must-be-cut"),
+        "the excerpt is truncated, not the whole 300-character body"
+    );
+    // Acting on the content posts to the endpoints that already existed.
+    assert!(
+        body.contains(&format!(r#"action="/moderation/reviews/{review_id}/hide""#)),
+        "the review row offers the existing hide action"
+    );
+    assert!(
+        body.contains(&format!(r#"action="/moderation/parking/{loc}/invalidate""#)),
+        "the parking row offers the existing invalidate action"
+    );
+    assert!(
+        body.contains("hx-confirm="),
+        "acting on reported content asks for confirmation"
+    );
+
+    // The action really works from the queue.
+    let csrf = extract_csrf(&body);
+    let (s, _, _) = post_form_hx(
+        &app,
+        &format!("/moderation/reviews/{review_id}/hide"),
+        &[("csrf", &csrf)],
+        Some(&mod_cookie),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "hide from the queue: {s}");
+    let (state,): (String,) = sqlx::query_as("SELECT moderation_state FROM review WHERE id = $1")
+        .bind(review_id)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    assert_eq!(state, "HIDDEN");
+
+    // Once hidden, the queue stops offering an action that would just fail.
+    let (_, body) = get_c(&app, &queue_url, Some(&mod_cookie)).await;
+    assert!(
+        !body.contains(&format!(r#"action="/moderation/reviews/{review_id}/hide""#)),
+        "an already-hidden review is not offered for hiding again"
+    );
+
+    let _ = tx;
+    sqlx::query("DELETE FROM report WHERE reporter_id = $1")
+        .bind(author_id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    cleanup_user_contributions(MOD).await;
+    cleanup_user_contributions(AUTHOR).await;
+}
+
+#[db_test]
+async fn wp13_photo_queue_refuses_to_approve_an_image_it_cannot_show(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    const MOD: &str = "wp13-photo-mod@example.com";
+    const UPLOADER: &str = "wp13-photo-up@example.com";
+    let (app, email, storage) = auth_app_with_storage().await;
+    let loc = fixture_location(tx, "wp13-photo", "WP13 Photo Spot").await;
+    let uploader_id = {
+        let cookie = verified_cookie(&app, &email, UPLOADER).await;
+        let _ = cookie;
+        user_id_for(UPLOADER).await
+    };
+
+    // A pending photo whose object was never written to storage: exactly the
+    // state that used to render as a broken image with a live Approve button.
+    let (photo_id,): (i64,) = sqlx::query_as(
+        "INSERT INTO parking_photo (location_id, uploader_id, storage_key, content_type, alt, position, moderation_state) \
+         VALUES ($1, $2, 'uploads/wp13-missing.jpg', 'image/jpeg', 'A missing photo', 0, 'PENDING_REVIEW') RETURNING id",
+    )
+    .bind(loc)
+    .bind(uploader_id)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    assert!(
+        !storage.contains("uploads/wp13-missing.jpg"),
+        "the fixture's whole point is that the object is absent"
+    );
+
+    let mod_cookie = moderator_cookie(&app, &email, MOD).await;
+    let (s, body) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        body.contains("Image unavailable"),
+        "a missing object is named, not rendered as a broken <img>"
+    );
+    assert!(
+        body.contains("disabled"),
+        "the Approve button is disabled for an image nobody can see"
+    );
+    assert!(
+        body.contains("File missing from storage"),
+        "the rejection reason is pre-filled"
+    );
+
+    // The reject path still works, so the queue can be cleared.
+    let csrf = extract_csrf(&body);
+    let (s, _, _) = post_form_hx(
+        &app,
+        &format!("/moderation/photos/parking/{photo_id}/reject"),
+        &[("csrf", &csrf), ("reason", "File missing from storage")],
+        Some(&mod_cookie),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "rejecting a lost file: {s}");
+    let (state,): (String,) =
+        sqlx::query_as("SELECT moderation_state FROM parking_photo WHERE id = $1")
+            .bind(photo_id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "REJECTED");
+
+    let _ = tx;
+    cleanup_user_contributions(MOD).await;
+    cleanup_user_contributions(UPLOADER).await;
+}
+
+#[db_test]
+async fn wp13_audit_log_shows_exact_times_and_named_actors(tx: &mut bikenest_test_support::TestTx) {
+    const ADMIN: &str = "wp13-audit-admin@example.com";
+    let (app, email) = auth_app().await;
+    let admin = admin_cookie(&app, &email, ADMIN).await;
+    let admin_id = user_id_for(ADMIN).await;
+    sqlx::query("UPDATE users SET display_name = 'Ada Audit' WHERE id = $1")
+        .bind(admin_id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO audit_events (actor_user_id, action, target_type, target_id, result, metadata) \
+         VALUES ($1, 'wp13.audit.probe', 'user', $2, 'success', '{}'::jsonb)",
+    )
+    .bind(admin_id)
+    .bind(admin_id.to_string())
+    .execute(&pool().await)
+    .await
+    .unwrap();
+
+    let (s, body) = get_c(&app, "/admin/audit?action=wp13.audit.probe", Some(&admin)).await;
+    assert_eq!(s, StatusCode::OK);
+    // An audit trail read to answer "exactly when" cannot say "today".
+    let date = regex_lite_date(&body);
+    assert!(
+        date.is_some(),
+        "the audit row carries an absolute YYYY-MM-DD timestamp"
+    );
+    assert!(body.contains("UTC"), "the exact instant names its zone");
+    // The actor is a person, not an opaque id.
+    assert!(
+        body.contains("Ada Audit"),
+        "the actor id is resolved to a display label"
+    );
+    assert!(
+        body.contains(&format!(r#"href="/admin/users?q={admin_id}""#)),
+        "the actor links to their account row"
+    );
+
+    // The date filters are pickers, and a picked value round-trips.
+    assert!(
+        body.contains(r#"type="datetime-local""#),
+        "date filters are datetime-local inputs, not hand-typed ISO strings"
+    );
+    let (s, body) = get_c(
+        &app,
+        "/admin/audit?action=wp13.audit.probe&from=2020-01-02T03%3A04",
+        Some(&admin),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        body.contains(r#"value="2020-01-02T03:04""#),
+        "a datetime-local filter is echoed back in the field"
+    );
+    assert!(
+        body.contains("wp13.audit.probe"),
+        "the event is still inside the filtered window"
+    );
+    // An ISO string from a bookmarked URL keeps working.
+    let (s, body) = get_c(
+        &app,
+        "/admin/audit?action=wp13.audit.probe&from=2020-01-02T03%3A04%3A05Z",
+        Some(&admin),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        body.contains("wp13.audit.probe"),
+        "a legacy RFC3339 filter still parses"
+    );
+
+    let _ = tx;
+    sqlx::query("DELETE FROM audit_events WHERE action = 'wp13.audit.probe'")
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    cleanup_user_contributions(ADMIN).await;
+}
+
+/// Is there a `YYYY-MM-DD` anywhere in the page? (No regex crate in the web
+/// test deps, and this is the whole pattern the assertion needs.)
+fn regex_lite_date(html: &str) -> Option<&str> {
+    let bytes = html.as_bytes();
+    for i in 0..bytes.len().saturating_sub(10) {
+        let w = &bytes[i..i + 10];
+        let digits = |b: u8| b.is_ascii_digit();
+        if digits(w[0])
+            && digits(w[1])
+            && digits(w[2])
+            && digits(w[3])
+            && w[4] == b'-'
+            && digits(w[5])
+            && digits(w[6])
+            && w[7] == b'-'
+            && digits(w[8])
+            && digits(w[9])
+        {
+            return Some(&html[i..i + 10]);
+        }
+    }
+    None
+}
+
+#[db_test]
+async fn wp13_privacy_queue_shows_the_subject_and_what_they_asked(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    const ADMIN: &str = "wp13-priv-admin@example.com";
+    const SUBJECT: &str = "wp13-priv-subject@example.com";
+    let (app, email) = auth_app().await;
+    let subject_cookie = verified_cookie(&app, &email, SUBJECT).await;
+    let _ = subject_cookie;
+    let subject_id = user_id_for(SUBJECT).await;
+    sqlx::query("UPDATE users SET display_name = 'Rita Rights' WHERE id = $1")
+        .bind(subject_id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO privacy_request (user_id, kind, state, details) \
+         VALUES ($1, 'rectification', 'OPEN', '{\"note\":\"my display name is misspelled\"}'::jsonb)",
+    )
+    .bind(subject_id)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+
+    let admin = admin_cookie(&app, &email, ADMIN).await;
+    let (s, body) = get_c(&app, "/admin/privacy-requests", Some(&admin)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        body.contains("Rita Rights"),
+        "the queue says whose rights these are"
+    );
+    assert!(
+        body.contains("my display name is misspelled"),
+        "the queue shows what the subject actually asked for"
+    );
+    assert!(
+        body.contains(&format!(r#"href="/admin/users?q={subject_id}""#)),
+        "the subject links to their account row"
+    );
+    assert!(
+        body.contains("days left") || body.contains("days overdue"),
+        "the legal deadline is on the row"
+    );
+    assert!(
+        regex_lite_date(&body).is_some(),
+        "the requested-at timestamp is absolute"
+    );
+
+    let _ = tx;
+    sqlx::query("DELETE FROM privacy_request WHERE user_id = $1")
+        .bind(subject_id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    cleanup_user_contributions(ADMIN).await;
+    cleanup_user_contributions(SUBJECT).await;
+}
+
+#[db_test]
+async fn wp13_admin_user_list_searches_masks_and_confirms(tx: &mut bikenest_test_support::TestTx) {
+    const ADMIN: &str = "wp13-users-admin@example.com";
+    const NEEDLE: &str = "wp13-findme@example.com";
+    const OTHER: &str = "wp13-other@example.com";
+    let (app, email) = auth_app().await;
+    for addr in [NEEDLE, OTHER] {
+        let cookie = verified_cookie(&app, &email, addr).await;
+        let _ = cookie;
+    }
+    let admin = admin_cookie(&app, &email, ADMIN).await;
+    let needle_id = user_id_for(NEEDLE).await;
+
+    // Unfiltered: both accounts are listed, and neither address is in plain
+    // sight — the masked form is what the row shows.
+    let (s, body) = get_c(&app, "/admin/users", Some(&admin)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        body.contains("w***@example.com"),
+        "emails are masked by default"
+    );
+    assert!(
+        body.contains("revealEmail"),
+        "a reveal control is offered in the row"
+    );
+
+    // Search narrows the page to the matching account.
+    let (s, body) = get_c(&app, "/admin/users?q=wp13-findme", Some(&admin)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(body.contains(NEEDLE), "the match is on the page");
+    assert!(
+        !body.contains(OTHER),
+        "a non-matching account is filtered out"
+    );
+
+    // Search matches display names too.
+    sqlx::query("UPDATE users SET display_name = 'Zebedee Unique' WHERE id = $1")
+        .bind(needle_id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let (_, body) = get_c(&app, "/admin/users?q=Zebedee", Some(&admin)).await;
+    assert!(
+        body.contains("Zebedee Unique"),
+        "the search matches display names, not only emails"
+    );
+    assert!(!body.contains(OTHER), "and still narrows the list");
+
+    // A search with no matches says so instead of listing everyone.
+    let (_, body) = get_c(&app, "/admin/users?q=no-such-account-xyz", Some(&admin)).await;
+    assert!(
+        body.contains("No accounts match"),
+        "an empty search result is stated, not silently the whole table"
+    );
+
+    // Destructive actions confirm first, naming the user.
+    let (_, body) = get_c(&app, "/admin/users?q=Zebedee", Some(&admin)).await;
+    assert!(
+        body.contains(r#"hx-confirm="Suspend Zebedee Unique?"#),
+        "suspend confirms and names the user"
+    );
+    assert!(
+        body.contains("hx-confirm=\"Grant MODERATOR to Zebedee Unique?"),
+        "granting a role confirms and names the user"
+    );
+    // Activity columns are present (the list is no longer email-only).
+    assert!(
+        body.contains("Last active") && body.contains("Contributions"),
+        "the row carries last-active and contribution counters"
+    );
+
+    // The confirm is client-side only: the POST still works without it.
+    let csrf = extract_csrf(&body);
+    let (s, _, _) = post_form(
+        &app,
+        &format!("/admin/users/{needle_id}/suspend"),
+        &[("csrf", &csrf)],
+        Some(&admin),
+    )
+    .await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "suspend still works server-side");
+
+    let _ = tx;
+    cleanup_user_contributions(ADMIN).await;
+    cleanup_user_contributions(NEEDLE).await;
+    cleanup_user_contributions(OTHER).await;
 }

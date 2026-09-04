@@ -15,8 +15,8 @@ use bikenest_application::{
     ContributionService, EmailProvider, FreshnessConfig, GetParkingDetails, ModerationDeps,
     ModerationError, ModerationService, NewParkingLocation, NewVerification, ObjectStorage,
     POLICY_FALLBACK_LOCALE, ParkingEdit, ParkingPhotoReader, PasswordHasher, PhotoDeps, PhotoError,
-    PhotoKind, PhotoService, PhotoTarget, PrivacyDeps, PrivacyError, PrivacyService,
-    ProposalApplication, RateLimiter, Readiness, SearchInput, SearchParking, TokenGenerator,
+    PhotoKind, PhotoService, PhotoTarget, PrivacyDeps, PrivacyError, PrivacyService, ProposalField,
+    ProposalOverride, RateLimiter, Readiness, SearchInput, SearchParking, TokenGenerator,
 };
 use bikenest_domain::{
     Cost, CurrencyCode, GeoPoint, ModerationState, Money, OpeningHours, ParkingLocation,
@@ -24,7 +24,9 @@ use bikenest_domain::{
     ReportTargetType, ReviewBody, SecurityFeature, SecurityState, StarRating, TimeRange,
     is_known_attribute_code, is_known_security_code,
 };
-use bikenest_domain::{ExistenceResult, ProposalKind, Role, UserEmail, UserId};
+use bikenest_domain::{
+    ExistenceResult, ProposalKind, ProposalPayload, ProposedChange, Role, UserEmail, UserId,
+};
 use bikenest_infrastructure::probe::SqlxDatabaseProbe;
 use bikenest_infrastructure::{
     Argon2PasswordHasher, Config, ConfigError, Db, FakeOAuthProvider, LocalImageProcessor,
@@ -51,12 +53,11 @@ use crate::view::{self, CardVm, ResultsData};
 use crate::{
     AboutPage, AccountDeletePage, AccountEmailPage, AccountExportPage, AccountPage,
     AccountPasswordPage, AccountPrivacyPage, AdminAuditPage, AdminPrivacyRequestsPage,
-    AdminUserContributionsPage, AdminUsersPage, ContributionsPage, DetailsPage,
-    FavoritesPage, HomePage, LoginPage, ModerationActionResultVm, ModerationDashboardPage,
-    ModerationPhotosPage, ModerationProposalsPage, ModerationReportsPage, PageLayout,
-    ParkingEditPage, ParkingNewPage, PasswordResetNewPage, PasswordResetPage, PhotoVm, PolicyPage,
-    PolicyVersionsPage, RegisterPage, ReportResultVm, ReviewFormPage, SearchPageVm,
-    SearchResultsVm, VerifyEmailPage,
+    AdminUserContributionsPage, AdminUsersPage, ContributionsPage, DetailsPage, FavoritesPage,
+    HomePage, LoginPage, ModerationActionResultVm, ModerationDashboardPage, ModerationPhotosPage,
+    ModerationProposalsPage, ModerationReportsPage, PageLayout, ParkingEditPage, ParkingNewPage,
+    PasswordResetNewPage, PasswordResetPage, PhotoVm, PolicyPage, PolicyVersionsPage, RegisterPage,
+    ReportResultVm, ReviewFormPage, SearchPageVm, SearchResultsVm, VerifyEmailPage,
 };
 
 /// Shared application state wired at startup. Everything configuration-derived
@@ -858,7 +859,14 @@ fn fragment_answer(
     fragment: impl FnOnce() -> Response,
 ) -> Response {
     if !is_fragment_request(headers) && !status.is_success() {
-        return crate::error_response(headers, map, &Auth::default(), tr, status, message.to_string());
+        return crate::error_response(
+            headers,
+            map,
+            &Auth::default(),
+            tr,
+            status,
+            message.to_string(),
+        );
     }
     fragment_or_redirect(headers, fragment(), redirect_to)
 }
@@ -939,13 +947,7 @@ async fn upload_photo(
         }
     };
     photo_upload_result(
-        &headers,
-        &state.map,
-        tr,
-        state_name,
-        &message,
-        status,
-        &back,
+        &headers, &state.map, tr, state_name, &message, status, &back,
     )
 }
 
@@ -1049,13 +1051,27 @@ async fn moderation_photos(
     )
 }
 
+/// Percent-encodes a user-supplied search term for a query-string value.
+/// Only unreserved characters pass through, so a term containing `&`, `#` or a
+/// space cannot rewrite the rest of the URL.
+fn urlencoding_query(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
 /// URL-encodes an RFC3339 timestamp for a query-string cursor value.
 fn urlencoding_rfc3339(at: chrono::DateTime<chrono::Utc>) -> String {
     // The only characters RFC3339 introduces that aren't already URL-safe are
     // `:` and `+`; percent-encode just those rather than pulling in a crate.
-    at.to_rfc3339()
-        .replace('+', "%2B")
-        .replace(':', "%3A")
+    at.to_rfc3339().replace('+', "%2B").replace(':', "%3A")
 }
 
 /// Parse a `{kind}` path segment into a [`PhotoKind`].
@@ -1266,6 +1282,15 @@ fn moderation_error_message(tr: Translator, e: &ModerationError) -> (StatusCode,
         StaleProposal => (StatusCode::CONFLICT, "moderation.error.stale_proposal"),
         InvalidReason => (StatusCode::BAD_REQUEST, "report.error.invalid_reason"),
         InvalidField(_) => (StatusCode::BAD_REQUEST, "moderation.invalid"),
+        InvalidProposalField(field) => (
+            StatusCode::BAD_REQUEST,
+            match field {
+                ProposalField::Lat => "proposal.error.lat",
+                ProposalField::Lon => "proposal.error.lon",
+                ProposalField::Timezone => "proposal.error.timezone",
+                ProposalField::Existence => "proposal.error.existence",
+            },
+        ),
         RateLimited => (StatusCode::TOO_MANY_REQUESTS, "report.error.rate_limited"),
         Conflict => (StatusCode::CONFLICT, "error.conflict"),
         Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "error.unavailable"),
@@ -1411,7 +1436,11 @@ async fn moderation_dashboard(
     };
     // One statement (four scalar subqueries) instead of loading and
     // `.len()`-ing four full lists.
-    let counts = state.moderation.queue_counts(user).await.unwrap_or_default();
+    let counts = state
+        .moderation
+        .queue_counts(user)
+        .await
+        .unwrap_or_default();
     let is_admin = user.has_role(Role::Admin);
     render(
         ModerationDashboardPage {
@@ -1474,13 +1503,26 @@ async fn moderation_reports(
     let next_url = (reports.len() as i64 == DEFAULT_PAGE_LIMIT)
         .then(|| reports.last())
         .flatten()
-        .map(|last| {
-            format!(
-                "/moderation/reports?state={}&after_id={}",
-                q.state, last.id
-            )
-        });
-    let items = reports.into_iter().map(|r| view::report_vm(tr, &r)).collect();
+        .map(|last| format!("/moderation/reports?state={}&after_id={}", q.state, last.id));
+    // One batched lookup for the whole page: what each report actually points
+    // at. Without it the queue can only show `#4057`.
+    let previews = state
+        .moderation
+        .report_previews(user, &reports)
+        .await
+        .unwrap_or_default();
+    let mut items = Vec::with_capacity(reports.len());
+    for r in &reports {
+        let preview = previews.get(&(r.target_type, r.target_id));
+        let thumb = match preview {
+            Some(p) => {
+                let key = p.photo_thumbnail_key.as_deref().or(p.photo_key.as_deref());
+                view::resolve_photo(&*state.storage, key).await
+            }
+            None => None,
+        };
+        items.push(view::report_vm(tr, r, preview, thumb));
+    }
     render(
         ModerationReportsPage {
             layout: PageLayout::for_request(
@@ -1525,7 +1567,11 @@ async fn moderation_report_claim(
         Err(resp) => return resp,
     };
     let (name, message, status) = match state.moderation.claim_report(user, id).await {
-        Ok(()) => ("success", tr.t("report.claimed").to_string(), StatusCode::OK),
+        Ok(()) => (
+            "success",
+            tr.t("report.claimed").to_string(),
+            StatusCode::OK,
+        ),
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
             ("error", message, status)
@@ -1690,72 +1736,40 @@ struct ApproveProposalForm {
     existence: String,
 }
 
-/// Build the application to apply. When the approve form carries adjusted values
-/// ("modify"), they win; otherwise the proposal's own `proposed` is used.
-fn proposal_application(
-    proposal: &bikenest_application::Proposal,
-    form: &ApproveProposalForm,
-) -> Result<ProposalApplication, ModerationError> {
-    match proposal.kind {
-        ProposalKind::MoveLocation => {
-            let lat = if form.lat.trim().is_empty() {
-                proposal
-                    .proposed
-                    .get("lat")
-                    .and_then(|v| v.as_f64())
-                    .ok_or(ModerationError::InvalidField("lat is required".to_string()))?
-            } else {
-                form.lat
-                    .trim()
-                    .parse::<f64>()
-                    .map_err(|_| ModerationError::InvalidField("lat is required".to_string()))?
-            };
-            let lon = if form.lon.trim().is_empty() {
-                proposal
-                    .proposed
-                    .get("lon")
-                    .and_then(|v| v.as_f64())
-                    .ok_or(ModerationError::InvalidField("lon is required".to_string()))?
-            } else {
-                form.lon
-                    .trim()
-                    .parse::<f64>()
-                    .map_err(|_| ModerationError::InvalidField("lon is required".to_string()))?
-            };
-            let tz_raw = if form.timezone.trim().is_empty() {
-                proposal
-                    .proposed
-                    .get("timezone")
-                    .and_then(|v| v.as_str())
-                    .ok_or(ModerationError::InvalidField(
-                        "timezone is required".to_string(),
-                    ))?
-            } else {
-                form.timezone.as_str()
-            };
-            let timezone = tz_raw
-                .parse()
-                .map_err(|_| ModerationError::InvalidField("invalid timezone".to_string()))?;
-            Ok(ProposalApplication::MoveLocation { lat, lon, timezone })
-        }
-        ProposalKind::ChangeExistence => {
-            let exists = match form.existence.as_str() {
-                "removed" => false,
-                "exists" => true,
-                _ => {
-                    let raw = proposal
-                        .proposed
-                        .get("existence")
-                        .and_then(|v| v.as_str())
-                        .ok_or(ModerationError::InvalidField(
-                            "existence is required".to_string(),
-                        ))?;
-                    raw != "removed"
-                }
-            };
-            Ok(ProposalApplication::ChangeExistence { exists })
-        }
+impl ApproveProposalForm {
+    /// Map the form to a [`ProposalOverride`]. This is the handler's whole
+    /// contribution to an approval: an empty input is simply an absent
+    /// override, and a typo is an error rather than silently reading as "keep
+    /// the proposer's value". The merge rule itself lives in the application
+    /// layer, where it is testable, instead of being re-derived from string
+    /// emptiness here (A-M6).
+    fn to_override(&self) -> Result<ProposalOverride, ModerationError> {
+        Ok(ProposalOverride {
+            lat: parse_optional_f64(&self.lat, ProposalField::Lat)?,
+            lon: parse_optional_f64(&self.lon, ProposalField::Lon)?,
+            timezone: non_empty(&self.timezone),
+            exists: match self.existence.trim() {
+                "exists" => Some(true),
+                "removed" => Some(false),
+                _ => None,
+            },
+        })
     }
+}
+
+fn parse_optional_f64(raw: &str, field: ProposalField) -> Result<Option<f64>, ModerationError> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    raw.parse::<f64>()
+        .map(Some)
+        .map_err(|_| ModerationError::InvalidProposalField(field))
+}
+
+fn non_empty(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    (!raw.is_empty()).then(|| raw.to_string())
 }
 
 /// POST /moderation/proposals/{id}/approve — approve a proposal (optionally adjusted).
@@ -1777,15 +1791,11 @@ async fn moderation_proposal_approve(
         let (status, message) = moderation_error_message(tr, e);
         moderation_result(&headers, &state.map, tr, "error", &message, status, &back)
     };
-    let proposal = match state.moderation.get_proposal(user, id).await {
-        Ok(Some(p)) => p,
-        _ => return fail(&ModerationError::NotFound),
-    };
-    let applied = match proposal_application(&proposal, &form) {
-        Ok(a) => a,
+    let over = match form.to_override() {
+        Ok(o) => o,
         Err(e) => return fail(&e),
     };
-    match state.moderation.approve_proposal(user, id, applied).await {
+    match state.moderation.approve_proposal(user, id, over).await {
         Ok(()) => moderation_result(
             &headers,
             &state.map,
@@ -1884,7 +1894,11 @@ async fn moderation_review_restore(
         Err(resp) => return resp,
     };
     let (name, message, status) = match state.moderation.restore_review(user, id).await {
-        Ok(()) => ("success", tr.t("review.restored").to_string(), StatusCode::OK),
+        Ok(()) => (
+            "success",
+            tr.t("review.restored").to_string(),
+            StatusCode::OK,
+        ),
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
             ("error", message, status)
@@ -2016,13 +2030,14 @@ async fn admin_user_contributions(
         Err(resp) => return resp,
     };
     let target = UserId(id);
+    // One row, not the whole users table: this page used to load every account
+    // in the database to find a single label.
     let email = state
         .auth
-        .list_users()
+        .user_labels(&[id])
         .await
         .ok()
-        .and_then(|users| users.into_iter().find(|u| u.id == target))
-        .map(|u| u.email.to_string())
+        .and_then(|labels| labels.get(&id).cloned())
         .unwrap_or_else(|| format!("#{id}"));
     // Bounded to the newest DEFAULT_PAGE_LIMIT entries; this admin inspection
     // view has no "load more" control (out of WP11's named template list).
@@ -2083,8 +2098,8 @@ async fn admin_audit(
         actor_id: (q.actor > 0).then_some(UserId(q.actor)),
         action: (!q.action.is_empty()).then(|| q.action.clone()),
         target_type: (!q.target_type.is_empty()).then(|| q.target_type.clone()),
-        from: parse_datetime(&q.from),
-        to: parse_datetime(&q.to),
+        from: parse_filter_datetime(&q.from),
+        to: parse_filter_datetime(&q.to),
         cursor: (q.cursor > 0).then_some(q.cursor),
         limit: 50,
     };
@@ -2094,10 +2109,20 @@ async fn admin_audit(
         .await
         .map(|p| (p.items, p.next_cursor))
         .unwrap_or_default();
+    // Resolve every actor on the page in ONE query, so the trail names people
+    // instead of ids without turning 50 rows into 50 lookups.
+    let mut actor_ids: Vec<i64> = page
+        .0
+        .iter()
+        .filter_map(|e| e.event.actor_user_id.map(|a| a.0))
+        .collect();
+    actor_ids.sort_unstable();
+    actor_ids.dedup();
+    let labels = state.auth.user_labels(&actor_ids).await.unwrap_or_default();
     let items = page
         .0
         .into_iter()
-        .map(|e| view::audit_row_vm(tr, &e))
+        .map(|e| view::audit_row_vm(tr, &e, &labels))
         .collect();
     render(
         AdminAuditPage {
@@ -2113,8 +2138,11 @@ async fn admin_audit(
             action: q.action.clone(),
             target_type: q.target_type.clone(),
             actor: q.actor.to_string(),
-            from: q.from.clone(),
-            to: q.to.clone(),
+            // Echo back what `<input type="datetime-local">` can render: the
+            // parsed instant if the value was understood, the raw string
+            // otherwise (so a hand-written ISO filter is not silently dropped).
+            from: normalize_filter_datetime(&q.from),
+            to: normalize_filter_datetime(&q.to),
             notice: None,
         },
         StatusCode::OK,
@@ -2129,6 +2157,42 @@ fn parse_datetime(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(s)
         .ok()
         .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+/// A date filter typed into an `<input type="datetime-local">`
+/// (`2026-09-04T14:02`, optionally with seconds) *or* a full RFC3339 string.
+///
+/// The local form has no zone, so it is read as UTC: an audit filter is
+/// operator tooling over UTC-stored rows, and guessing a zone here would move
+/// the boundary by hours without saying so. Bookmarked ISO URLs from before
+/// this change keep working.
+fn parse_filter_datetime(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(dt) = parse_datetime(s) {
+        return Some(dt);
+    }
+    for format in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"] {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, format) {
+            return Some(naive.and_utc());
+        }
+    }
+    // A bare date parses as midnight UTC.
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(date.and_hms_opt(0, 0, 0)?.and_utc());
+    }
+    None
+}
+
+/// The value to put back in the form field: the canonical `datetime-local`
+/// rendering when the filter parsed, the raw input when it did not.
+fn normalize_filter_datetime(raw: &str) -> String {
+    match parse_filter_datetime(raw) {
+        Some(dt) => view::datetime_local_value(dt),
+        None => raw.trim().to_string(),
+    }
 }
 
 /// A tiny rejected-photo form: the moderator's reason.
@@ -2185,9 +2249,14 @@ fn photo_error(tr: Translator, e: &PhotoError) -> (StatusCode, String) {
 async fn about(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
     let tr = Translator::new(locale);
     let page = AboutPage {
-        layout: PageLayout::for_request(tr.t("about.title").to_string(), "about", &auth, &state.map)
-            .canonical(format!("{}/about", state.base_url.trim_end_matches('/')))
-            .description(tr.t("about.title").to_string()),
+        layout: PageLayout::for_request(
+            tr.t("about.title").to_string(),
+            "about",
+            &auth,
+            &state.map,
+        )
+        .canonical(format!("{}/about", state.base_url.trim_end_matches('/')))
+        .description(tr.t("about.title").to_string()),
         tr,
     };
     render(page, StatusCode::OK)
@@ -2964,6 +3033,12 @@ struct AdminNotices {
     restored: Option<String>,
     #[serde(default)]
     error: Option<String>,
+    /// Search term: matches email or display name.
+    #[serde(default)]
+    q: String,
+    /// Keyset cursor: the last (smallest) id already shown. `0` = first page.
+    #[serde(default)]
+    after_id: i64,
 }
 
 async fn admin_users(
@@ -2977,10 +3052,31 @@ async fn admin_users(
         Ok(_) => {}
         Err(resp) => return resp,
     }
-    let users = match state.auth.list_users().await {
-        Ok(users) => view::admin_users(tr, &users),
-        Err(_) => Vec::new(),
-    };
+    let query = q.q.trim();
+    let users = state
+        .auth
+        .search_users(
+            (!query.is_empty()).then_some(query),
+            parse_after_id(q.after_id),
+            DEFAULT_PAGE_LIMIT,
+        )
+        .await
+        .unwrap_or_default();
+    // The list used to load every account in the database; it is now a bounded
+    // page, and the counters for that page come from one extra query.
+    let ids: Vec<i64> = users.iter().map(|u| u.id.0).collect();
+    let activity = state.auth.user_activity(&ids).await.unwrap_or_default();
+    let next_url = (users.len() as i64 == DEFAULT_PAGE_LIMIT)
+        .then(|| users.last())
+        .flatten()
+        .map(|last| {
+            format!(
+                "/admin/users?q={}&after_id={}",
+                urlencoding_query(query),
+                last.id.0
+            )
+        });
+    let users = view::admin_users(tr, &users, &activity);
     render(
         AdminUsersPage {
             layout: PageLayout::for_request(
@@ -2991,6 +3087,8 @@ async fn admin_users(
             ),
             tr,
             users,
+            query: query.to_string(),
+            next_url,
             notice: if q.granted.is_some() {
                 Some(tr.t("admin.granted").to_string())
             } else if q.revoked.is_some() {
@@ -3114,7 +3212,12 @@ async fn policy_page_impl(
 ) -> Response {
     let tr = Translator::new(locale);
     let (kind_code, kind_label) = policy_kind_meta(tr, kind);
-    let layout = PageLayout::for_request(format!("{kind_label} — BikeNest"), kind_code, auth, &state.map);
+    let layout = PageLayout::for_request(
+        format!("{kind_label} — BikeNest"),
+        kind_code,
+        auth,
+        &state.map,
+    );
     match current_policy(state, kind, locale).await {
         Some(doc) => render(
             PolicyPage {
@@ -3471,13 +3574,27 @@ async fn admin_privacy_requests(
         Ok(a) => a,
         Err(resp) => return resp,
     };
-    let items: Vec<view::PrivacyRequestVm> = state
+    let requests = state
         .privacy
         .list_requests(admin, None)
         .await
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // One batched lookup for every subject on the page — a rights queue that
+    // does not say whose rights they are cannot be worked.
+    let mut subject_ids: Vec<i64> = requests
         .iter()
-        .map(|r| view::privacy_request_vm(tr, r))
+        .filter_map(|r| r.user_id.map(|u| u.0))
+        .collect();
+    subject_ids.sort_unstable();
+    subject_ids.dedup();
+    let labels = state
+        .auth
+        .user_labels(&subject_ids)
+        .await
+        .unwrap_or_default();
+    let items: Vec<view::PrivacyRequestVm> = requests
+        .iter()
+        .map(|r| view::privacy_request_vm(tr, r, &labels))
         .collect();
     render(
         AdminPrivacyRequestsPage {
@@ -3558,7 +3675,14 @@ fn internal_error(headers: &HeaderMap, map: &MapConfig, auth: &Auth, tr: Transla
 }
 
 fn not_found_page(headers: &HeaderMap, map: &MapConfig, auth: &Auth, tr: Translator) -> Response {
-    error_page(headers, map, auth, tr, StatusCode::NOT_FOUND, "error.404.body")
+    error_page(
+        headers,
+        map,
+        auth,
+        tr,
+        StatusCode::NOT_FOUND,
+        "error.404.body",
+    )
 }
 
 /// Router fallback (E1). A 404 is reachable by every kind of request — a typed
@@ -4251,7 +4375,9 @@ async fn parking_edit_post(
             tr.t("contribution.error.rate_limited").to_string(),
         ),
         // Same answer as the GET above: there is nothing here to edit.
-        Err(ContributionError::LocationNotActive) => not_found_page(&headers, &state.map, &auth, tr),
+        Err(ContributionError::LocationNotActive) => {
+            not_found_page(&headers, &state.map, &auth, tr)
+        }
         Err(e) => contribution_edit_error(&state.map, tr, auth, id, &form, &e),
     }
 }
@@ -4297,12 +4423,7 @@ fn contribution_edit_notice_status(
 ) -> Response {
     render(
         ParkingEditPage {
-            layout: PageLayout::for_request(
-                tr.t("edit.title").to_string(),
-                "edit",
-                &auth,
-                map,
-            ),
+            layout: PageLayout::for_request(tr.t("edit.title").to_string(), "edit", &auth, map),
             tr,
             id,
             version: form.version,
@@ -4358,21 +4479,34 @@ async fn parking_proposal_post(
         Ok(k) => k,
         Err(_) => return axum::response::Redirect::to(&format!("/parking/{id}")).into_response(),
     };
-    let proposed = match kind {
+    // Build the typed payload and let it render its own JSON, so the stored
+    // shape is defined in one place (the domain) instead of by a `json!` here
+    // and a hand-written reader in the moderation queue.
+    let change = match kind {
         ProposalKind::MoveLocation => {
-            let lat = form.lat.trim().parse::<f64>().unwrap_or(0.0);
-            let lon = form.lon.trim().parse::<f64>().unwrap_or(0.0);
-            let tz = if form.timezone.trim().is_empty() {
-                "America/Sao_Paulo"
-            } else {
-                form.timezone.as_str()
+            let Ok(lat) = form.lat.trim().parse::<f64>() else {
+                return proposal_error(id);
             };
-            serde_json::json!({ "lat": lat, "lon": lon, "timezone": tz, "reason": form.reason })
+            let Ok(lon) = form.lon.trim().parse::<f64>() else {
+                return proposal_error(id);
+            };
+            ProposedChange::MoveLocation {
+                lat,
+                lon,
+                timezone: non_empty(&form.timezone),
+            }
         }
-        ProposalKind::ChangeExistence => {
-            serde_json::json!({ "existence": form.existence, "reason": form.reason })
-        }
+        ProposalKind::ChangeExistence => match parse_proposed_existence(&form.existence) {
+            Some(exists) => ProposedChange::ChangeExistence { exists },
+            None => return proposal_error(id),
+        },
     };
+    // An out-of-range coordinate would round-trip as `Unknown`; refuse it at
+    // the door instead of filing a proposal no moderator can act on.
+    if change == ProposedChange::Unknown {
+        return proposal_error(id);
+    }
+    let proposed = ProposalPayload::new(change, Some(&form.reason)).to_json();
     match state
         .contributions
         .propose_location_change(user, id, kind, proposed)
@@ -4382,11 +4516,35 @@ async fn parking_proposal_post(
         // The proposal forms live on the edit page, which 404s for a
         // taken-down location; a direct POST gets the same answer rather than
         // a redirect to a page that would itself 404.
-        Err(ContributionError::LocationNotActive) => not_found_page(&headers, &state.map, &auth, tr),
-        Err(_) => {
-            axum::response::Redirect::to(&format!("/parking/{id}?proposal_error=1")).into_response()
+        Err(ContributionError::LocationNotActive) => {
+            not_found_page(&headers, &state.map, &auth, tr)
         }
+        Err(_) => proposal_error(id),
     }
+}
+
+/// Read the existence radio on the "propose removal" form.
+///
+/// Two vocabularies reach this field. `removed`/`exists` are the payload's own
+/// codes (what the moderation queue's approve form posts). `no_longer_exists`
+/// and `info_changed` are the *verification* codes the edit page's radios have
+/// posted since M3 — they were stored verbatim and the queue, which only knew
+/// `removed`, read `no_longer_exists` as "still exists", quietly inverting
+/// every removal proposal a rider filed. Both vocabularies are mapped here, so
+/// the stored payload is canonical whichever form submitted it.
+fn parse_proposed_existence(raw: &str) -> Option<bool> {
+    match raw.trim() {
+        "removed" | "no_longer_exists" => Some(false),
+        // "the information changed" is not a removal: the spot is still there.
+        "exists" | "info_changed" | "still_exists" => Some(true),
+        _ => None,
+    }
+}
+
+/// The proposal forms live on the details/edit page; a rejected submission
+/// returns there with an error flag rather than rendering a bare 400.
+fn proposal_error(id: i64) -> Response {
+    axum::response::Redirect::to(&format!("/parking/{id}?proposal_error=1")).into_response()
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -4567,20 +4725,18 @@ async fn review_post(
             e @ (ContributionError::Conflict
             | ContributionError::Unavailable
             | ContributionError::LocationNotActive),
-        ) => {
-            render_review_error_status(
-                &state.map,
-                tr,
-                auth,
-                id,
-                ReviewForm {
-                    rating: rating_u8,
-                    body,
-                },
-                contribution_error_message(tr, &e),
-                contribution_error_status(&e, StatusCode::OK),
-            )
-        }
+        ) => render_review_error_status(
+            &state.map,
+            tr,
+            auth,
+            id,
+            ReviewForm {
+                rating: rating_u8,
+                body,
+            },
+            contribution_error_message(tr, &e),
+            contribution_error_status(&e, StatusCode::OK),
+        ),
         Err(_) => render_review_error(
             &state.map,
             tr,
@@ -4617,12 +4773,7 @@ fn render_review_error_status(
 ) -> Response {
     render(
         ReviewFormPage {
-            layout: PageLayout::for_request(
-                tr.t("review.title").to_string(),
-                "review",
-                &auth,
-                map,
-            ),
+            layout: PageLayout::for_request(tr.t("review.title").to_string(), "review", &auth, map),
             tr,
             id,
             rating: form.rating,
