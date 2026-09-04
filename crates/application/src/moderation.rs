@@ -33,6 +33,13 @@ pub enum ModerationError {
     TargetNotFound,
     #[error("that report is not in the required state")]
     InvalidState,
+    /// This reporter already has an open report on this exact target.
+    #[error("you already reported this")]
+    AlreadyReported,
+    /// The proposal was made against an older version of the location, which
+    /// has changed since; applying it would silently clobber that change.
+    #[error("this proposal is out of date")]
+    StaleProposal,
     #[error("invalid report reason")]
     InvalidReason,
     #[error("invalid input: {0}")]
@@ -396,7 +403,13 @@ impl ModerationService {
             reason: reason.to_string(),
             description,
         };
-        let id = self.deps.reports.create(&new).await?;
+        // A partial unique index (`report_dedupe_idx`) keeps one OPEN /
+        // UNDER_REVIEW report per (reporter, target); its violation is not a
+        // failure the user can act on, it is "you already told us".
+        let id = self.deps.reports.create(&new).await.map_err(|e| match e {
+            ModerationError::Conflict => ModerationError::AlreadyReported,
+            other => other,
+        })?;
         self.audit(
             Some(user.id),
             "report.created",

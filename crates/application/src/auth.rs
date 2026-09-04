@@ -42,7 +42,9 @@ pub enum AuthError {
     ProviderFailed,
     #[error("you are not permitted to perform this action")]
     Unauthorized,
-    #[error("you cannot remove your own last admin role")]
+    /// The revoke would leave the system with no ADMIN at all — refused
+    /// whether the actor is demoting themselves or another admin.
+    #[error("the system must keep at least one admin")]
     RefuseAdminSelfRevoke,
     /// Storage refused a duplicate, or a concurrent writer won the race
     /// (unique violation, serialization failure, deadlock).
@@ -164,6 +166,9 @@ pub trait AccountRepository: Send + Sync {
         subject: &str,
     ) -> Result<Option<IdentityRecord>, AuthError>;
     async fn roles(&self, id: UserId) -> Result<Vec<Role>, AuthError>;
+    /// How many accounts currently hold ADMIN. Backs the "never zero admins"
+    /// guard, which a per-user role list cannot answer.
+    async fn count_admins(&self) -> Result<i64, AuthError>;
     async fn grant_role(&self, id: UserId, role: Role, by: UserId) -> Result<(), AuthError>;
     async fn revoke_role(&self, id: UserId, role: Role) -> Result<bool, AuthError>;
     /// All accounts (for the admin user list).
@@ -493,9 +498,15 @@ impl AuthService {
         // to `Active`, and (when changing) switch `users.email` + the password
         // identity subject in a single transaction — one login-lookup key, never
         // divergent (§2, §20).
+        // Someone may have claimed the address between the request and the
+        // click: that is "email taken", not an internal failure.
         self.accounts
             .confirm_email(user_id, now, &new_email)
-            .await?;
+            .await
+            .map_err(|e| match e {
+                AuthError::Conflict => AuthError::EmailTaken,
+                other => other,
+            })?;
         if is_change_email {
             // An email change is a security event: invalidate every session so
             // a stale credential on the old address can't keep a session alive.
@@ -803,6 +814,12 @@ impl AuthService {
         {
             return Err(AuthError::InvalidCredentials);
         }
+        // Reject a taken address here rather than at confirm time: the unique
+        // index would otherwise fire only after the mail was sent and the
+        // single-use token spent, leaving the user with no way forward.
+        if self.accounts.find_by_email(new_email).await?.is_some() {
+            return Err(AuthError::EmailTaken);
+        }
         let token = VerificationToken::new(self.tokens_gen.generate());
         self.tokens
             .issue_verification(user_id, new_email.as_str(), &token, self.now())
@@ -949,8 +966,9 @@ impl AuthService {
         Ok(())
     }
 
-    /// Revoke a role. Requires an ADMIN actor; refuses to remove the actor's
-    /// own last ADMIN.
+    /// Revoke a role. Requires an ADMIN actor; refuses any revoke that would
+    /// leave the system without an admin — self-demotion and demoting another
+    /// admin alike. Self-demotion is allowed whenever a second admin remains.
     pub async fn revoke_role(
         &self,
         actor: &AuthenticatedUser,
@@ -963,12 +981,14 @@ impl AuthService {
         if role == Role::User {
             return Err(AuthError::Unauthorized);
         }
-        if target == actor.id && role == Role::Admin {
-            let roles = self.accounts.roles(actor.id).await?;
-            let admin_count = roles.iter().filter(|r| **r == Role::Admin).count();
-            if admin_count <= 1 {
-                return Err(AuthError::RefuseAdminSelfRevoke);
-            }
+        // Count the admins in the system, not in the actor's own role list.
+        // The target must actually hold ADMIN for the revoke to remove one:
+        // stripping a non-admin is a no-op and stays allowed even at count 1.
+        if role == Role::Admin
+            && self.accounts.count_admins().await? <= 1
+            && self.accounts.roles(target).await?.contains(&Role::Admin)
+        {
+            return Err(AuthError::RefuseAdminSelfRevoke);
         }
         let removed = self.accounts.revoke_role(target, role).await?;
         if removed {

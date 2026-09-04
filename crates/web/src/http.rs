@@ -1081,6 +1081,8 @@ fn moderation_error_message(tr: Translator, e: &ModerationError) -> (StatusCode,
         NotFound => (StatusCode::NOT_FOUND, "moderation.not_found"),
         TargetNotFound => (StatusCode::NOT_FOUND, "moderation.target_not_found"),
         InvalidState => (StatusCode::CONFLICT, "moderation.invalid_state"),
+        AlreadyReported => (StatusCode::CONFLICT, "report.error.duplicate"),
+        StaleProposal => (StatusCode::CONFLICT, "moderation.error.stale_proposal"),
         InvalidReason => (StatusCode::BAD_REQUEST, "report.error.invalid_reason"),
         InvalidField(_) => (StatusCode::BAD_REQUEST, "moderation.invalid"),
         RateLimited => (StatusCode::TOO_MANY_REQUESTS, "report.error.rate_limited"),
@@ -3624,6 +3626,7 @@ fn contribution_error_message(tr: Translator, e: &ContributionError) -> String {
             tr.t("contribution.error.version_conflict").to_string()
         }
         ContributionError::NotFound => tr.t("contribution.error.not_found").to_string(),
+        ContributionError::LocationNotActive => tr.t("contribution.error.not_active").to_string(),
         ContributionError::InvalidField(_) => tr.t("contribution.error.invalid").to_string(),
         ContributionError::Unauthorized => tr.t("contribution.error.unauthorized").to_string(),
         ContributionError::Timezone => tr.t("contribution.error.timezone").to_string(),
@@ -3633,13 +3636,16 @@ fn contribution_error_message(tr: Translator, e: &ContributionError) -> String {
     }
 }
 
-/// Status for a re-rendered contribution form. The two variants the SQL error
-/// mapper introduces get their own codes; every other variant keeps whatever
-/// the calling flow already chose (a form re-render is a 400 or a 200).
+/// Status for a re-rendered contribution form. The variants with a status of
+/// their own say so here; every other variant keeps whatever the calling flow
+/// already chose (a form re-render is a 400 or a 200).
 fn contribution_error_status(e: &ContributionError, default: StatusCode) -> StatusCode {
     match e {
         ContributionError::Conflict => StatusCode::CONFLICT,
         ContributionError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        // A location moderation took down reads as "gone" everywhere, exactly
+        // as the public details page already treats it.
+        ContributionError::LocationNotActive => StatusCode::NOT_FOUND,
         _ => default,
     }
 }
@@ -3684,6 +3690,12 @@ async fn parking_edit_page(
     let Some(view) = state.details.execute(id).await.ok().flatten() else {
         return not_found_page(&state.map, tr);
     };
+    // A location moderation took down accepts no contributions, so the form
+    // (and the sensitive-change proposals it hosts) is gone for everyone —
+    // moderators included, since the write path refuses them too.
+    if view.location.moderation_state() != ModerationState::Active {
+        return not_found_page(&state.map, tr);
+    }
     let loc = &view.location;
     // Pre-fill every reversible field so editing one doesn't silently reset
     // cost/security/hours (§7 "editable fields pre-filled").
@@ -3760,6 +3772,8 @@ async fn parking_edit_post(
             &form,
             tr.t("contribution.error.rate_limited").to_string(),
         ),
+        // Same answer as the GET above: there is nothing here to edit.
+        Err(ContributionError::LocationNotActive) => not_found_page(&state.map, tr),
         Err(e) => contribution_edit_error(&state.map, tr, auth, id, &form, &e),
     }
 }
@@ -3856,7 +3870,7 @@ async fn parking_proposal_post(
     Path(id): Path<i64>,
     Form(form): Form<ProposalForm>,
 ) -> Response {
-    let _tr = Translator::new(locale);
+    let tr = Translator::new(locale);
     let user = match auth.require_verified() {
         Ok(u) => u,
         Err(resp) => return resp,
@@ -3886,6 +3900,10 @@ async fn parking_proposal_post(
         .await
     {
         Ok(_) => axum::response::Redirect::to(&format!("/parking/{id}?proposed=1")).into_response(),
+        // The proposal forms live on the edit page, which 404s for a
+        // taken-down location; a direct POST gets the same answer rather than
+        // a redirect to a page that would itself 404.
+        Err(ContributionError::LocationNotActive) => not_found_page(&state.map, tr),
         Err(_) => {
             axum::response::Redirect::to(&format!("/parking/{id}?proposal_error=1")).into_response()
         }
@@ -4060,9 +4078,14 @@ async fn review_post(
             },
             tr.t("contribution.error.rate_limited").to_string(),
         ),
-        // A duplicate review or a lost race is the user's to resolve (409);
-        // an unreachable database is ours (503). Everything else stays generic.
-        Err(e @ (ContributionError::Conflict | ContributionError::Unavailable)) => {
+        // A duplicate review or a lost race is the user's to resolve (409); a
+        // spot that no longer takes contributions is gone (404); an unreachable
+        // database is ours (503). Everything else stays generic.
+        Err(
+            e @ (ContributionError::Conflict
+            | ContributionError::Unavailable
+            | ContributionError::LocationNotActive),
+        ) => {
             render_review_error_status(
                 &state.map,
                 tr,
@@ -4229,13 +4252,13 @@ fn verification_error(tr: Translator, e: &ContributionError) -> Response {
 }
 
 /// Message for the small htmx fragments the P3 detail page swaps in. Only the
-/// two variants the SQL error mapper introduces get their own copy; anything
-/// else stays deliberately vague.
+/// variants a user can act on get their own copy; anything else stays
+/// deliberately vague.
 fn contribution_fragment_message(tr: Translator, e: &ContributionError) -> String {
     match e {
-        ContributionError::Conflict | ContributionError::Unavailable => {
-            contribution_error_message(tr, e)
-        }
+        ContributionError::Conflict
+        | ContributionError::Unavailable
+        | ContributionError::LocationNotActive => contribution_error_message(tr, e),
         _ => tr.t("contribution.error.generic").to_string(),
     }
 }

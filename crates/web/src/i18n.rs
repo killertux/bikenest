@@ -639,8 +639,8 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Esse link é inválido ou expirou.",
         ),
         "auth.error.last_admin" => (
-            "You cannot remove your own last admin role.",
-            "Você não pode remover sua própria última função de admin.",
+            "The system must keep at least one admin.",
+            "O sistema precisa manter ao menos um admin.",
         ),
         "auth.error.generic" => (
             "Something went wrong. Try again.",
@@ -907,6 +907,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Something went wrong. Please try again.",
             "Algo deu errado. Tente novamente.",
         ),
+        "contribution.error.not_active" => (
+            "This spot is no longer accepting contributions.",
+            "Esta vaga não aceita mais contribuições.",
+        ),
         "contribution.error.generic" => ("Something went wrong.", "Algo deu errado."),
         "contribution.verify_to" => (
             "Verify your email to confirm this spot.",
@@ -994,6 +998,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "moderation.err.approve" => ("Approve failed.", "Falha ao aprovar."),
         "moderation.err.reject" => ("Reject failed.", "Falha ao rejeitar."),
         "moderation.error.internal" => ("Moderation action failed.", "Ação de moderação falhou."),
+        "moderation.error.stale_proposal" => (
+            "This proposal is out of date: the location changed since it was made. Review it again.",
+            "Esta proposta está desatualizada: a vaga mudou desde que foi feita. Revise-a novamente.",
+        ),
         "moderation.not_found" => ("Photo not found.", "Foto não encontrada."),
         "moderation.not_pending" => (
             "This photo isn't awaiting review.",
@@ -1037,6 +1045,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "report.error.invalid_reason" => (
             "That reason is not valid for this content.",
             "Esse motivo não é válido para este conteúdo.",
+        ),
+        "report.error.duplicate" => (
+            "You already reported this. Thanks — a moderator will review it.",
+            "Você já denunciou isto. Obrigado — um moderador vai revisar.",
         ),
         "report.error.rate_limited" => (
             "Too many reports. Try again later.",

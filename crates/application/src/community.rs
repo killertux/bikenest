@@ -14,8 +14,9 @@ use crate::rate_limit::{RateLimitError, RateLimiter};
 use crate::timezone::{TimezoneError, TimezoneResolver};
 use async_trait::async_trait;
 use bikenest_domain::{
-    AttributeResult, Confidence, Cost, ExistenceResult, ExistenceSignal, GeoPoint, OpeningHours,
-    ParkingLocation, ParkingType, ReviewBody, RevisionSummary, SecurityFeature, StarRating, UserId,
+    AttributeResult, Confidence, Cost, ExistenceResult, ExistenceSignal, GeoPoint, ModerationState,
+    OpeningHours, ParkingLocation, ParkingType, ReviewBody, RevisionSummary, SecurityFeature,
+    StarRating, UserId,
 };
 use chrono::{DateTime, Utc};
 use std::time::Duration;
@@ -36,6 +37,10 @@ pub enum ContributionError {
     VersionConflict,
     #[error("not found")]
     NotFound,
+    /// Moderation took the location down (REMOVED / INVALID / FLAGGED /
+    /// PENDING_REVIEW): it accepts no further contributions.
+    #[error("this spot is no longer accepting contributions")]
+    LocationNotActive,
     #[error("invalid input: {0}")]
     InvalidField(String),
     #[error("you are not permitted to perform this action")]
@@ -296,14 +301,15 @@ pub trait ParkingContributionRepository: Send + Sync {
 #[async_trait]
 pub trait ReviewRepository: Send + Sync {
     /// Insert-or-update + append `review_revision` + recompute the location
-    /// rating aggregate, all in one transaction.
+    /// rating aggregate, all in one transaction. Returns `true` when an
+    /// existing review was updated, `false` when one was created.
     async fn upsert_review(
         &self,
         location_id: i64,
         author: UserId,
         rating: StarRating,
         body: &ReviewBody,
-    ) -> Result<(), ContributionError>;
+    ) -> Result<bool, ContributionError>;
     async fn find_own(
         &self,
         location_id: i64,
@@ -511,6 +517,31 @@ impl ContributionService {
         }
     }
 
+    /// Every contribution write targets a *live* spot. A location moderation
+    /// has taken down (REMOVED / INVALID / FLAGGED / PENDING_REVIEW) is already
+    /// invisible to the public read path, so it must not keep accepting edits,
+    /// proposals, reviews or verifications either — a `still_exists` signal on
+    /// a removed spot would otherwise reset its freshness.
+    ///
+    /// Favorites are deliberately NOT gated: a favorite is a private bookmark,
+    /// not a contribution, and refusing to un-favorite a removed spot would
+    /// strand rows in the user's own list.
+    ///
+    /// This is the friendly, early check; the repositories re-check inside their
+    /// transactions so a state flip mid-request cannot slip a write through.
+    async fn require_active(&self, id: i64) -> Result<ParkingLocation, ContributionError> {
+        let location = self
+            .deps
+            .contributions
+            .get_for_edit(id)
+            .await?
+            .ok_or(ContributionError::NotFound)?;
+        if location.moderation_state() != ModerationState::Active {
+            return Err(ContributionError::LocationNotActive);
+        }
+        Ok(location)
+    }
+
     // -----------------------------------------------------------------------
     // Add / edit / propose (§35–§37)
     // -----------------------------------------------------------------------
@@ -583,6 +614,7 @@ impl ContributionService {
         )
         .await?;
         validate_name_address(&edit.name, &edit.address)?;
+        self.require_active(id).await?;
 
         let new_version = self
             .deps
@@ -616,12 +648,7 @@ impl ContributionService {
         )
         .await?;
 
-        let current = self
-            .deps
-            .contributions
-            .get_for_edit(id)
-            .await?
-            .ok_or(ContributionError::NotFound)?;
+        let current = self.require_active(id).await?;
 
         let proposal = NewProposal {
             location_id: id,
@@ -661,17 +688,17 @@ impl ContributionService {
         )
         .await?;
 
-        let existed = self
+        self.require_active(location_id).await?;
+
+        // The repository reports whether a row already existed (the upsert's
+        // `xmax <> 0`), so the audit action never rests on a separate read that
+        // a concurrent write could have invalidated.
+        let was_update = self
             .deps
-            .reviews
-            .find_own(location_id, user.id)
-            .await?
-            .is_some();
-        self.deps
             .reviews
             .upsert_review(location_id, user.id, rating, body)
             .await?;
-        let action = if existed {
+        let action = if was_update {
             "review.edited"
         } else {
             "review.created"
@@ -712,6 +739,7 @@ impl ContributionService {
 
         let is_still_exists = signal.is_still_exists();
         let location_id = signal.location_id();
+        self.require_active(location_id).await?;
         self.deps.verifications.record(signal, self.now()).await?;
         // A positive existence confirmation is the freshness source (§106).
         if is_still_exists {

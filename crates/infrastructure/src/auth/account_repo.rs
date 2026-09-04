@@ -318,6 +318,13 @@ impl AccountRepository for SqlxAccountRepository {
             .map_err(|e| db_err("account.roles", e))
     }
 
+    async fn count_admins(&self) -> Result<i64, AuthError> {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM user_roles WHERE role = 'ADMIN'")
+            .fetch_one(self.db.pool())
+            .await
+            .map_err(|e| db_err("account.count_admins", e))
+    }
+
     async fn grant_role(&self, id: UserId, role: Role, by: UserId) -> Result<(), AuthError> {
         sqlx::query(
             "INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, $2, $3)

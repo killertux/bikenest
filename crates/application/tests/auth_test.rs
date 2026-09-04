@@ -202,6 +202,16 @@ impl AccountRepository for FakeRepo {
             .map(|u| u.roles.clone())
             .unwrap_or_default())
     }
+    async fn count_admins(&self) -> Result<i64, AuthError> {
+        Ok(self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter()
+            .filter(|u| u.roles.contains(&Role::Admin))
+            .count() as i64)
+    }
     async fn grant_role(&self, id: UserId, role: Role, _by: UserId) -> Result<(), AuthError> {
         if let Some(u) = self
             .db
@@ -706,9 +716,125 @@ async fn grant_role_requires_admin_and_refuses_last_admin_self_revoke() {
     assert_eq!(err.unwrap_err(), AuthError::RefuseAdminSelfRevoke);
 }
 
+#[tokio::test]
+async fn admin_may_revoke_another_admin_until_it_would_leave_none() {
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let a = seed_user_with_roles(&db, "a@example.com", vec![Role::User, Role::Admin]);
+    let b = seed_user_with_roles(&db, "b@example.com", vec![Role::User, Role::Admin]);
+    let auth = make_service(db.clone());
+    let actor = actor_for(&db, a);
+
+    // Two admins: revoking B's ADMIN is fine.
+    auth.revoke_role(&actor, b, Role::Admin).await.unwrap();
+    assert!(!roles_of(&db, b).contains(&Role::Admin));
+
+    // A is now the only admin: revoking it — from anyone — is refused.
+    let err = auth.revoke_role(&actor, a, Role::Admin).await.unwrap_err();
+    assert_eq!(err, AuthError::RefuseAdminSelfRevoke);
+    assert!(roles_of(&db, a).contains(&Role::Admin));
+}
+
+#[tokio::test]
+async fn last_admin_cannot_self_demote() {
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let a = seed_user_with_roles(&db, "only@example.com", vec![Role::User, Role::Admin]);
+    let auth = make_service(db.clone());
+    let actor = actor_for(&db, a);
+
+    let err = auth.revoke_role(&actor, a, Role::Admin).await.unwrap_err();
+    assert_eq!(err, AuthError::RefuseAdminSelfRevoke);
+    assert!(roles_of(&db, a).contains(&Role::Admin));
+}
+
+#[tokio::test]
+async fn admin_may_self_demote_while_another_admin_remains() {
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let a = seed_user_with_roles(&db, "a2@example.com", vec![Role::User, Role::Admin]);
+    let _b = seed_user_with_roles(&db, "b2@example.com", vec![Role::User, Role::Admin]);
+    let auth = make_service(db.clone());
+    let actor = actor_for(&db, a);
+
+    auth.revoke_role(&actor, a, Role::Admin).await.unwrap();
+    assert!(!roles_of(&db, a).contains(&Role::Admin));
+}
+
+#[tokio::test]
+async fn revoking_a_non_admin_role_is_unaffected_by_the_admin_floor() {
+    // One admin in the system, but the revoke removes MODERATOR from someone
+    // else — the floor must not block it.
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let a = seed_user_with_roles(&db, "a3@example.com", vec![Role::User, Role::Admin]);
+    let b = seed_user_with_roles(&db, "b3@example.com", vec![Role::User, Role::Moderator]);
+    let auth = make_service(db.clone());
+    let actor = actor_for(&db, a);
+
+    auth.revoke_role(&actor, b, Role::Moderator).await.unwrap();
+    assert!(!roles_of(&db, b).contains(&Role::Moderator));
+}
+
+#[tokio::test]
+async fn change_email_to_a_taken_address_is_refused_before_any_token() {
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let user = seed_active_user(&db, "old@example.com", "correct-horse");
+    seed_active_user(&db, "taken@example.com", "other-secret");
+    let auth = make_service(db.clone());
+    // Registration/verification mail from the seeding never happens (the users
+    // are inserted directly), so the mailbox starts empty.
+    assert!(db.lock().unwrap().emails.is_empty());
+
+    let err = auth
+        .change_email(
+            user,
+            "correct-horse",
+            &UserEmail::parse("taken@example.com").unwrap(),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(err, AuthError::EmailTaken);
+    assert!(
+        db.lock().unwrap().verification.is_empty(),
+        "no verification token issued for a taken address"
+    );
+    assert!(
+        db.lock().unwrap().emails.is_empty(),
+        "no mail sent for a taken address"
+    );
+    assert_eq!(
+        db.lock().unwrap().users[0].email.as_str(),
+        "old@example.com",
+        "the address is unchanged"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn seed_user_with_roles(db: &Arc<Mutex<FakeDb>>, email: &str, roles: Vec<Role>) -> UserId {
+    let mut g = db.lock().unwrap();
+    g.next_id += 1;
+    let id = UserId(g.next_id);
+    let mut user = User::new(id, UserEmail::parse(email).unwrap(), None);
+    user.account_state = AccountState::Active;
+    user.roles = roles;
+    g.users.push(user);
+    id
+}
+
+fn actor_for(db: &Arc<Mutex<FakeDb>>, id: UserId) -> AuthenticatedUser {
+    let g = db.lock().unwrap();
+    AuthenticatedUser::from_user(g.users.iter().find(|u| u.id == id).expect("seeded user"))
+}
+
+fn roles_of(db: &Arc<Mutex<FakeDb>>, id: UserId) -> Vec<Role> {
+    let g = db.lock().unwrap();
+    g.users
+        .iter()
+        .find(|u| u.id == id)
+        .map(|u| u.roles.clone())
+        .unwrap_or_default()
+}
 
 fn seed_active_user(db: &Arc<Mutex<FakeDb>>, email: &str, password: &str) -> UserId {
     let mut g = db.lock().unwrap();

@@ -28,6 +28,9 @@ struct IdRow {
 }
 
 /// The AFTER-state tuple returned by the optimistic `apply_edit` UPDATE.
+/// It carries the columns the edit does NOT write (point, timezone, moderation
+/// state) as well, so the revision snapshot is the row's true after-state
+/// rather than a pre-transaction read that a concurrent write may have aged.
 #[derive(sqlx::FromRow)]
 struct EditApplyRow {
     version: i64,
@@ -35,6 +38,10 @@ struct EditApplyRow {
     address: String,
     description: Option<String>,
     parking_type: String,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    timezone: String,
+    moderation_state: String,
 }
 
 pub struct SqlxParkingContributionRepository {
@@ -151,24 +158,34 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         editor: UserId,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64, ContributionError> {
-        // Point / timezone / moderation state never change in a reversible edit;
-        // read them (committed) once before the transaction for the snapshot.
-        let current = self
-            .details
-            .details(id)
-            .await
-            .map_err(map_reader_err_to_contribution)?
-            .ok_or(ContributionError::VersionConflict)?;
-        let point = *current.point();
-        let tz = current.timezone();
-        let mod_state = current.moderation_state().as_code();
-
         let mut tx = self
             .db
             .pool()
             .begin()
             .await
             .map_err(|e| db_err("contribution.apply_edit", e))?;
+
+        // Lock the row and read the true before-state inside the transaction.
+        // The UPDATE below carries both predicates, so a zero-row result cannot
+        // say *which* one failed; this read separates "someone else edited it"
+        // (VersionConflict) from "moderation took it down" (LocationNotActive)
+        // without a race, because the lock is held until commit.
+        let guard: Option<(i64, String)> = sqlx::query_as(
+            "SELECT version, moderation_state FROM parking_location WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| db_err("contribution.apply_edit", e))?;
+        let Some((current_version, current_state)) = guard else {
+            return Err(ContributionError::NotFound);
+        };
+        if current_state != bikenest_domain::ModerationState::Active.as_code() {
+            return Err(ContributionError::LocationNotActive);
+        }
+        if current_version != expected_version {
+            return Err(ContributionError::VersionConflict);
+        }
 
         let (cost_kind, price_cents, price_currency, price_unit) = cost_parts(&edit.cost);
 
@@ -180,8 +197,9 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
                 cost_kind = $5, price_cents = $6, price_currency = $7, price_unit = $8,
                 hours_unknown = $9,
                 version = version + 1, updated_at = $10, last_meaningful_update_at = $10
-            WHERE id = $11 AND version = $12
-            RETURNING version, name, address, description, parking_type
+            WHERE id = $11 AND version = $12 AND moderation_state = 'ACTIVE'
+            RETURNING version, name, address, description, parking_type,
+                      lat, lon, timezone, moderation_state
             "#,
         )
         .bind(edit.name.trim())
@@ -201,7 +219,8 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         .map_err(|e| db_err("contribution.apply_edit", e))?;
 
         let Some(row) = row else {
-            // 0 rows → concurrent update; surface the conflict (§100).
+            // Unreachable while the FOR UPDATE lock above is held; kept as the
+            // conservative fallback if that guard is ever removed.
             return Err(ContributionError::VersionConflict);
         };
         let EditApplyRow {
@@ -210,7 +229,16 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             address,
             description,
             parking_type,
+            lat,
+            lon,
+            timezone,
+            moderation_state,
         } = row;
+        let point = GeoPoint::new(lat.unwrap_or(0.0), lon.unwrap_or(0.0))
+            .map_err(|e| ContributionError::InvalidField(e.to_string()))?;
+        let tz: chrono_tz::Tz = timezone
+            .parse()
+            .map_err(|_| ContributionError::InvalidField(format!("unknown timezone: {timezone}")))?;
 
         write_hours(&mut tx, id, &edit.hours).await?;
         write_security(&mut tx, id, &edit.security).await?;
@@ -225,7 +253,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             tz,
             &edit.hours,
             &edit.security,
-            mod_state,
+            &moderation_state,
         );
         insert_revision(
             &mut tx,

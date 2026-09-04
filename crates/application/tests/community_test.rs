@@ -13,8 +13,9 @@ use bikenest_application::{
     TimezoneError, TimezoneResolver, VerificationRepository,
 };
 use bikenest_domain::{
-    AccountState, Confidence, Cost, ExistenceResult, ExistenceSignal, GeoPoint, OpeningHours,
-    ParkingLocation, ParkingType, ReviewBody, SecurityFeature, SecurityState, StarRating, UserId,
+    AccountState, Confidence, Cost, ExistenceResult, ExistenceSignal, GeoPoint, ModerationState,
+    OpeningHours, ParkingLocation, ParkingType, ReviewBody, SecurityFeature, SecurityState,
+    StarRating, UserId,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -116,10 +117,12 @@ impl bikenest_application::AuditLog for RecordingAudit {
     }
 }
 
-/// Minimal contribution repo: tracks id→version and a fixed duplicates list.
+/// Minimal contribution repo: tracks id→(version, moderation state) and a
+/// fixed duplicates list.
 struct FakeContributionRepo {
     next_id: Mutex<i64>,
     versions: Mutex<HashMap<i64, i64>>,
+    states: Mutex<HashMap<i64, ModerationState>>,
     dupes: Mutex<Vec<DuplicateCandidate>>,
 }
 impl FakeContributionRepo {
@@ -127,15 +130,30 @@ impl FakeContributionRepo {
         Self {
             next_id: Mutex::new(100),
             versions: Mutex::new(HashMap::new()),
+            states: Mutex::new(HashMap::new()),
             dupes: Mutex::new(dupes),
         }
+    }
+
+    /// Registers an existing location at `version` in `state`.
+    fn seed(&self, id: i64, version: i64, state: ModerationState) {
+        self.versions.lock().unwrap().insert(id, version);
+        self.states.lock().unwrap().insert(id, state);
     }
 }
 #[async_trait]
 impl ParkingContributionRepository for FakeContributionRepo {
     async fn get_for_edit(&self, id: i64) -> Result<Option<ParkingLocation>, ContributionError> {
         let v = self.versions.lock().unwrap().get(&id).copied();
-        v.map(|version| location_at(id, version)).transpose()
+        let state = self
+            .states
+            .lock()
+            .unwrap()
+            .get(&id)
+            .copied()
+            .unwrap_or(ModerationState::Active);
+        v.map(|version| location_at_state(id, version, state))
+            .transpose()
     }
     async fn create(
         &self,
@@ -187,6 +205,14 @@ impl ParkingContributionRepository for FakeContributionRepo {
 }
 
 fn location_at(id: i64, version: i64) -> Result<ParkingLocation, ContributionError> {
+    location_at_state(id, version, ModerationState::Active)
+}
+
+fn location_at_state(
+    id: i64,
+    version: i64,
+    state: ModerationState,
+) -> Result<ParkingLocation, ContributionError> {
     ParkingLocation::new(
         id,
         "Estação Centro",
@@ -198,7 +224,7 @@ fn location_at(id: i64, version: i64) -> Result<ParkingLocation, ContributionErr
         tz(),
         OpeningHours::Unknown,
         vec![SecurityFeature::new("well_lit", SecurityState::Yes)],
-        bikenest_domain::ModerationState::Active,
+        state,
         bikenest_domain::Rating::new(None, 0).unwrap(),
         chrono::Utc::now(),
         chrono::Utc::now(),
@@ -229,8 +255,8 @@ impl ReviewRepository for FakeReviewRepo {
         _a: UserId,
         _r: StarRating,
         _b: &ReviewBody,
-    ) -> Result<(), ContributionError> {
-        Ok(())
+    ) -> Result<bool, ContributionError> {
+        Ok(self.own.lock().unwrap().is_some())
     }
     async fn find_own(&self, _l: i64, _a: UserId) -> Result<Option<Review>, ContributionError> {
         Ok(self.own.lock().unwrap().clone())
@@ -446,7 +472,7 @@ async fn add_location_is_rate_limited() {
 #[tokio::test]
 async fn apply_edit_propagates_version_conflict() {
     let repo = FakeContributionRepo::new(vec![]);
-    repo.versions.lock().unwrap().insert(10, 3);
+    repo.seed(10, 3, ModerationState::Active);
     let svc = service(
         Box::new(repo),
         None,
@@ -477,12 +503,122 @@ async fn apply_edit_propagates_version_conflict() {
     assert_eq!(v, 4);
 }
 
+/// Every contribution write refuses a location moderation has taken down, in
+/// each non-ACTIVE state — and the write port is never reached.
+#[tokio::test]
+async fn writes_are_refused_for_a_location_that_is_not_active() {
+    for state in [
+        ModerationState::Removed,
+        ModerationState::Invalid,
+        ModerationState::Flagged,
+        ModerationState::PendingReview,
+    ] {
+        let repo = FakeContributionRepo::new(vec![]);
+        repo.seed(42, 7, state);
+        let ver = FakeVerificationRepo::new();
+        let vstate = ver.state();
+        let svc = service(
+            Box::new(repo),
+            None,
+            FakeReviewRepo::new(),
+            ver,
+            FakeFavoriteRepo { favorited: false },
+        );
+        let user = verified_user(1);
+
+        let edit = ParkingEdit {
+            name: "new".to_string(),
+            address: "addr".to_string(),
+            description: None,
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            hours: OpeningHours::Unknown,
+            security: vec![],
+        };
+        assert!(
+            matches!(
+                svc.apply_parking_edit(&user, 42, 7, &edit).await,
+                Err(ContributionError::LocationNotActive)
+            ),
+            "edit refused in {state:?}"
+        );
+        assert!(
+            matches!(
+                svc.propose_location_change(
+                    &user,
+                    42,
+                    bikenest_domain::ProposalKind::MoveLocation,
+                    serde_json::json!({}),
+                )
+                .await,
+                Err(ContributionError::LocationNotActive)
+            ),
+            "proposal refused in {state:?}"
+        );
+        assert!(
+            matches!(
+                svc.upsert_review(
+                    &user,
+                    42,
+                    StarRating::new(5).unwrap(),
+                    &ReviewBody::new("nice").unwrap(),
+                )
+                .await,
+                Err(ContributionError::LocationNotActive)
+            ),
+            "review refused in {state:?}"
+        );
+        assert!(
+            matches!(
+                svc.record_verification(
+                    &user,
+                    &NewVerification::Existence {
+                        location_id: 42,
+                        user_id: UserId(1),
+                        result: ExistenceResult::StillExists,
+                    },
+                )
+                .await,
+                Err(ContributionError::LocationNotActive)
+            ),
+            "verification refused in {state:?}"
+        );
+
+        assert!(
+            vstate.recorded.lock().unwrap().is_empty(),
+            "no verification written in {state:?}"
+        );
+        assert!(
+            vstate.marked.lock().unwrap().is_empty(),
+            "freshness never touched in {state:?}"
+        );
+    }
+}
+
+/// A favorite is a private bookmark, not a contribution: it keeps working so a
+/// user can still un-favorite a spot that was taken down.
+#[tokio::test]
+async fn favorites_still_work_for_a_location_that_is_not_active() {
+    let repo = FakeContributionRepo::new(vec![]);
+    repo.seed(42, 7, ModerationState::Removed);
+    let svc = service(
+        Box::new(repo),
+        None,
+        FakeReviewRepo::new(),
+        FakeVerificationRepo::new(),
+        FakeFavoriteRepo { favorited: false },
+    );
+    assert!(svc.toggle_favorite(UserId(1), 42).await.unwrap());
+}
+
 #[tokio::test]
 async fn record_verification_marks_freshness_only_for_still_exists() {
     let ver = FakeVerificationRepo::new();
     let vstate = ver.state();
+    let repo = FakeContributionRepo::new(vec![]);
+    repo.seed(3, 1, ModerationState::Active);
     let svc = service(
-        Box::new(FakeContributionRepo::new(vec![])),
+        Box::new(repo),
         None,
         FakeReviewRepo::new(),
         ver,

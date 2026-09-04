@@ -1191,6 +1191,9 @@ mod tests {
         async fn roles(&self, _i: UserId) -> Result<Vec<Role>, AuthError> {
             Ok(vec![Role::User])
         }
+        async fn count_admins(&self) -> Result<i64, AuthError> {
+            Ok(2)
+        }
         async fn grant_role(&self, _i: UserId, _r: Role, _b: UserId) -> Result<(), AuthError> {
             Ok(())
         }

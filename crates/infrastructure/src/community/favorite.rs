@@ -20,33 +20,30 @@ impl SqlxFavoriteRepository {
 #[async_trait]
 impl FavoriteRepository for SqlxFavoriteRepository {
     async fn toggle(&self, user: UserId, location_id: i64) -> Result<bool, ContributionError> {
-        let exists: (bool,) = sqlx::query_as(
-            "SELECT EXISTS(SELECT 1 FROM favorite WHERE user_id = $1 AND location_id = $2)",
+        // One statement, so a double-click cannot read the state on one pool
+        // connection and write it on another (which reported the wrong result
+        // and could leave the button out of step with the row).
+        //
+        // Both arms see the same snapshot: the INSERT never observes the
+        // DELETE's effect, so `NOT EXISTS (SELECT 1 FROM del)` — not the table
+        // — is what decides whether it runs. A returned row means "added";
+        // no row means the DELETE removed the existing favorite.
+        let row: Option<(bool,)> = sqlx::query_as(
+            r#"
+            WITH del AS (
+                DELETE FROM favorite WHERE user_id = $1 AND location_id = $2 RETURNING 1
+            )
+            INSERT INTO favorite (user_id, location_id)
+            SELECT $1, $2 WHERE NOT EXISTS (SELECT 1 FROM del)
+            RETURNING true
+            "#,
         )
         .bind(user.0)
         .bind(location_id)
-        .fetch_one(self.db.pool())
+        .fetch_optional(self.db.pool())
         .await
         .map_err(|e| db_err("favorite.toggle", e))?;
-        if exists.0 {
-            sqlx::query("DELETE FROM favorite WHERE user_id = $1 AND location_id = $2")
-                .bind(user.0)
-                .bind(location_id)
-                .execute(self.db.pool())
-                .await
-                .map_err(|e| db_err("favorite.toggle", e))?;
-            Ok(false)
-        } else {
-            sqlx::query(
-                "INSERT INTO favorite (user_id, location_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            )
-            .bind(user.0)
-            .bind(location_id)
-            .execute(self.db.pool())
-            .await
-            .map_err(|e| db_err("favorite.toggle", e))?;
-            Ok(true)
-        }
+        Ok(row.is_some())
     }
 
     async fn is_favorited(

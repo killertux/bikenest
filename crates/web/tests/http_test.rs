@@ -3404,3 +3404,203 @@ async fn a_trusted_proxys_forwarded_for_does_key_the_bucket(_tx: &mut TestTx) {
         );
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// WP8: moderation state is enforced on the write path, not only on reads.
+// ---------------------------------------------------------------------------
+
+/// Every contribution route refuses a location moderation has taken down, and
+/// leaves the row exactly as it found it. Favorites are the deliberate
+/// exception: a private bookmark is not a contribution.
+#[db_test]
+async fn contribution_routes_refuse_a_location_that_is_not_active(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp8-not-active@example.com";
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+    let (_, form) = get_c(&app, "/parking/new", Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+    let id = add_location(&app, &cookie, &csrf, "WP8 Taken Down", &[]).await;
+
+    // A verification while the spot is still ACTIVE, so `last_verified_at` has
+    // a value a later `still_exists` could reset.
+    let (s, _, _) = post_form(
+        &app,
+        &format!("/parking/{id}/verify"),
+        &[
+            ("csrf", &csrf),
+            ("kind", "existence"),
+            ("result", "still_exists"),
+        ],
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "baseline verification accepted");
+
+    const NOT_ACTIVE: &str = "no longer accepting contributions";
+    for state in ["REMOVED", "INVALID"] {
+        sqlx::query("UPDATE parking_location SET moderation_state = $2 WHERE id = $1")
+            .bind(id)
+            .bind(state)
+            .execute(&pool().await)
+            .await
+            .unwrap();
+        let before = location_write_state(id).await;
+
+        // The edit form is gone, exactly as the public details page is.
+        let (s, _) = get_c(&app, &format!("/parking/{id}/edit"), Some(&cookie)).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{state}: GET edit page");
+
+        let (s, _, _) = post_form(
+            &app,
+            &format!("/parking/{id}/edit"),
+            &[
+                ("csrf", &csrf),
+                ("version", "1"),
+                ("name", "Renamed"),
+                ("address", "Rua Y, 2"),
+                ("parking_type", "rack"),
+                ("cost_kind", "unknown"),
+            ],
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{state}: POST edit");
+
+        let (s, _, _) = post_form(
+            &app,
+            &format!("/parking/{id}/proposal"),
+            &[
+                ("csrf", &csrf),
+                ("kind", "change_existence"),
+                ("existence", "no_longer_exists"),
+                ("reason", "gone"),
+            ],
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{state}: POST proposal");
+
+        let (s, body) = post_multipart(
+            &app,
+            &format!("/parking/{id}/review"),
+            multipart_review("5", "still great", "----bikenestphoto"),
+            &cookie,
+            Some(&csrf),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{state}: POST review");
+        assert!(body.contains(NOT_ACTIVE), "{state}: review says why");
+
+        let (s, body, _) = post_form(
+            &app,
+            &format!("/parking/{id}/verify"),
+            &[
+                ("csrf", &csrf),
+                ("kind", "existence"),
+                ("result", "still_exists"),
+            ],
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{state}: POST verify");
+        assert!(body.contains(NOT_ACTIVE), "{state}: verify says why");
+
+        let (s, _, _) = post_form(
+            &app,
+            &format!("/parking/{id}/parked-here"),
+            &[("csrf", &csrf)],
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{state}: POST parked-here");
+
+        // Nothing moved: version, freshness, revisions, reviews, verifications.
+        assert_eq!(
+            location_write_state(id).await,
+            before,
+            "{state}: no write landed"
+        );
+
+        // A favorite is still a favorite — toggling it stays available.
+        let (s, _, _) = post_form(
+            &app,
+            &format!("/parking/{id}/favorite"),
+            &[("csrf", &csrf)],
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{state}: favorites keep working");
+    }
+
+    let _ = tx;
+    cleanup_user_contributions(EMAIL).await;
+}
+
+/// (version, last_verified_at, revision count, review count, verification count)
+/// — everything a refused contribution must leave untouched.
+async fn location_write_state(
+    id: i64,
+) -> (i64, Option<chrono::DateTime<chrono::Utc>>, i64, i64, i64) {
+    sqlx::query_as(
+        r#"
+        SELECT l.version,
+               l.last_verified_at,
+               (SELECT count(*) FROM parking_revision WHERE location_id = l.id),
+               (SELECT count(*) FROM review           WHERE location_id = l.id),
+               (SELECT count(*) FROM verification     WHERE location_id = l.id)
+        FROM parking_location l WHERE l.id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap()
+}
+
+/// A second identical report is not a new signal — it is the same complaint.
+#[db_test]
+async fn duplicate_report_is_refused_with_a_conflict(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp8-dupe-reporter@example.com";
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+    let (_, form) = get_c(&app, "/parking/new", Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+    let id = add_location(&app, &cookie, &csrf, "WP8 Report Target", &[]).await;
+
+    let fields = [
+        ("csrf", csrf.as_str()),
+        ("target_type", "parking"),
+        ("target_id", &id.to_string()),
+        ("reason", "duplicate"),
+        ("description", "already listed"),
+    ];
+    let (s, _, _) = post_form(&app, "/reports", &fields, Some(&cookie)).await;
+    assert_eq!(s, StatusCode::OK, "first report accepted");
+
+    let (s, body, _) = post_form(&app, "/reports", &fields, Some(&cookie)).await;
+    assert_eq!(s, StatusCode::CONFLICT, "second identical report refused");
+    assert!(
+        body.contains("You already reported this"),
+        "duplicate message shown: {body}"
+    );
+
+    let (open,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM report WHERE target_type = 'parking' AND target_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    assert_eq!(open, 1, "only one report row exists");
+
+    let _ = tx;
+    sqlx::query("DELETE FROM report WHERE target_type = 'parking' AND target_id = $1")
+        .bind(id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    cleanup_user_contributions(EMAIL).await;
+}

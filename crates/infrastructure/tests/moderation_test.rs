@@ -242,6 +242,161 @@ async fn proposal_approve_applies_change_supersedes_and_writes_revision(
 }
 
 #[db_test]
+async fn proposal_approve_refuses_a_stale_base_version(tx: &mut bikenest_test_support::TestTx) {
+    let moderator = committed_user(tx, "m5-infra-stale-mod@example.com", "MODERATOR").await;
+    const MARK: &str = "m5-infra-stale";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let loc = ParkingBuilder::new()
+        .with_name("Infra Stale Proposal")
+        .with_fixture_tag(MARK)
+        .with_version(5)
+        .create(tx.executor())
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+    let id = loc.id();
+
+    // Proposed against v3, but the location has moved on to v5.
+    let (stale,): (i64,) = sqlx::query_as(
+        "INSERT INTO parking_proposal (location_id, proposer_id, base_version, kind, proposed, status) \
+         VALUES ($1, $2, 3, 'change_existence', '{\"existence\":\"removed\"}', 'PENDING') RETURNING id")
+        .bind(id).bind(moderator).fetch_one(&pool().await).await.unwrap();
+
+    let repo = SqlxModerationRepository::new(db().await);
+    let err = repo
+        .approve_proposal(
+            stale,
+            UserId(moderator),
+            ProposalApplication::ChangeExistence { exists: false },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, ModerationError::StaleProposal),
+        "expected StaleProposal, got {err:?}"
+    );
+
+    // Nothing changed: same state, same version, no revision, still PENDING.
+    let (state, version): (String, i64) =
+        sqlx::query_as("SELECT moderation_state, version FROM parking_location WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "ACTIVE");
+    assert_eq!(version, 5);
+    let (revs,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM parking_revision WHERE location_id = $1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(revs, 0, "a refused approval writes no revision");
+    let (status,): (String,) = sqlx::query_as("SELECT status FROM parking_proposal WHERE id = $1")
+        .bind(stale)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    assert_eq!(status, "PENDING");
+
+    // A proposal made against the current version still applies.
+    let (fresh,): (i64,) = sqlx::query_as(
+        "INSERT INTO parking_proposal (location_id, proposer_id, base_version, kind, proposed, status) \
+         VALUES ($1, $2, 5, 'change_existence', '{\"existence\":\"removed\"}', 'PENDING') RETURNING id")
+        .bind(id).bind(moderator).fetch_one(&pool().await).await.unwrap();
+    repo.approve_proposal(
+        fresh,
+        UserId(moderator),
+        ProposalApplication::ChangeExistence { exists: false },
+    )
+    .await
+    .unwrap();
+    let (state, version): (String, i64) =
+        sqlx::query_as("SELECT moderation_state, version FROM parking_location WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "REMOVED");
+    assert_eq!(version, 6);
+    // Approving it superseded the stale sibling.
+    let (status,): (String,) = sqlx::query_as("SELECT status FROM parking_proposal WHERE id = $1")
+        .bind(stale)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    assert_eq!(status, "SUPERSEDED");
+
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(moderator)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+#[db_test]
+async fn report_dedupe_index_rejects_a_second_open_report(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let reporter = committed_user(tx, "m5-infra-dupe-a@example.com", "USER").await;
+    let other = committed_user(tx, "m5-infra-dupe-b@example.com", "USER").await;
+    let moderator = committed_user(tx, "m5-infra-dupe-mod@example.com", "MODERATOR").await;
+    let repo = SqlxReportRepository::new(db().await);
+
+    let new = |who: i64| NewReport {
+        reporter_id: UserId(who),
+        target_type: ReportTargetType::Parking,
+        target_id: 424_242,
+        reason: "duplicate".to_string(),
+        description: ReportDescription::new("dup").expect("in-range description"),
+    };
+
+    let first = repo.create(&new(reporter)).await.unwrap();
+
+    // Same reporter, same target, still open → the partial unique index fires
+    // and `db_err` classifies it as a Conflict (the service maps it onward).
+    let err = repo.create(&new(reporter)).await.unwrap_err();
+    assert!(
+        matches!(err, ModerationError::Conflict),
+        "expected Conflict, got {err:?}"
+    );
+
+    // A different reporter on the same target is a distinct signal.
+    let second_reporter = repo.create(&new(other)).await.unwrap();
+
+    // Once the first is resolved, the same reporter may report it again.
+    repo.claim(first, UserId(moderator)).await.unwrap();
+    repo.resolve(first, UserId(moderator), "done", ReportOutcome::Resolved)
+        .await
+        .unwrap();
+    let third = repo.create(&new(reporter)).await.unwrap();
+    assert_ne!(third, first);
+
+    let _ = tx;
+    let _ = second_reporter;
+    sqlx::query("DELETE FROM report WHERE reporter_id = ANY($1)")
+        .bind(vec![reporter, other])
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+        .bind(vec![reporter, other, moderator])
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+#[db_test]
 async fn audit_reader_filters_and_paginates(tx: &mut bikenest_test_support::TestTx) {
     let actor = committed_user(tx, "m5-infra-audit@example.com", "USER").await;
     let reader = SqlxAuditLogReader::new(db().await);

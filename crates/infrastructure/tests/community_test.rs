@@ -158,6 +158,132 @@ async fn optimistic_edit_wins_only_on_expected_version(tx: &mut bikenest_test_su
 }
 
 #[db_test]
+async fn edit_is_refused_for_a_location_that_is_not_active(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let email = "c-edit-inactive@test.dev";
+    let user = fresh_user(tx, email).await;
+    let repo = SqlxParkingContributionRepository::new(db().await);
+    let id = repo
+        .create(&new_location(), user, chrono::Utc::now())
+        .await
+        .unwrap();
+    let edit = ParkingEdit {
+        name: "should not land".to_string(),
+        address: "nowhere".to_string(),
+        description: None,
+        parking_type: ParkingType::Rack,
+        cost: Cost::Free,
+        hours: OpeningHours::Unknown,
+        security: vec![],
+    };
+
+    for state in ["INVALID", "REMOVED", "FLAGGED", "PENDING_REVIEW"] {
+        sqlx::query("UPDATE parking_location SET moderation_state = $2 WHERE id = $1")
+            .bind(id)
+            .bind(state)
+            .execute(&pool().await)
+            .await
+            .unwrap();
+
+        // The version is correct, so only the moderation state can refuse it —
+        // and it must not be reported as a version conflict.
+        let err = repo
+            .apply_edit(id, 1, &edit, user, chrono::Utc::now())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ContributionError::LocationNotActive),
+            "{state}: expected LocationNotActive, got {err:?}"
+        );
+
+        let (version, name): (i64, String) =
+            sqlx::query_as("SELECT version, name FROM parking_location WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool().await)
+                .await
+                .unwrap();
+        assert_eq!(version, 1, "{state}: version untouched");
+        assert_eq!(name, "Estação Centro", "{state}: row untouched");
+        assert_eq!(
+            repo.revision_history(id).await.unwrap().len(),
+            1,
+            "{state}: no revision written"
+        );
+    }
+
+    // A stale version on a non-ACTIVE row still reports the state, not the
+    // version — the caller learns the reason it cannot edit at all.
+    let err = repo
+        .apply_edit(id, 99, &edit, user, chrono::Utc::now())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ContributionError::LocationNotActive));
+
+    cleanup_user(email).await;
+}
+
+#[db_test]
+async fn edit_revision_snapshot_holds_the_row_after_state(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let email = "c-edit-snapshot@test.dev";
+    let user = fresh_user(tx, email).await;
+    let repo = SqlxParkingContributionRepository::new(db().await);
+    let id = repo
+        .create(&new_location(), user, chrono::Utc::now())
+        .await
+        .unwrap();
+
+    let edit = ParkingEdit {
+        name: "Estação Centro (revisada)".to_string(),
+        address: "Av. Nova, 20".to_string(),
+        description: None,
+        parking_type: ParkingType::Rack,
+        cost: Cost::Free,
+        hours: OpeningHours::Unknown,
+        security: vec![],
+    };
+    repo.apply_edit(id, 1, &edit, user, chrono::Utc::now())
+        .await
+        .unwrap();
+
+    // The snapshot's untouched fields (point / timezone / moderation state) must
+    // come from the UPDATE's RETURNING, not from a read taken before the
+    // transaction — so they equal the row as it stands now.
+    let (snapshot,): (serde_json::Value,) = sqlx::query_as(
+        "SELECT snapshot FROM parking_revision WHERE location_id = $1 ORDER BY version DESC LIMIT 1",
+    )
+    .bind(id)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    let (lat, lon, timezone, state): (f64, f64, String, String) = sqlx::query_as(
+        "SELECT lat, lon, timezone, moderation_state FROM parking_location WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+
+    assert!(
+        (snapshot["point"]["lat"].as_f64().unwrap() - lat).abs() < 1e-9,
+        "snapshot lat {:?} vs row {lat}",
+        snapshot["point"]["lat"]
+    );
+    assert!(
+        (snapshot["point"]["lon"].as_f64().unwrap() - lon).abs() < 1e-9,
+        "snapshot lon {:?} vs row {lon}",
+        snapshot["point"]["lon"]
+    );
+    assert_eq!(snapshot["timezone"].as_str().unwrap(), timezone);
+    assert_eq!(snapshot["moderation_state"].as_str().unwrap(), state);
+    assert_eq!(snapshot["name"].as_str().unwrap(), edit.name);
+
+    cleanup_user(email).await;
+}
+
+#[db_test]
 async fn proposal_is_pending_with_no_live_change(tx: &mut bikenest_test_support::TestTx) {
     let email = "c-proposal@test.dev";
     let user = fresh_user(tx, email).await;
@@ -342,6 +468,162 @@ async fn verification_still_exists_sets_last_verified_at(tx: &mut bikenest_test_
 
     cleanup_user(email).await;
     cleanup_user("c-verify-2@test.dev").await;
+}
+
+#[db_test]
+async fn review_upsert_survives_a_repeated_first_review(tx: &mut bikenest_test_support::TestTx) {
+    let email = "c-review-upsert@test.dev";
+    let user = fresh_user(tx, email).await;
+    let repo = SqlxParkingContributionRepository::new(db().await);
+    let id = repo
+        .create(&new_location(), user, chrono::Utc::now())
+        .await
+        .unwrap();
+
+    let reviews = SqlxReviewRepository::new(db().await);
+    let first = ReviewBody::new("primeira versão").unwrap();
+    let second = ReviewBody::new("segunda versão").unwrap();
+
+    // Two "first reviews" back to back: the old read-then-write pair let both
+    // take the insert branch, and the second hit the unique index. The single
+    // upsert turns the loser into an update instead.
+    assert!(
+        !reviews
+            .upsert_review(id, user, StarRating::new(4).unwrap(), &first)
+            .await
+            .unwrap(),
+        "the first write creates the review"
+    );
+    assert!(
+        reviews
+            .upsert_review(id, user, StarRating::new(2).unwrap(), &second)
+            .await
+            .unwrap(),
+        "the second write updates it"
+    );
+
+    let db = db().await;
+    let (rows,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM review WHERE location_id = $1 AND author_id = $2")
+            .bind(id)
+            .bind(user.0)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(rows, 1, "one review row per author per location");
+
+    let own = reviews.find_own(id, user).await.unwrap().unwrap();
+    assert_eq!(own.rating.value(), 2);
+    assert_eq!(own.body.as_str(), "segunda versão");
+
+    // review_revision holds every published version, newest last.
+    let history: Vec<(i16, String)> = sqlx::query_as(
+        "SELECT rating, body FROM review_revision WHERE review_id = $1 ORDER BY id",
+    )
+    .bind(own.id)
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0], (4, "primeira versão".to_string()));
+    assert_eq!(
+        history[1],
+        (2, "segunda versão".to_string()),
+        "the newest version is the last row"
+    );
+
+    // The aggregate reflects the update, not the original rating.
+    let (avg, count): (Option<f64>, i32) = sqlx::query_as(
+        "SELECT rating_avg::float8, rating_count FROM parking_location WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    assert!((avg.unwrap() - 2.0).abs() < 0.001, "avg = {avg:?}");
+
+    cleanup_user(email).await;
+}
+
+#[db_test]
+async fn review_edit_does_not_unhide_a_hidden_review(tx: &mut bikenest_test_support::TestTx) {
+    let email = "c-review-hidden@test.dev";
+    let user = fresh_user(tx, email).await;
+    let repo = SqlxParkingContributionRepository::new(db().await);
+    let id = repo
+        .create(&new_location(), user, chrono::Utc::now())
+        .await
+        .unwrap();
+    let reviews = SqlxReviewRepository::new(db().await);
+    let body = ReviewBody::new("texto original").unwrap();
+    reviews
+        .upsert_review(id, user, StarRating::new(5).unwrap(), &body)
+        .await
+        .unwrap();
+    let own = reviews.find_own(id, user).await.unwrap().unwrap();
+    sqlx::query("UPDATE review SET moderation_state = 'HIDDEN' WHERE id = $1")
+        .bind(own.id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+
+    reviews
+        .upsert_review(
+            id,
+            user,
+            StarRating::new(1).unwrap(),
+            &ReviewBody::new("texto editado").unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let (state,): (String,) = sqlx::query_as("SELECT moderation_state FROM review WHERE id = $1")
+        .bind(own.id)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    assert_eq!(state, "HIDDEN", "an author edit never restores a hidden review");
+    assert!(
+        reviews.list_active(id).await.unwrap().is_empty(),
+        "a hidden review stays out of the public list"
+    );
+
+    cleanup_user(email).await;
+}
+
+#[db_test]
+async fn favorite_toggle_reports_the_state_it_wrote(tx: &mut bikenest_test_support::TestTx) {
+    let email = "c-fav-toggle@test.dev";
+    let user = fresh_user(tx, email).await;
+    let repo = SqlxParkingContributionRepository::new(db().await);
+    let id = repo
+        .create(&new_location(), user, chrono::Utc::now())
+        .await
+        .unwrap();
+    let fav = SqlxFavoriteRepository::new(db().await);
+
+    async fn rows(user: UserId, id: i64) -> i64 {
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT count(*) FROM favorite WHERE user_id = $1 AND location_id = $2")
+                .bind(user.0)
+                .bind(id)
+                .fetch_one(&pool().await)
+                .await
+                .unwrap();
+        n
+    }
+
+    // added → removed → added, with the row count agreeing after each toggle.
+    assert!(fav.toggle(user, id).await.unwrap(), "first toggle adds");
+    assert_eq!(rows(user, id).await, 1);
+    assert!(!fav.toggle(user, id).await.unwrap(), "second toggle removes");
+    assert_eq!(rows(user, id).await, 0);
+    assert!(fav.toggle(user, id).await.unwrap(), "third toggle adds again");
+    assert_eq!(rows(user, id).await, 1);
+    assert!(fav.is_favorited(user, id).await.unwrap());
+
+    cleanup_user(email).await;
 }
 
 #[db_test]
