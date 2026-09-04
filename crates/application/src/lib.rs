@@ -31,15 +31,15 @@ pub use auth::{
 pub use community::{
     AddParkingLocationOutcome, AttributeSummary, CommunityParkingDetails, ContributionDeps,
     ContributionError, ContributionHistoryReader, ContributionItem, ContributionService,
-    DuplicateCandidate, FavoriteRepository, NewParkingLocation, NewProposal, NewVerification,
-    ParkingContributionRepository, ParkingEdit, Reason, Review, ReviewRepository,
+    DuplicateCandidate, FavoriteItem, FavoriteRepository, NewParkingLocation, NewProposal,
+    NewVerification, ParkingContributionRepository, ParkingEdit, Reason, Review, ReviewRepository,
     VerificationRepository, recommendation_reasons,
 };
 pub use email::{EmailError, EmailProvider, OutboundEmail};
 pub use jobs::{JOB_JOBS_GC, JOB_RETENTION, JobError, JobHandler, JobPayload};
 pub use moderation::{
     ModerationDeps, ModerationError, ModerationRepository, ModerationService, NewReport, Proposal,
-    ProposalApplication, Report, ReportRepository,
+    ProposalApplication, QueueCounts, Report, ReportRepository,
 };
 pub use photo::{
     ImageProcessor, NewPendingPhoto, PendingPhoto, PhotoDeps, PhotoError, PhotoForModeration,

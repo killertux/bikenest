@@ -122,7 +122,7 @@ directly. Examples: `SearchParking`, `ContributionService`, `AuthService`,
 | `EmailProvider` | send verification/reset mail (`fake`/`smtp`/`resend`) |
 | `RateLimiter` | sliding-window abuse limits |
 | `AuditLog` / `AuditLogReader` | write/read the audit trail |
-| `ObjectStorage` | put/get + presigned media URLs |
+| `ObjectStorage` | put/delete + direct S3 presigned media URLs |
 | `ImageProcessor` | decode → EXIF-strip → re-encode → thumbnail |
 | `PhotoRepository` | photo lifecycle + moderation queue |
 | `ReportRepository` / `ModerationRepository` | reports + moderation actions |

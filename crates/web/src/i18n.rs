@@ -1216,6 +1216,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "admin.audit.metadata" => ("Metadata", "Metadados"),
         "admin.audit.when" => ("When", "Quando"),
         "admin.audit.next" => ("Next page", "Próxima página"),
+        "pagination.more" => ("Load more", "Carregar mais"),
         "audit.system" => ("System", "Sistema"),
         "audit.result.success" => ("Success", "Sucesso"),
         "audit.result.failure" => ("Failure", "Falha"),

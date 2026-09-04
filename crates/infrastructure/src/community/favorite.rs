@@ -4,8 +4,9 @@
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{ContributionError, FavoriteRepository};
+use bikenest_application::{ContributionError, FavoriteItem, FavoriteRepository};
 use bikenest_domain::UserId;
+use chrono::{DateTime, Utc};
 
 pub struct SqlxFavoriteRepository {
     db: Db,
@@ -62,24 +63,50 @@ impl FavoriteRepository for SqlxFavoriteRepository {
         Ok(row.0)
     }
 
-    async fn list(&self, user: UserId) -> Result<Vec<i64>, ContributionError> {
+    async fn list(
+        &self,
+        user: UserId,
+        after: Option<(DateTime<Utc>, i64)>,
+        limit: i64,
+    ) -> Result<Vec<FavoriteItem>, ContributionError> {
+        let limit = limit.clamp(1, 200);
         #[derive(sqlx::FromRow)]
         struct Row {
             location_id: i64,
+            created_at: DateTime<Utc>,
         }
+        // Keyset on the full sort key `(created_at, location_id)` — same
+        // shape as `photo.list_pending` — so "most recently favorited first"
+        // is preserved exactly (favorite has no row id of its own; its PK is
+        // `(user_id, location_id)`, so `location_id` alone cannot serve as a
+        // recency cursor).
+        let (after_at, after_id) = match after {
+            Some((at, id)) => (Some(at), Some(id)),
+            None => (None, None),
+        };
         let rows = sqlx::query_as::<_, Row>(
             r#"
-            SELECT location_id
-            FROM favorite
+            SELECT location_id, created_at FROM favorite
             WHERE user_id = $1
+              AND ($2::timestamptz IS NULL OR (created_at, location_id) < ($2::timestamptz, $3::bigint))
             ORDER BY created_at DESC, location_id DESC
+            LIMIT $4::bigint
             "#,
         )
         .bind(user.0)
+        .bind(after_at)
+        .bind(after_id)
+        .bind(limit)
         .fetch_all(self.db.pool())
         .await
         .map_err(|e| db_err("favorite.list", e))?;
-        Ok(rows.into_iter().map(|r| r.location_id).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| FavoriteItem {
+                location_id: r.location_id,
+                created_at: r.created_at,
+            })
+            .collect())
     }
 }
 

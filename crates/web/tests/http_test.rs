@@ -579,6 +579,33 @@ async fn auth_app_opts(google_oauth_enabled: bool) -> (axum::Router, FakeEmailPr
     (app, email)
 }
 
+/// Like [`auth_app`], but also hands back the concrete storage double so a
+/// test can read object bytes directly — there is no `/media` route to fetch
+/// them through (media is served via direct S3 presigned URLs; the app is
+/// never a media proxy).
+async fn auth_app_with_storage() -> (
+    axum::Router,
+    FakeEmailProvider,
+    std::sync::Arc<bikenest_test_support::TestObjectStorage>,
+) {
+    let email = FakeEmailProvider::with_root(None);
+    let db = Db::from_pool(pool().await);
+    let config = test_config();
+    let storage = std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new());
+    let deps = RouterDeps {
+        email: Box::new(email.clone()),
+        oauth: Some(FakeOAuthProvider::new(
+            "oauth.user@example.com",
+            "sub-oauth-1",
+        )),
+        hasher: TestPasswordHasher,
+        rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
+        storage: storage.clone(),
+    };
+    let app = app_router_with(std::sync::Arc::new(config), db, deps);
+    (app, email, storage)
+}
+
 async fn get_c(app: &axum::Router, uri: &str, cookie: Option<&str>) -> (StatusCode, String) {
     let mut b = Request::builder().uri(uri).header("Accept-Language", "en");
     if let Some(c) = cookie {
@@ -2133,23 +2160,6 @@ async fn post_multipart_h(
     (status, String::from_utf8_lossy(&body).to_string())
 }
 
-async fn get_raw(app: &axum::Router, uri: &str) -> (StatusCode, Vec<u8>) {
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(uri)
-                .header("Accept-Language", "en")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = res.status();
-    let body = res.into_body().collect().await.unwrap().to_bytes();
-    (status, body.to_vec())
-}
-
 fn has_exif_marker(bytes: &[u8]) -> bool {
     if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
         return false;
@@ -2519,7 +2529,7 @@ async fn moderation_queue_hides_uploader_identity(tx: &mut bikenest_test_support
 
 #[db_test]
 async fn served_derivative_has_no_exif(tx: &mut bikenest_test_support::TestTx) {
-    let (app, email) = auth_app().await;
+    let (app, email, storage) = auth_app_with_storage().await;
     let loc = fixture_location(tx, "photo-exif", "Photo Exif").await;
     let uploader = verified_cookie(&app, &email, "photo-exif-up@example.com").await;
     let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
@@ -2551,22 +2561,23 @@ async fn served_derivative_has_no_exif(tx: &mut bikenest_test_support::TestTx) {
     )
     .await;
 
-    // Fetch the presigned derivative (from the gallery <img src>) and confirm it
-    // carries no EXIF/APP1.
+    // Read the presigned derivative's object key straight out of the gallery
+    // `<img src>` and fetch its bytes from the storage double directly — real
+    // presigned URLs point straight at the bucket (no app media proxy), so
+    // there is no route in the app itself to fetch them through.
     let (_, gallery) = get_c(&app, &format!("/parking/{loc}"), None).await;
     let anchor = r#"src="/media/uploads/"#;
     let start = gallery.find(anchor).expect("media thumb URL present");
     let after = &gallery[start + anchor.len()..];
-    // Askama escapes `&` to `&amp;` in the src attribute; restore it so the
-    // query params reach the media route intact.
-    let url = format!(
-        "/media/uploads/{}",
-        &after[..after.find('"').expect("closing quote")]
-    )
-    .replace("&#38;", "&")
-    .replace("&amp;", "&");
-    let (status, bytes) = get_raw(&app, &url).await;
-    assert_eq!(status, StatusCode::OK, "presigned derivative served");
+    let url_tail = &after[..after.find('"').expect("closing quote")];
+    // Askama escapes `&` in the src attribute; the key itself precedes the
+    // (escaped) `?exp=...&sig=...` query string, so a plain split suffices.
+    let key = format!("uploads/{url_tail}")
+        .split('?')
+        .next()
+        .expect("key before query string")
+        .to_string();
+    let bytes = storage.get_bytes(&key).expect("derivative bytes stored");
     assert!(
         !has_exif_marker(&bytes),
         "served derivative has no EXIF/APP1"
@@ -2671,6 +2682,99 @@ async fn admin_can_access_moderation_queue(tx: &mut bikenest_test_support::TestT
     assert!(body.contains("Photo moderation"), "queue page renders");
     let _ = tx;
     cleanup_user_contributions("photo-admin@example.com").await;
+}
+
+/// WP11: the dashboard renders four numeric count tiles wired to
+/// `queue_counts()`. This only checks the page actually renders four real,
+/// non-negative numbers (not a placeholder, and not zero from a broken
+/// query) — asserting *exact* values here would be racy, since
+/// `queue_counts()` reads global tables the whole suite shares (a sibling
+/// test's own fixture churn can move them mid-test). The exact-delta
+/// assertion lives in the infrastructure `#[db_test]`
+/// `queue_counts_on_reflects_an_exact_delta_race_free`, which takes both
+/// reads on one isolated connection instead.
+#[db_test]
+async fn moderation_dashboard_renders_four_numeric_tiles(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    let moderator = moderator_cookie(&app, &email, "dash-tiles-mod@example.com").await;
+
+    let (status, body) = get_c(&app, "/moderation", Some(&moderator)).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Each of the four stat tiles in moderation_dashboard.html shares this
+    // exact class list; parse the digits out of each one.
+    let anchor = r#"class="mt-2 font-display text-3xl font-bold text-fg">"#;
+    let mut tiles = Vec::new();
+    let mut rest = body.as_str();
+    while let Some(start) = rest.find(anchor) {
+        let after = &rest[start + anchor.len()..];
+        let end = after.find('<').expect("tile value closed by a tag");
+        let digits = &after[..end];
+        let n: i64 = digits
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("dashboard tile is not a plain integer: {digits:?}"));
+        tiles.push(n);
+        rest = &after[end..];
+    }
+    assert_eq!(tiles.len(), 4, "dashboard renders exactly four count tiles");
+    assert!(
+        tiles.iter().all(|&n| n >= 0),
+        "every count tile is non-negative: {tiles:?}"
+    );
+
+    let _ = tx;
+    cleanup_user_contributions("dash-tiles-mod@example.com").await;
+}
+
+/// WP11: a full page (== the limit) renders the "load more" keyset-pagination
+/// control; a fixture of `limit + 1` rows guarantees the first page is full.
+#[db_test]
+async fn moderation_reports_queue_shows_load_more_when_full(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    let moderator = moderator_cookie(&app, &email, "reports-more-mod@example.com").await;
+    const REPORTER: &str = "reports-more-reporter@example.com";
+    let _ = verified_cookie(&app, &email, REPORTER).await;
+    let (uid,): (i64,) = sqlx::query_as("SELECT id FROM users WHERE email = $1")
+        .bind(REPORTER)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+
+    // DEFAULT_PAGE_LIMIT is 50; 51 distinct-target OPEN reports (the dedupe
+    // index only constrains repeats of the same target) guarantee a full
+    // first page.
+    for target_id in 9_000_000i64..9_000_051 {
+        sqlx::query(
+            "INSERT INTO report (reporter_id, target_type, target_id, reason, state) \
+             VALUES ($1, 'parking', $2, 'other', 'OPEN')",
+        )
+        .bind(uid)
+        .bind(target_id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    }
+
+    let (status, body) = get_c(&app, "/moderation/reports?state=OPEN", Some(&moderator)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("Load more"),
+        "a full page must render the load-more control"
+    );
+    assert!(
+        body.contains("after_id="),
+        "the load-more link carries a keyset cursor"
+    );
+
+    let _ = tx;
+    sqlx::query("DELETE FROM report WHERE reporter_id = $1")
+        .bind(uid)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    cleanup_user_contributions("reports-more-mod@example.com").await;
+    cleanup_user_contributions(REPORTER).await;
 }
 
 #[db_test]

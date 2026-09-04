@@ -57,6 +57,11 @@
     </article>
     {% endfor %}
   </div>
+  {% if let Some(next) = next_url %}
+    <div class="mt-4">
+      <a href="{{ next }}" class="rounded-lg border border-border px-4 py-2 text-sm text-muted hover:text-fg">{{ tr.t("pagination.more") }}</a>
+    </div>
+  {% endif %}
   {% endif %}
 </section>
 {% endblock %}

@@ -346,11 +346,17 @@ pub trait ParkingPhotoReader: Send + Sync {
     async fn photos(&self, location_id: i64) -> Result<Vec<StoredPhoto>, ReaderError>;
 }
 
-/// Port: approved photos attached to a *review* (D3 §38), in display order.
+/// Port: approved photos attached to *reviews*, in display order.
 /// Only `APPROVED` review photos render on the review card.
 #[async_trait]
 pub trait ReviewPhotosReader: Send + Sync {
-    async fn photos(&self, review_id: i64) -> Result<Vec<StoredPhoto>, ReaderError>;
+    /// Batched form of "approved photos for this review, in order" for every
+    /// review on a details page — one query instead of one per review.
+    /// Review ids absent from the map have no approved photos.
+    async fn for_reviews(
+        &self,
+        review_ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, Vec<StoredPhoto>>, ReaderError>;
 }
 
 /// Shared freshness configuration for view-building use cases.

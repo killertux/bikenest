@@ -700,6 +700,8 @@ pub struct FavoritesPage {
     pub tr: Translator,
     pub items: Vec<view::CardVm>,
     pub notice: Option<String>,
+    /// "Load more" link when the page is full (a next keyset page exists).
+    pub next_url: Option<String>,
 }
 
 /// C5 — contribution history.
@@ -709,6 +711,7 @@ pub struct ContributionsPage {
     pub layout: PageLayout,
     pub tr: Translator,
     pub items: Vec<view::ContributionVm>,
+    pub next_url: Option<String>,
 }
 
 /// HTMX fragment: the favorite button state.
@@ -748,6 +751,7 @@ pub struct ModerationPhotosPage {
     pub tr: Translator,
     pub items: Vec<view::ModerationPhotoVm>,
     pub notice: Option<String>,
+    pub next_url: Option<String>,
 }
 
 /// HTMX fragment: the P3 photo upload result (success or error).
@@ -770,10 +774,10 @@ pub struct PhotoUploadResultVm {
 pub struct ModerationDashboardPage {
     pub layout: PageLayout,
     pub tr: Translator,
-    pub pending_photos: usize,
-    pub open_reports: usize,
-    pub under_review_reports: usize,
-    pub pending_proposals: usize,
+    pub pending_photos: i64,
+    pub open_reports: i64,
+    pub under_review_reports: i64,
+    pub pending_proposals: i64,
     pub is_admin: bool,
 }
 
@@ -789,6 +793,7 @@ pub struct ModerationReportsPage {
     /// own report (the server guard still enforces it).
     pub viewer_id: i64,
     pub notice: Option<String>,
+    pub next_url: Option<String>,
 }
 
 /// M4 — proposal review queue.
@@ -799,6 +804,7 @@ pub struct ModerationProposalsPage {
     pub tr: Translator,
     pub items: Vec<view::ProposalVm>,
     pub notice: Option<String>,
+    pub next_url: Option<String>,
 }
 
 /// M6 — admin audit-log viewer.

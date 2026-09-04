@@ -34,7 +34,7 @@ fn store() -> S3ObjectStorage {
 }
 
 #[tokio::test]
-async fn put_get_delete_round_trip() {
+async fn put_presign_delete_round_trip() {
     let s = store();
     let key = format!(
         "test/s3-roundtrip/{}",
@@ -76,11 +76,11 @@ async fn put_get_delete_round_trip() {
         "direct presign bypasses the app: {url}"
     );
 
-    // `get` (the app /media proxy path) is intentionally unsupported.
-    assert!(matches!(
-        s.get(&key).await,
-        Err(bikenest_application::StorageError::Unexpected(_))
-    ));
+    assert!(s.exists(&key).await.unwrap(), "exists after put");
 
     s.delete(&key).await.expect("delete should succeed");
+    assert!(
+        !s.exists(&key).await.unwrap(),
+        "exists is false after delete"
+    );
 }

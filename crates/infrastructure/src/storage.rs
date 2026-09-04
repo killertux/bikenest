@@ -117,19 +117,6 @@ impl ObjectStorage for S3ObjectStorage {
         }
     }
 
-    async fn get(&self, _key: &str) -> Result<(Vec<u8>, String), StorageError> {
-        // Media is served via direct S3 presigned URLs that bypass the app; the
-        // app's `/media` route is not used and should not proxy from the bucket.
-        Err(StorageError::Unexpected(
-            "objects are served via S3 presigned URLs (no app media proxy)".to_string(),
-        ))
-    }
-
-    fn verify_get(&self, _key: &str, _exp: u64, _sig: &str) -> bool {
-        // No app-side signature scheme; presigned URLs are self-authorizing.
-        false
-    }
-
     async fn exists(&self, key: &str) -> Result<bool, StorageError> {
         match self
             .client
@@ -177,14 +164,6 @@ impl ObjectStorage for SharedObjectStorage {
         self.0.delete(key).await
     }
 
-    async fn get(&self, key: &str) -> Result<(Vec<u8>, String), StorageError> {
-        self.0.get(key).await
-    }
-
-    fn verify_get(&self, key: &str, exp: u64, sig: &str) -> bool {
-        self.0.verify_get(key, exp, sig)
-    }
-
     async fn exists(&self, key: &str) -> Result<bool, StorageError> {
         self.0.exists(key).await
     }
@@ -220,20 +199,6 @@ mod tests {
             url.contains("X-Amz-Expires=60"),
             "should carry the TTL: {url}"
         );
-    }
-
-    #[tokio::test]
-    async fn get_is_unsupported_for_direct_presign_model() {
-        let s = store();
-        assert!(
-            matches!(s.get("seed/x.jpg").await, Err(StorageError::Unexpected(_))),
-            "S3 storage must not proxy media"
-        );
-    }
-
-    #[test]
-    fn verify_get_is_false() {
-        assert!(!store().verify_get("seed/x.jpg", 0, "sig"));
     }
 
     #[test]

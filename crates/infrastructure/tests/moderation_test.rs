@@ -84,7 +84,7 @@ async fn report_repo_state_machine(tx: &mut bikenest_test_support::TestTx) {
     assert_eq!(got.resolution_note.as_deref(), Some("hidden"));
 
     // Previous state-listed rows reflect the filter.
-    let open = repo.list(Some(ReportState::Open)).await.unwrap();
+    let open = repo.list(Some(ReportState::Open), None, 50).await.unwrap();
     assert!(open.iter().all(|r| r.state == ReportState::Open));
 
     let _ = tx;
@@ -464,3 +464,244 @@ async fn audit_reader_filters_and_paginates(tx: &mut bikenest_test_support::Test
 
 // Note: these tests require the migration applied (0010/0011). The suite's
 // `sqlx::migrate!` runs them on startup.
+
+#[db_test]
+async fn report_list_keyset_pagination_is_disjoint_and_stable(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let reporter = committed_user(tx, "m5-infra-report-keyset@example.com", "USER").await;
+    let repo = SqlxReportRepository::new(db().await);
+
+    let mut ids = Vec::new();
+    for i in 0..5 {
+        let id = repo
+            .create(&NewReport {
+                reporter_id: UserId(reporter),
+                target_type: ReportTargetType::Parking,
+                target_id: 900_000 + i,
+                reason: "duplicate".to_string(),
+                description: ReportDescription::new("keyset test").expect("in-range description"),
+            })
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+    // Force identical `created_at` across the fixture rows: the queue orders
+    // by `id ASC` alone now, so ties on the old `created_at` tiebreak must not
+    // disturb the order or the keyset cursor.
+    sqlx::query("UPDATE report SET created_at = now() WHERE id = ANY($1)")
+        .bind(&ids)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+
+    // Two 2-item pages never overlap and stay in ascending id order — true
+    // globally (this table also holds unrelated seed/fixture rows), which is
+    // exactly the keyset-pagination contract under test.
+    let page1 = repo.list(None, None, 2).await.unwrap();
+    let page1_ids: Vec<i64> = page1.iter().map(|r| r.id).collect();
+    assert_eq!(page1_ids.len(), 2);
+    assert!(
+        page1_ids.windows(2).all(|w| w[0] < w[1]),
+        "ascending id order"
+    );
+
+    let cursor = *page1_ids.last().unwrap();
+    let page2 = repo.list(None, Some(cursor), 2).await.unwrap();
+    let page2_ids: Vec<i64> = page2.iter().map(|r| r.id).collect();
+    assert_eq!(page2_ids.len(), 2);
+    assert!(
+        page2_ids.iter().all(|id| !page1_ids.contains(id)),
+        "pages are disjoint"
+    );
+    assert!(
+        page2_ids[0] > cursor,
+        "page 2 starts strictly after the cursor"
+    );
+
+    let _ = tx;
+    sqlx::query("DELETE FROM report WHERE reporter_id = $1")
+        .bind(reporter)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(reporter)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+#[db_test]
+async fn proposal_list_keyset_pagination_is_disjoint_and_stable(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let proposer = committed_user(tx, "m5-infra-prop-keyset@example.com", "USER").await;
+    const MARK: &str = "m5-infra-prop-keyset";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let loc = ParkingBuilder::new()
+        .with_name("Infra Proposal Keyset")
+        .with_fixture_tag(MARK)
+        .create(tx.executor())
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+    let id = loc.id();
+
+    let mut ids = Vec::new();
+    for _ in 0..5 {
+        let (pid,): (i64,) = sqlx::query_as(
+            "INSERT INTO parking_proposal (location_id, proposer_id, base_version, kind, proposed, status) \
+             VALUES ($1, $2, 1, 'change_existence', '{\"existence\":\"removed\"}', 'PENDING') RETURNING id")
+            .bind(id).bind(proposer).fetch_one(&pool().await).await.unwrap();
+        ids.push(pid);
+    }
+    sqlx::query("UPDATE parking_proposal SET created_at = now() WHERE id = ANY($1)")
+        .bind(&ids)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+
+    let repo = SqlxModerationRepository::new(db().await);
+    let page1 = repo.list_pending_proposals(None, 2).await.unwrap();
+    let page1_ids: Vec<i64> = page1.iter().map(|p| p.id).collect();
+    assert_eq!(page1_ids.len(), 2);
+    assert!(
+        page1_ids.windows(2).all(|w| w[0] < w[1]),
+        "ascending id order"
+    );
+
+    let cursor = *page1_ids.last().unwrap();
+    let page2 = repo.list_pending_proposals(Some(cursor), 2).await.unwrap();
+    let page2_ids: Vec<i64> = page2.iter().map(|p| p.id).collect();
+    assert_eq!(page2_ids.len(), 2);
+    assert!(
+        page2_ids.iter().all(|pid| !page1_ids.contains(pid)),
+        "pages are disjoint"
+    );
+    assert!(
+        page2_ids[0] > cursor,
+        "page 2 starts strictly after the cursor"
+    );
+
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(proposer)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+/// `queue_counts()` reads four global tables the whole suite shares, so a
+/// before/after delta taken via two separate pool connections can be thrown
+/// off by another test's concurrent commits (this happened in practice: a
+/// sibling test bulk-inserts 51 reports for its own "load more" fixture).
+/// Eliminate the race by taking both reads — and inserting the fixture rows
+/// — on one `REPEATABLE READ` transaction/connection: that transaction's
+/// snapshot is fixed at `BEGIN`, so no concurrently-committing test can be
+/// observed by either read, only this transaction's own inserts. Uses
+/// `SqlxModerationRepository::queue_counts_on`, the exact same query
+/// `ModerationRepository::queue_counts` runs against the pool, just pointed
+/// at this connection instead.
+#[db_test]
+async fn queue_counts_on_reflects_an_exact_delta_race_free(tx: &mut bikenest_test_support::TestTx) {
+    let moderator = committed_user(tx, "m5-infra-queue-counts@example.com", "MODERATOR").await;
+    const MARK: &str = "m5-infra-queue-counts";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let loc = ParkingBuilder::new()
+        .with_name("Infra Queue Counts")
+        .with_fixture_tag(MARK)
+        .create(tx.executor())
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+    let id = loc.id();
+
+    let pool_ref = pool().await;
+    let mut isolated = pool_ref.begin().await.unwrap();
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *isolated)
+        .await
+        .unwrap();
+
+    let before = SqlxModerationRepository::queue_counts_on(&mut *isolated)
+        .await
+        .unwrap();
+
+    // One fresh row in each of the four counted categories, on the same
+    // isolated connection.
+    sqlx::query(
+        "INSERT INTO parking_photo (location_id, storage_key, content_type, moderation_state) \
+         VALUES ($1, 'm5-infra-queue-counts/pending.jpg', 'image/jpeg', 'PENDING_REVIEW')",
+    )
+    .bind(id)
+    .execute(&mut *isolated)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO report (reporter_id, target_type, target_id, reason, state) \
+         VALUES ($1, 'parking', $2, 'other', 'OPEN')",
+    )
+    .bind(moderator)
+    .bind(id)
+    .execute(&mut *isolated)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO report (reporter_id, target_type, target_id, reason, state) \
+         VALUES ($1, 'parking_photo', $2, 'other', 'UNDER_REVIEW')",
+    )
+    .bind(moderator)
+    .bind(id)
+    .execute(&mut *isolated)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO parking_proposal (location_id, proposer_id, base_version, kind, proposed, status) \
+         VALUES ($1, $2, 1, 'change_existence', '{\"existence\":\"removed\"}', 'PENDING')",
+    )
+    .bind(id)
+    .bind(moderator)
+    .execute(&mut *isolated)
+    .await
+    .unwrap();
+
+    let after = SqlxModerationRepository::queue_counts_on(&mut *isolated)
+        .await
+        .unwrap();
+
+    assert_eq!(after.pending_photos - before.pending_photos, 1);
+    assert_eq!(after.open_reports - before.open_reports, 1);
+    assert_eq!(after.under_review_reports - before.under_review_reports, 1);
+    assert_eq!(after.pending_proposals - before.pending_proposals, 1);
+
+    // Rolled back, not committed: the fixture rows never become visible to
+    // any other connection (including the pool-backed `queue_counts()`), so
+    // no separate cleanup is needed for them.
+    isolated.rollback().await.unwrap();
+
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(moderator)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}

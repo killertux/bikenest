@@ -173,6 +173,28 @@ closed afterwards, so `DB_STATEMENT_TIMEOUT_MS` (§2) never aborts an index buil
 on a cold database, and the relaxed setting never leaks back into request
 handling.
 
+**PostGIS prerequisite.** `0001_init.sql` runs `CREATE EXTENSION IF NOT EXISTS
+postgis`, which requires the PostGIS extension to be *installed* on the target
+Postgres instance, not merely permitted by SQL — on a self-managed box that
+means the `postgresql-*-postgis-*` package (or an image that bundles it, e.g.
+`postgis/postgis`); on a managed provider (RDS, Cloud SQL, etc.) it means
+adding `postgis` to that provider's extension allowlist *before* the first
+deploy. Missing this fails the very first migration, not a later one.
+
+**Building new indexes on a live database.** Every `CREATE INDEX` in a
+migration runs inside `sqlx`'s migration transaction, which takes a normal
+(non-concurrent) lock for the build's duration — acceptable against an empty
+or small table (dev, first deploy), but a normal-priority lock on a large,
+already-populated table (e.g. `parking_location`, `report`, `audit_events`)
+blocks writers for as long as the build takes. For an index migration against
+a table with real production volume, build the equivalent index with `CREATE
+INDEX CONCURRENTLY` by hand, out of band, *before* shipping the release that
+adds it as a plain (transactional) migration — `CONCURRENTLY` cannot run
+inside a transaction block, so it is never something a `migrations/*.sql`
+file can do on its own. If a concurrent build fails partway (it can leave an
+`INVALID` index behind), `DROP INDEX` the invalid one and retry rather than
+letting the later transactional migration collide with it.
+
 ## 5. Providers
 
 The map/tile, geocoder, email, OAuth and object-storage integrations

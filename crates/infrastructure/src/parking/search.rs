@@ -1,6 +1,6 @@
 //! SQL-backed parking search (REQUIREMENTS §9, §31–§32).
 //!
-//! One hand-written, compile-time-checked query. All sorts normalize to an
+//! One hand-written, runtime-checked query. All sorts normalize to an
 //! ascending `sort_key` (distance keeps its value; the others negate), so a
 //! single keyset predicate `(sort_key, id) > ($v, $id)` paginates every
 //! SQL-side sort. `Recommended` paginates in the application layer.

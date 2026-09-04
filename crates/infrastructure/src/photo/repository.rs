@@ -194,24 +194,45 @@ impl PhotoRepository for SqlxPhotoRepository {
         })
     }
 
-    async fn list_pending(&self) -> Result<Vec<PendingPhoto>, PhotoError> {
+    /// Oldest first, keyset-paginated on `(created_at, id)`. Unlike the
+    /// single-table listers, `id` alone can't be the cursor here: the two
+    /// UNIONed tables (`parking_photo`, `review_photo`) have independent
+    /// `id` sequences, so the pair — compared as a row constructor — is
+    /// wrapped around the union rather than pushed into either branch.
+    async fn list_pending(
+        &self,
+        after: Option<(chrono::DateTime<chrono::Utc>, i64)>,
+        limit: i64,
+    ) -> Result<Vec<PendingPhoto>, PhotoError> {
+        let limit = limit.clamp(1, 200);
+        let (after_at, after_id) = match after {
+            Some((at, id)) => (Some(at), Some(id)),
+            None => (None, None),
+        };
         let rows = sqlx::query_as::<_, PendingRow>(
             r#"
-            SELECT p.id, 'parking' AS kind, p.location_id AS parent_id, l.name AS parent_name,
-                   p.storage_key, p.thumbnail_key, p.alt, p.width, p.height, p.uploader_id, p.created_at
-            FROM parking_photo p
-            JOIN parking_location l ON l.id = p.location_id
-            WHERE p.moderation_state = 'PENDING_REVIEW'
-            UNION ALL
-            SELECT p.id, 'review' AS kind, r.location_id AS parent_id, l.name AS parent_name,
-                   p.storage_key, p.thumbnail_key, NULL::text AS alt, p.width, p.height, p.uploader_id, p.created_at
-            FROM review_photo p
-            JOIN review r ON r.id = p.review_id
-            JOIN parking_location l ON l.id = r.location_id
-            WHERE p.moderation_state = 'PENDING_REVIEW'
+            SELECT * FROM (
+                SELECT p.id, 'parking' AS kind, p.location_id AS parent_id, l.name AS parent_name,
+                       p.storage_key, p.thumbnail_key, p.alt, p.width, p.height, p.uploader_id, p.created_at
+                FROM parking_photo p
+                JOIN parking_location l ON l.id = p.location_id
+                WHERE p.moderation_state = 'PENDING_REVIEW'
+                UNION ALL
+                SELECT p.id, 'review' AS kind, r.location_id AS parent_id, l.name AS parent_name,
+                       p.storage_key, p.thumbnail_key, NULL::text AS alt, p.width, p.height, p.uploader_id, p.created_at
+                FROM review_photo p
+                JOIN review r ON r.id = p.review_id
+                JOIN parking_location l ON l.id = r.location_id
+                WHERE p.moderation_state = 'PENDING_REVIEW'
+            ) pending
+            WHERE $1::timestamptz IS NULL OR (created_at, id) > ($1::timestamptz, $2::bigint)
             ORDER BY created_at, id
+            LIMIT $3::bigint
             "#,
         )
+        .bind(after_at)
+        .bind(after_id)
+        .bind(limit)
         .fetch_all(self.db.pool())
         .await
         .map_err(|e| db_err("photo.list_pending", e))?;

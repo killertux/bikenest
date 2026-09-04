@@ -76,15 +76,24 @@ impl ReportRepository for FakeReports {
         );
         Ok(id)
     }
-    async fn list(&self, state: Option<ReportState>) -> Result<Vec<Report>, ModerationError> {
-        Ok(self
+    async fn list(
+        &self,
+        state: Option<ReportState>,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<Report>, ModerationError> {
+        let mut rows: Vec<Report> = self
             .rows
             .lock()
             .unwrap()
             .values()
             .filter(|r| state.is_none_or(|s| r.state == s))
+            .filter(|r| after_id.is_none_or(|after| r.id > after))
             .cloned()
-            .collect())
+            .collect();
+        rows.sort_by_key(|r| r.id);
+        rows.truncate(limit.clamp(1, 200) as usize);
+        Ok(rows)
     }
     async fn get(&self, id: i64) -> Result<Option<Report>, ModerationError> {
         Ok(self.rows.lock().unwrap().get(&id).cloned())
@@ -188,8 +197,30 @@ impl ModerationRepository for FakeModeration {
         self.parking_states.lock().unwrap().insert(id, to);
         Ok(())
     }
-    async fn list_pending_proposals(&self) -> Result<Vec<Proposal>, ModerationError> {
-        Ok(self.pending_proposals.lock().unwrap().clone())
+    async fn list_pending_proposals(
+        &self,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<Proposal>, ModerationError> {
+        let mut props: Vec<Proposal> = self
+            .pending_proposals
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| after_id.is_none_or(|after| p.id > after))
+            .cloned()
+            .collect();
+        props.sort_by_key(|p| p.id);
+        props.truncate(limit.clamp(1, 200) as usize);
+        Ok(props)
+    }
+    async fn queue_counts(&self) -> Result<bikenest_application::QueueCounts, ModerationError> {
+        Ok(bikenest_application::QueueCounts {
+            pending_photos: 0,
+            open_reports: 0,
+            under_review_reports: 0,
+            pending_proposals: self.pending_proposals.lock().unwrap().len() as i64,
+        })
     }
     async fn get_proposal(&self, id: i64) -> Result<Option<Proposal>, ModerationError> {
         Ok(self
@@ -251,6 +282,8 @@ impl ContributionHistoryReader for FakeHistory {
     async fn history(
         &self,
         _u: UserId,
+        _after: Option<(chrono::DateTime<chrono::Utc>, i64)>,
+        _limit: i64,
     ) -> Result<Vec<ContributionItem>, bikenest_application::ContributionError> {
         Ok(Vec::new())
     }
@@ -670,11 +703,11 @@ async fn without_moderator_role_all_actions_are_unauthorized() {
         Err(ModerationError::NotAuthorized)
     ));
     assert!(matches!(
-        h.service.list_pending_proposals(&plain).await,
+        h.service.list_pending_proposals(&plain, None, 50).await,
         Err(ModerationError::NotAuthorized)
     ));
     assert!(matches!(
-        h.service.list_reports(&plain, None).await,
+        h.service.list_reports(&plain, None, None, 50).await,
         Err(ModerationError::NotAuthorized)
     ));
 }

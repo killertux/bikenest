@@ -262,8 +262,15 @@ pub trait PhotoRepository: Send + Sync {
         moderator: UserId,
         reason: &str,
     ) -> Result<RejectedPhoto, PhotoError>;
-    /// The full pending queue, oldest first, across both kinds and tables.
-    async fn list_pending(&self) -> Result<Vec<PendingPhoto>, PhotoError>;
+    /// The pending queue, oldest first, across both kinds and tables —
+    /// keyset-paginated on `(created_at, id)` (the two tables' `id` sequences
+    /// are independent, so the cursor needs the timestamp too). `after` is
+    /// the last row's `(created_at, id)` from the previous page.
+    async fn list_pending(
+        &self,
+        after: Option<(DateTime<Utc>, i64)>,
+        limit: i64,
+    ) -> Result<Vec<PendingPhoto>, PhotoError>;
     /// A single photo's moderation view (state + derivative keys).
     async fn get_for_moderation(
         &self,
@@ -558,13 +565,16 @@ impl PhotoService {
         Ok(())
     }
 
-    /// The full pending queue (both kinds). The web layer resolves presigned URLs.
+    /// The pending queue (both kinds), bounded + keyset-paginated. The web
+    /// layer resolves presigned URLs.
     pub async fn list_pending_photos(
         &self,
         moderator: &crate::auth::AuthenticatedUser,
+        after: Option<(DateTime<Utc>, i64)>,
+        limit: i64,
     ) -> Result<Vec<PendingPhoto>, PhotoError> {
         self.require_moderator(moderator)?;
-        self.deps.repository.list_pending().await
+        self.deps.repository.list_pending(after, limit).await
     }
 
     async fn audit(

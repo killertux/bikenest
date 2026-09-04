@@ -21,6 +21,51 @@ impl SqlxModerationRepository {
     }
 }
 
+/// The M1 dashboard's four counts, in one statement (four scalar subqueries).
+const QUEUE_COUNTS_SQL: &str = r#"
+    SELECT
+        (SELECT COUNT(*) FROM parking_photo WHERE moderation_state = 'PENDING_REVIEW')
+      + (SELECT COUNT(*) FROM review_photo WHERE moderation_state = 'PENDING_REVIEW')
+        AS pending_photos,
+        (SELECT COUNT(*) FROM report WHERE state = 'OPEN') AS open_reports,
+        (SELECT COUNT(*) FROM report WHERE state = 'UNDER_REVIEW') AS under_review_reports,
+        (SELECT COUNT(*) FROM parking_proposal WHERE status = 'PENDING') AS pending_proposals
+"#;
+
+#[derive(sqlx::FromRow)]
+struct QueueCountsRow {
+    pending_photos: i64,
+    open_reports: i64,
+    under_review_reports: i64,
+    pending_proposals: i64,
+}
+
+impl SqlxModerationRepository {
+    /// Runs the dashboard-counts query against any executor — the pool (what
+    /// [`ModerationRepository::queue_counts`] uses) or a specific
+    /// connection/transaction. Exposed so a test can take a race-free
+    /// before/after delta by running both reads (and the fixture insert
+    /// between them) on the *same* connection, immune to what other
+    /// concurrently-running tests commit to these same global tables.
+    pub async fn queue_counts_on<'e, E>(
+        executor: E,
+    ) -> Result<bikenest_application::QueueCounts, ModerationError>
+    where
+        E: sqlx::PgExecutor<'e>,
+    {
+        let row = sqlx::query_as::<_, QueueCountsRow>(QUEUE_COUNTS_SQL)
+            .fetch_one(executor)
+            .await
+            .map_err(|e| db_err("moderation.queue_counts", e))?;
+        Ok(bikenest_application::QueueCounts {
+            pending_photos: row.pending_photos,
+            open_reports: row.open_reports,
+            under_review_reports: row.under_review_reports,
+            pending_proposals: row.pending_proposals,
+        })
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct ProposalRow {
     id: i64,
@@ -210,21 +255,54 @@ impl ModerationRepository for SqlxModerationRepository {
         Ok(())
     }
 
-    async fn list_pending_proposals(&self) -> Result<Vec<Proposal>, ModerationError> {
-        let rows = sqlx::query_as::<_, ProposalRow>(
-            r#"
-            SELECT p.id, p.location_id, l.name AS location_name, p.proposer_id, p.base_version,
-                   p.kind, p.proposed, p.status, p.created_at
-            FROM parking_proposal p
-            JOIN parking_location l ON l.id = p.location_id
-            WHERE p.status = 'PENDING'
-            ORDER BY p.created_at, p.id
-            "#,
-        )
-        .fetch_all(self.db.pool())
-        .await
-        .map_err(|e| db_err("moderation.list_pending_proposals", e))?;
+    /// Oldest first (`id ASC`), same reasoning as `report.list`: a FIFO queue
+    /// with a simple, exact keyset cursor.
+    async fn list_pending_proposals(
+        &self,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<Proposal>, ModerationError> {
+        let limit = limit.clamp(1, 200);
+        let rows = match after_id {
+            Some(after) => sqlx::query_as::<_, ProposalRow>(
+                r#"
+                SELECT p.id, p.location_id, l.name AS location_name, p.proposer_id, p.base_version,
+                       p.kind, p.proposed, p.status, p.created_at
+                FROM parking_proposal p
+                JOIN parking_location l ON l.id = p.location_id
+                WHERE p.status = 'PENDING' AND p.id > $1
+                ORDER BY p.id ASC
+                LIMIT $2
+                "#,
+            )
+            .bind(after)
+            .bind(limit)
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| db_err("moderation.list_pending_proposals", e))?,
+            None => sqlx::query_as::<_, ProposalRow>(
+                r#"
+                SELECT p.id, p.location_id, l.name AS location_name, p.proposer_id, p.base_version,
+                       p.kind, p.proposed, p.status, p.created_at
+                FROM parking_proposal p
+                JOIN parking_location l ON l.id = p.location_id
+                WHERE p.status = 'PENDING'
+                ORDER BY p.id ASC
+                LIMIT $1
+                "#,
+            )
+            .bind(limit)
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| db_err("moderation.list_pending_proposals", e))?,
+        };
         rows.into_iter().map(map_proposal).collect()
+    }
+
+    /// The M1 dashboard's four counts in one statement (four scalar
+    /// subqueries), instead of loading and `.len()`-ing four full lists.
+    async fn queue_counts(&self) -> Result<bikenest_application::QueueCounts, ModerationError> {
+        Self::queue_counts_on(self.db.pool()).await
     }
 
     async fn get_proposal(&self, id: i64) -> Result<Option<Proposal>, ModerationError> {

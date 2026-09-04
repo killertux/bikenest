@@ -444,7 +444,7 @@ async fn repo_max_position_and_queue_ordering(tx: &mut bikenest_test_support::Te
 
     // Both fixture photos must appear in the queue (it may also hold other
     // tests' pending rows — DB is shared), oldest first relative to each other.
-    let list = repo.list_pending().await.unwrap();
+    let list = repo.list_pending(None, 200).await.unwrap();
     let ids: Vec<i64> = list.iter().map(|p| p.id).collect();
     assert!(ids.contains(&first) && ids.contains(&second));
     let i_first = ids.iter().position(|&i| i == first).unwrap();

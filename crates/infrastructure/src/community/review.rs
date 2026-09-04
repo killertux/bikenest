@@ -120,18 +120,52 @@ impl ReviewRepository for SqlxReviewRepository {
         row.map(review_from_row).transpose()
     }
 
-    async fn list_active(&self, location_id: i64) -> Result<Vec<Review>, ContributionError> {
-        let rows = sqlx::query_as::<_, ReviewRow>(
-            r#"
-            SELECT id, location_id, author_id, rating, body, created_at, updated_at
-            FROM review
-            WHERE location_id = $1 AND moderation_state = 'ACTIVE'
-            ORDER BY created_at DESC, id DESC
-            "#,
-        )
-        .bind(location_id)
-        .fetch_all(self.db.pool())
-        .await
+    async fn list_active(
+        &self,
+        location_id: i64,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<Review>, ContributionError> {
+        let limit = limit.clamp(1, 200);
+        // Cursors on `id` alone (not the full `(created_at, id)` sort key):
+        // `id` is an IDENTITY column assigned in the same insert as
+        // `created_at`'s `now()` default, so the two stay co-monotonic for
+        // this table's write pattern (one row per upsert, no backfills) —
+        // the `review_active_location_idx` (location_id, created_at DESC, id
+        // DESC) still drives the ORDER BY, the cursor just narrows on `id`.
+        let rows = match after_id {
+            Some(after) => {
+                sqlx::query_as::<_, ReviewRow>(
+                    r#"
+                    SELECT id, location_id, author_id, rating, body, created_at, updated_at
+                    FROM review
+                    WHERE location_id = $1 AND moderation_state = 'ACTIVE' AND id < $2
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT $3
+                    "#,
+                )
+                .bind(location_id)
+                .bind(after)
+                .bind(limit)
+                .fetch_all(self.db.pool())
+                .await
+            }
+            None => {
+                sqlx::query_as::<_, ReviewRow>(
+                    r#"
+                    SELECT id, location_id, author_id, rating, body, created_at, updated_at
+                    FROM review
+                    WHERE location_id = $1 AND moderation_state = 'ACTIVE'
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT $2
+                    "#,
+                )
+                .bind(location_id)
+                .bind(limit)
+                .fetch_all(self.db.pool())
+                .await
+            }
+        }
         .map_err(|e| db_err("review.list_active", e))?;
         rows.into_iter().map(review_from_row).collect()
     }

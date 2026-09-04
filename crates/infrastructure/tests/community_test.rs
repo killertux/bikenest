@@ -8,8 +8,8 @@
 
 use bikenest_application::{
     ContributionError, ContributionHistoryReader, FavoriteRepository, NewParkingLocation,
-    NewProposal, NewVerification, ParkingContributionRepository, ParkingEdit, ReviewRepository,
-    VerificationRepository,
+    NewProposal, NewVerification, ParkingContributionRepository, ParkingEdit, ReviewPhotosReader,
+    ReviewRepository, VerificationRepository,
 };
 use bikenest_domain::{
     AttributeResult, Cost, CurrencyCode, ExistenceResult, GeoPoint, Money, OpeningHours,
@@ -17,7 +17,7 @@ use bikenest_domain::{
 };
 use bikenest_infrastructure::{
     Db, SqlxContributionHistoryReader, SqlxFavoriteRepository, SqlxParkingContributionRepository,
-    SqlxReviewRepository, SqlxVerificationRepository,
+    SqlxReviewPhotosReader, SqlxReviewRepository, SqlxVerificationRepository,
 };
 use bikenest_test_support::{UserBuilder, db_test, pool};
 
@@ -95,7 +95,7 @@ async fn create_writes_location_revision_and_reads_back(tx: &mut bikenest_test_s
     assert_eq!(current.version(), 1);
     assert_eq!(current.name(), "Estação Centro");
 
-    let history = repo.revision_history(id).await.unwrap();
+    let history = repo.revision_history(id, 50).await.unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].version, 1);
     use bikenest_domain::ChangeKind;
@@ -149,10 +149,147 @@ async fn optimistic_edit_wins_only_on_expected_version(tx: &mut bikenest_test_su
     assert_eq!(current.version(), 2);
 
     // History now has two rows (create + edit).
-    let history = repo.revision_history(id).await.unwrap();
+    let history = repo.revision_history(id, 50).await.unwrap();
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].version, 2);
     assert_eq!(history[1].version, 1);
+
+    cleanup_user(email).await;
+}
+
+#[db_test]
+async fn write_security_upserts_all_features_and_updates_states_in_place(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let email = "c-write-security@test.dev";
+    let user = fresh_user(tx, email).await;
+    let repo = SqlxParkingContributionRepository::new(db().await);
+
+    let mut input = new_location();
+    input.security = vec![SecurityFeature::new("cctv", SecurityState::Yes)];
+    let id = repo.create(&input, user, chrono::Utc::now()).await.unwrap();
+
+    async fn rows(id: i64) -> Vec<(String, i16)> {
+        sqlx::query_as(
+            "SELECT feature_code, state FROM parking_security WHERE location_id = $1 ORDER BY feature_code",
+        )
+        .bind(id)
+        .fetch_all(&pool().await)
+        .await
+        .unwrap()
+    }
+
+    let after_create = rows(id).await;
+    assert_eq!(
+        after_create.len(),
+        8,
+        "one row per SECURITY_FEATURE_CODES entry, regardless of how many the caller set"
+    );
+    let cctv = after_create.iter().find(|(c, _)| c == "cctv").unwrap();
+    assert_eq!(cctv.1, 1, "cctv=Yes");
+    let indoor = after_create.iter().find(|(c, _)| c == "indoor").unwrap();
+    assert_eq!(indoor.1, 0, "unset features default to Unknown");
+
+    // An edit flips some states; the row set must still be exactly 8 (an
+    // upsert in place), not 16 (a stale DELETE-then-INSERT bug would double
+    // them, and a missing upsert would leave the old states unchanged).
+    let edit = ParkingEdit {
+        name: input.name.clone(),
+        address: input.address.clone(),
+        description: None,
+        parking_type: ParkingType::Rack,
+        cost: Cost::Free,
+        hours: OpeningHours::Unknown,
+        security: vec![
+            SecurityFeature::new("cctv", SecurityState::No),
+            SecurityFeature::new("indoor", SecurityState::Yes),
+        ],
+    };
+    repo.apply_edit(id, 1, &edit, user, chrono::Utc::now())
+        .await
+        .unwrap();
+
+    let after_edit = rows(id).await;
+    assert_eq!(after_edit.len(), 8, "still exactly 8 rows after the edit");
+    let cctv = after_edit.iter().find(|(c, _)| c == "cctv").unwrap();
+    assert_eq!(cctv.1, 2, "cctv flipped to No");
+    let indoor = after_edit.iter().find(|(c, _)| c == "indoor").unwrap();
+    assert_eq!(indoor.1, 1, "indoor flipped to Yes");
+    let well_lit = after_edit.iter().find(|(c, _)| c == "well_lit").unwrap();
+    assert_eq!(well_lit.1, 0, "features absent from the edit fall back to Unknown");
+
+    cleanup_user(email).await;
+}
+
+#[db_test]
+async fn write_hours_replaces_ranges_on_edit(tx: &mut bikenest_test_support::TestTx) {
+    use bikenest_domain::TimeRange;
+    let email = "c-write-hours@test.dev";
+    let user = fresh_user(tx, email).await;
+    let repo = SqlxParkingContributionRepository::new(db().await);
+
+    let mut input = new_location();
+    input.hours = OpeningHours::weekly(vec![
+        (
+            1,
+            TimeRange::new(
+                chrono::NaiveTime::from_hms_opt(8, 0, 0).unwrap(),
+                chrono::NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+            ),
+        ),
+        (2, TimeRange::all_day()),
+    ]);
+    let id = repo.create(&input, user, chrono::Utc::now()).await.unwrap();
+
+    async fn day_rows(id: i64) -> Vec<i16> {
+        let mut days: Vec<(i16,)> =
+            sqlx::query_as("SELECT day_of_week FROM opening_hours WHERE location_id = $1 ORDER BY day_of_week")
+                .bind(id)
+                .fetch_all(&pool().await)
+                .await
+                .unwrap();
+        days.sort();
+        days.into_iter().map(|(d,)| d).collect()
+    }
+
+    assert_eq!(day_rows(id).await, vec![1, 2]);
+
+    // A completely different set of ranges must fully replace the old ones —
+    // not merge with them (the old DELETE-then-insert-per-row semantics, kept
+    // as DELETE + one multi-row `unnest` insert).
+    let edit = ParkingEdit {
+        name: input.name.clone(),
+        address: input.address.clone(),
+        description: None,
+        parking_type: ParkingType::Rack,
+        cost: Cost::Free,
+        hours: OpeningHours::weekly(vec![(
+            5,
+            TimeRange::new(
+                chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                chrono::NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+            ),
+        )]),
+        security: vec![],
+    };
+    repo.apply_edit(id, 1, &edit, user, chrono::Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(
+        day_rows(id).await,
+        vec![5],
+        "old ranges (days 1, 2) are gone; only the new range (day 5) remains"
+    );
+
+    // Unknown hours clear every range.
+    let clear = ParkingEdit {
+        hours: OpeningHours::Unknown,
+        ..edit
+    };
+    repo.apply_edit(id, 2, &clear, user, chrono::Utc::now())
+        .await
+        .unwrap();
+    assert!(day_rows(id).await.is_empty(), "Unknown hours leave no rows");
 
     cleanup_user(email).await;
 }
@@ -206,7 +343,7 @@ async fn edit_is_refused_for_a_location_that_is_not_active(
         assert_eq!(version, 1, "{state}: version untouched");
         assert_eq!(name, "Estação Centro", "{state}: row untouched");
         assert_eq!(
-            repo.revision_history(id).await.unwrap().len(),
+            repo.revision_history(id, 50).await.unwrap().len(),
             1,
             "{state}: no revision written"
         );
@@ -344,7 +481,7 @@ async fn review_upsert_recomputes_rating_and_appends_history(
         .await
         .unwrap();
 
-    let active = reviews.list_active(id).await.unwrap();
+    let active = reviews.list_active(id, None, 50).await.unwrap();
     assert_eq!(active.len(), 2);
 
     // Aggregate recomputed == direct COUNT/AVG.
@@ -367,7 +504,7 @@ async fn review_upsert_recomputes_rating_and_appends_history(
         .upsert_review(id, user, StarRating::new(2).unwrap(), &body2)
         .await
         .unwrap();
-    let active = reviews.list_active(id).await.unwrap();
+    let active = reviews.list_active(id, None, 50).await.unwrap();
     assert_eq!(active.len(), 2);
     let own = reviews.find_own(id, user).await.unwrap().unwrap();
     assert_eq!(own.rating.value(), 2);
@@ -443,9 +580,10 @@ async fn verification_still_exists_sets_last_verified_at(tx: &mut bikenest_test_
     )
     .await
     .unwrap();
-    let summary = ver.attribute_summary(id).await.unwrap();
+    let (summary, count_before_park) = ver.attribute_and_parked_summary(id).await.unwrap();
     assert_eq!(summary.len(), 1);
     assert_eq!(summary[0].incorrect, 1);
+    assert_eq!(count_before_park, 0);
 
     // Parked-here count + expiry set.
     ver.record(
@@ -457,8 +595,10 @@ async fn verification_still_exists_sets_last_verified_at(tx: &mut bikenest_test_
     )
     .await
     .unwrap();
-    let count = ver.parked_here_count(id).await.unwrap();
+    let (summary, count) = ver.attribute_and_parked_summary(id).await.unwrap();
     assert_eq!(count, 1);
+    // The fold still returns the same attribute tally alongside the count.
+    assert_eq!(summary.len(), 1);
     let exp: (Option<chrono::DateTime<chrono::Utc>>,) =
         sqlx::query_as("SELECT expires_at FROM verification WHERE kind = 'parked_here' LIMIT 1")
             .fetch_one(db().await.pool())
@@ -585,11 +725,95 @@ async fn review_edit_does_not_unhide_a_hidden_review(tx: &mut bikenest_test_supp
         .unwrap();
     assert_eq!(state, "HIDDEN", "an author edit never restores a hidden review");
     assert!(
-        reviews.list_active(id).await.unwrap().is_empty(),
+        reviews.list_active(id, None, 50).await.unwrap().is_empty(),
         "a hidden review stays out of the public list"
     );
 
     cleanup_user(email).await;
+}
+
+#[db_test]
+async fn for_reviews_groups_by_review_and_orders_by_position(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let email = "c-review-photos@test.dev";
+    let user = fresh_user(tx, email).await;
+    let email2 = "c-review-photos-2@test.dev";
+    let user2 = fresh_user(tx, email2).await;
+    let repo = SqlxParkingContributionRepository::new(db().await);
+    let id = repo
+        .create(&new_location(), user, chrono::Utc::now())
+        .await
+        .unwrap();
+
+    let reviews = SqlxReviewRepository::new(db().await);
+    reviews
+        .upsert_review(
+            id,
+            user,
+            StarRating::new(5).unwrap(),
+            &ReviewBody::new("gostei").unwrap(),
+        )
+        .await
+        .unwrap();
+    reviews
+        .upsert_review(
+            id,
+            user2,
+            StarRating::new(4).unwrap(),
+            &ReviewBody::new("bom tambem").unwrap(),
+        )
+        .await
+        .unwrap();
+    let r1 = reviews.find_own(id, user).await.unwrap().unwrap().id;
+    let r2 = reviews.find_own(id, user2).await.unwrap().unwrap().id;
+
+    // Three APPROVED photos per review, inserted in non-sequential `position`
+    // order (2, 0, 1) — the reader must sort by `position`, not echo
+    // insertion/id order.
+    for (review_id, label) in [(r1, "r1"), (r2, "r2")] {
+        for (pos, suffix) in [(2, "c"), (0, "a"), (1, "b")] {
+            sqlx::query(
+                "INSERT INTO review_photo (review_id, storage_key, moderation_state, position) \
+                 VALUES ($1, $2, 'APPROVED', $3)",
+            )
+            .bind(review_id)
+            .bind(format!("{label}/{suffix}.jpg"))
+            .bind(pos)
+            .execute(&pool().await)
+            .await
+            .unwrap();
+        }
+    }
+    // A PENDING_REVIEW photo on r1 must never appear (only APPROVED renders).
+    sqlx::query(
+        "INSERT INTO review_photo (review_id, storage_key, moderation_state, position) \
+         VALUES ($1, 'r1/pending.jpg', 'PENDING_REVIEW', 3)",
+    )
+    .bind(r1)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+
+    let reader = SqlxReviewPhotosReader::new(db().await);
+    let grouped = reader.for_reviews(&[r1, r2]).await.unwrap();
+
+    assert_eq!(grouped.len(), 2, "both reviews have an entry");
+    let r1_keys: Vec<&str> = grouped[&r1].iter().map(|p| p.key.as_str()).collect();
+    assert_eq!(
+        r1_keys,
+        vec!["r1/a.jpg", "r1/b.jpg", "r1/c.jpg"],
+        "r1 ordered by position, pending photo excluded"
+    );
+    let r2_keys: Vec<&str> = grouped[&r2].iter().map(|p| p.key.as_str()).collect();
+    assert_eq!(
+        r2_keys,
+        vec!["r2/a.jpg", "r2/b.jpg", "r2/c.jpg"],
+        "r2 ordered by position independently of r1"
+    );
+
+    cleanup_user(email).await;
+    cleanup_user(email2).await;
 }
 
 #[db_test]
@@ -641,10 +865,83 @@ async fn favorite_toggle_is_idempotent(tx: &mut bikenest_test_support::TestTx) {
     assert!(fav.is_favorited(user, id).await.unwrap());
     assert!(!fav.toggle(user, id).await.unwrap()); // now unfavorited
     assert!(!fav.is_favorited(user, id).await.unwrap());
-    assert_eq!(fav.list(user).await.unwrap().len(), 0);
+    assert_eq!(fav.list(user, None, 50).await.unwrap().len(), 0);
 
     fav.toggle(user, id).await.unwrap();
-    assert_eq!(fav.list(user).await.unwrap(), vec![id]);
+    let listed = fav.list(user, None, 50).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|f| f.location_id).collect::<Vec<_>>(),
+        vec![id]
+    );
+
+    cleanup_user(email).await;
+}
+
+#[db_test]
+async fn favorite_list_orders_by_recency_and_pages_are_disjoint(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let email = "c-fav-recency@test.dev";
+    let user = fresh_user(tx, email).await;
+    let repo = SqlxParkingContributionRepository::new(db().await);
+    let fav = SqlxFavoriteRepository::new(db().await);
+
+    // Three locations, favorited in order oldest -> newest, with explicit
+    // `created_at` values so recency order is deterministic (a real `toggle`
+    // could otherwise land within the same millisecond).
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let id = repo
+            .create(&new_location(), user, chrono::Utc::now())
+            .await
+            .unwrap();
+        fav.toggle(user, id).await.unwrap();
+        ids.push(id);
+    }
+    let base = chrono::Utc::now() - chrono::Duration::hours(1);
+    for (i, id) in ids.iter().enumerate() {
+        sqlx::query("UPDATE favorite SET created_at = $1 WHERE user_id = $2 AND location_id = $3")
+            .bind(base + chrono::Duration::seconds(i as i64))
+            .bind(user.0)
+            .bind(id)
+            .execute(&pool().await)
+            .await
+            .unwrap();
+    }
+    let (oldest, middle, newest) = (ids[0], ids[1], ids[2]);
+
+    // Page 1 (limit 2): the two most recently favorited, newest first.
+    let page1 = fav.list(user, None, 2).await.unwrap();
+    let page1_ids: Vec<i64> = page1.iter().map(|f| f.location_id).collect();
+    assert_eq!(page1_ids, vec![newest, middle], "newest favorited first");
+
+    // Page 2, cursored from the last item on page 1: the remaining (oldest)
+    // one, disjoint from page 1.
+    let cursor = page1.last().unwrap();
+    let page2 = fav
+        .list(user, Some((cursor.created_at, cursor.location_id)), 2)
+        .await
+        .unwrap();
+    let page2_ids: Vec<i64> = page2.iter().map(|f| f.location_id).collect();
+    assert_eq!(page2_ids, vec![oldest]);
+    assert!(
+        page2_ids.iter().all(|id| !page1_ids.contains(id)),
+        "pages are disjoint"
+    );
+
+    // A newly favorited location (real `now()`, after all three backdated
+    // rows) appears first.
+    let fresh_id = repo
+        .create(&new_location(), user, chrono::Utc::now())
+        .await
+        .unwrap();
+    fav.toggle(user, fresh_id).await.unwrap();
+    let top = fav.list(user, None, 1).await.unwrap();
+    assert_eq!(
+        top.first().map(|f| f.location_id),
+        Some(fresh_id),
+        "a newly favorited location appears first"
+    );
 
     cleanup_user(email).await;
 }
@@ -663,7 +960,7 @@ async fn history_reads_contributions_across_sources(tx: &mut bikenest_test_suppo
     favorite.toggle(user, id).await.unwrap();
 
     let history = SqlxContributionHistoryReader::new(db().await);
-    let items = history.history(user).await.unwrap();
+    let items = history.history(user, None, 50).await.unwrap();
     let kinds: Vec<&str> = items.iter().map(|i| i.kind.as_str()).collect();
     assert!(kinds.contains(&"added"));
     assert!(kinds.contains(&"favorited"));

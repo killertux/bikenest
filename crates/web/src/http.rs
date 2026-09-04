@@ -170,7 +170,6 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
     );
     let contribution_service = ContributionService::new(ContributionDeps {
         tz: Box::new(OfflineTimezoneResolver::new()),
-        details: Box::new(SqlxParkingDetailsReader::new(db.clone())),
         contributions: Box::new(SqlxParkingContributionRepository::new(db.clone())),
         reviews: Box::new(SqlxReviewRepository::new(db.clone())),
         verifications: Box::new(SqlxVerificationRepository::new(db.clone())),
@@ -241,7 +240,6 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         .route("/robots.txt", get(robots_txt))
         .route("/sitemap.xml", get(sitemap_xml))
         .route("/lang/{code}", get(set_lang))
-        .route("/media/{*key}", get(media))
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         // --- Accounts & authentication (M2) ---
@@ -791,13 +789,14 @@ async fn parking_details(
             };
             let viewer = auth.user.as_ref().map(|u| u.id);
             // Community overlay (reviews, confidence, favorite, verification).
-            // A read failure degrades to the base detail page, never a 500.
+            // Reuses the location already loaded above instead of re-reading
+            // the aggregate. A read failure degrades to the base detail page,
+            // never a 500.
             let community = state
                 .contributions
-                .community_details(id, viewer)
+                .community_details(view.location.clone(), viewer)
                 .await
-                .ok()
-                .flatten();
+                .ok();
             let verified = auth.user.as_ref().map(|u| u.is_verified).unwrap_or(false);
             // Post-action confirmation (e.g. "this change will be reviewed").
             let notice = details_notice(tr, &q);
@@ -819,38 +818,6 @@ async fn parking_details(
         }
         Ok(None) => not_found_page(&headers, &state.map, tr),
         Err(_) => internal_error(&headers, &state.map, tr),
-    }
-}
-
-/// Serves an object-storage object behind a signed, expiring URL (Ledger #7,
-/// local-disk mode). Invalid/expired signatures and missing objects → 404
-/// (never reveal whether a key exists without a valid signature).
-#[derive(Debug, serde::Deserialize)]
-struct MediaParams {
-    #[serde(default)]
-    exp: u64,
-    #[serde(default)]
-    sig: String,
-}
-
-async fn media(
-    State(state): State<AppState>,
-    Path(key): Path<String>,
-    Query(params): Query<MediaParams>,
-) -> Response {
-    if !state.storage.verify_get(&key, params.exp, &params.sig) {
-        return (StatusCode::NOT_FOUND, "Not found").into_response();
-    }
-    match state.storage.get(&key).await {
-        Ok((bytes, content_type)) => (
-            [
-                (header::CONTENT_TYPE, content_type),
-                (header::CACHE_CONTROL, "private, max-age=3600".to_string()),
-            ],
-            bytes,
-        )
-            .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "Not found").into_response(),
     }
 }
 
@@ -971,10 +938,25 @@ async fn upload_photo(
 /// The `?done=…` flag a moderation action redirects a whole-document request
 /// back to its queue with. The value names the action, not the message key, so
 /// the URL never carries catalog internals.
+/// Default page size for the moderation queues and other bounded lists.
+/// Matches the audit viewer's convention.
+const DEFAULT_PAGE_LIMIT: i64 = 50;
+
 #[derive(Debug, Default, serde::Deserialize)]
 struct ModerationNotice {
     #[serde(default)]
     done: String,
+    /// Keyset cursor (photo queue only: `created_at` of the last item on the
+    /// previous page, RFC3339). Empty = first page.
+    #[serde(default)]
+    after_at: String,
+    /// Keyset cursor (the last item's id on the previous page). `0` = first page.
+    #[serde(default)]
+    after_id: i64,
+}
+
+fn parse_after_id(after_id: i64) -> Option<i64> {
+    (after_id > 0).then_some(after_id)
 }
 
 /// The queue banner for a `?done=…` flag, or nothing for an unknown value.
@@ -1010,15 +992,31 @@ async fn moderation_photos(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    let items = match state.photo.list_pending_photos(user).await {
+    let after = parse_datetime(&q.after_at).zip(parse_after_id(q.after_id));
+    let (items, next_url) = match state
+        .photo
+        .list_pending_photos(user, after, DEFAULT_PAGE_LIMIT)
+        .await
+    {
         Ok(photos) => {
             let mut items = Vec::with_capacity(photos.len());
             for p in &photos {
                 items.push(view::moderation_photo_vm(tr, &*state.storage, p).await);
             }
-            items
+            // A full page (== the limit) may have more; a short page is the end.
+            let next_url = (photos.len() as i64 == DEFAULT_PAGE_LIMIT)
+                .then(|| photos.last())
+                .flatten()
+                .map(|last| {
+                    format!(
+                        "/moderation/photos?after_at={}&after_id={}",
+                        urlencoding_rfc3339(last.created_at),
+                        last.id
+                    )
+                });
+            (items, next_url)
         }
-        Err(_) => Vec::new(),
+        Err(_) => (Vec::new(), None),
     };
     render(
         ModerationPhotosPage {
@@ -1031,9 +1029,19 @@ async fn moderation_photos(
             tr,
             items,
             notice: moderation_notice(tr, &q),
+            next_url,
         },
         StatusCode::OK,
     )
+}
+
+/// URL-encodes an RFC3339 timestamp for a query-string cursor value.
+fn urlencoding_rfc3339(at: chrono::DateTime<chrono::Utc>) -> String {
+    // The only characters RFC3339 introduces that aren't already URL-safe are
+    // `:` and `+`; percent-encode just those rather than pulling in a crate.
+    at.to_rfc3339()
+        .replace('+', "%2B")
+        .replace(':', "%3A")
 }
 
 /// Parse a `{kind}` path segment into a [`PhotoKind`].
@@ -1387,30 +1395,9 @@ async fn moderation_dashboard(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    let pending_photos = state
-        .photo
-        .list_pending_photos(user)
-        .await
-        .map(|p| p.len())
-        .unwrap_or(0);
-    let open_reports = state
-        .moderation
-        .list_reports(user, Some(ReportState::Open))
-        .await
-        .map(|r| r.len())
-        .unwrap_or(0);
-    let under_review_reports = state
-        .moderation
-        .list_reports(user, Some(ReportState::UnderReview))
-        .await
-        .map(|r| r.len())
-        .unwrap_or(0);
-    let pending_proposals = state
-        .moderation
-        .list_pending_proposals(user)
-        .await
-        .map(|p| p.len())
-        .unwrap_or(0);
+    // One statement (four scalar subqueries) instead of loading and
+    // `.len()`-ing four full lists.
+    let counts = state.moderation.queue_counts(user).await.unwrap_or_default();
     let is_admin = user.has_role(Role::Admin);
     render(
         ModerationDashboardPage {
@@ -1421,10 +1408,10 @@ async fn moderation_dashboard(
                 auth.csrf_value(),
             ),
             tr,
-            pending_photos,
-            open_reports,
-            under_review_reports,
-            pending_proposals,
+            pending_photos: counts.pending_photos,
+            open_reports: counts.open_reports,
+            under_review_reports: counts.under_review_reports,
+            pending_proposals: counts.pending_proposals,
             is_admin,
         },
         StatusCode::OK,
@@ -1439,6 +1426,9 @@ struct ReportFilterQuery {
     /// Set by a moderation action redirecting a whole-document request back here.
     #[serde(default)]
     done: String,
+    /// Keyset cursor: the last report id from the previous page. `0` = first page.
+    #[serde(default)]
+    after_id: i64,
 }
 
 async fn moderation_reports(
@@ -1457,14 +1447,26 @@ async fn moderation_reports(
     } else {
         ReportState::from_code(&q.state).ok()
     };
-    let items = state
+    let reports = state
         .moderation
-        .list_reports(user, state_filter)
+        .list_reports(
+            user,
+            state_filter,
+            parse_after_id(q.after_id),
+            DEFAULT_PAGE_LIMIT,
+        )
         .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|r| view::report_vm(tr, &r))
-        .collect();
+        .unwrap_or_default();
+    let next_url = (reports.len() as i64 == DEFAULT_PAGE_LIMIT)
+        .then(|| reports.last())
+        .flatten()
+        .map(|last| {
+            format!(
+                "/moderation/reports?state={}&after_id={}",
+                q.state, last.id
+            )
+        });
+    let items = reports.into_iter().map(|r| view::report_vm(tr, &r)).collect();
     render(
         ModerationReportsPage {
             layout: PageLayout::with_csrf(
@@ -1477,7 +1479,14 @@ async fn moderation_reports(
             state_filter: q.state,
             items,
             viewer_id: user.id.0,
-            notice: moderation_notice(tr, &ModerationNotice { done: q.done }),
+            notice: moderation_notice(
+                tr,
+                &ModerationNotice {
+                    done: q.done,
+                    ..Default::default()
+                },
+            ),
+            next_url,
         },
         StatusCode::OK,
     )
@@ -1620,11 +1629,16 @@ async fn moderation_proposals(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    let items = state
+    let proposals = state
         .moderation
-        .list_pending_proposals(user)
+        .list_pending_proposals(user, parse_after_id(q.after_id), DEFAULT_PAGE_LIMIT)
         .await
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let next_url = (proposals.len() as i64 == DEFAULT_PAGE_LIMIT)
+        .then(|| proposals.last())
+        .flatten()
+        .map(|last| format!("/moderation/proposals?after_id={}", last.id));
+    let items = proposals
         .into_iter()
         .map(|p| view::proposal_vm(tr, &p))
         .collect();
@@ -1639,6 +1653,7 @@ async fn moderation_proposals(
             tr,
             items,
             notice: moderation_notice(tr, &q),
+            next_url,
         },
         StatusCode::OK,
     )
@@ -1995,9 +2010,11 @@ async fn admin_user_contributions(
         .and_then(|users| users.into_iter().find(|u| u.id == target))
         .map(|u| u.email.to_string())
         .unwrap_or_else(|| format!("#{id}"));
+    // Bounded to the newest DEFAULT_PAGE_LIMIT entries; this admin inspection
+    // view has no "load more" control (out of WP11's named template list).
     let items = state
         .moderation
-        .user_contribution_history(user, target)
+        .user_contribution_history(user, target, None, DEFAULT_PAGE_LIMIT)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -3524,13 +3541,13 @@ async fn not_found(State(state): State<AppState>, locale: Locale, headers: Heade
 }
 
 /// Paths whose plain-text bodies are the contract, not a leaked failure: the
-/// probes, the media redirector and the static file service.
+/// probes and the static file service. (Media is served via direct S3
+/// presigned URLs, not through this app, so there is no media route here.)
 fn skips_styled_errors(path: &str) -> bool {
     path == "/healthz"
         || path == "/readyz"
         || path == "/robots.txt"
         || path == "/sitemap.xml"
-        || path.starts_with("/media/")
         || path.starts_with("/static/")
 }
 
@@ -4353,13 +4370,15 @@ async fn review_page(
     if let Err(resp) = auth.require_verified() {
         return resp;
     }
-    let own = state
-        .contributions
-        .community_details(id, auth.user.as_ref().map(|u| u.id))
-        .await
-        .ok()
-        .flatten()
-        .and_then(|c| c.own_review);
+    let own = match state.details.execute(id).await {
+        Ok(Some(view)) => state
+            .contributions
+            .community_details(view.location, auth.user.as_ref().map(|u| u.id))
+            .await
+            .ok()
+            .and_then(|c| c.own_review),
+        _ => None,
+    };
     render(
         ReviewFormPage {
             layout: PageLayout::with_csrf(
@@ -4477,9 +4496,10 @@ async fn review_post(
         Ok(()) => {
             // Attach any uploaded photos to the (just-upserted) review, held PENDING_REVIEW.
             if !photos.is_empty()
-                && let Ok(Some(own)) = state
+                && let Ok(Some(view)) = state.details.execute(id).await
+                && let Ok(own) = state
                     .contributions
-                    .community_details(id, Some(user.id))
+                    .community_details(view.location, Some(user.id))
                     .await
                 && let Some(review) = own.own_review
             {
@@ -4794,20 +4814,48 @@ async fn parking_favorite_post(
     }
 }
 
-async fn account_favorites(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
+/// Keyset cursor for the favorites page: `(created_at, location_id)`, the
+/// same compound shape as the photo queue's cursor (favorites keep recency
+/// order — "most recently favorited first" — which needs both fields).
+#[derive(Debug, Default, serde::Deserialize)]
+struct FavoritesQuery {
+    #[serde(default)]
+    after_at: String,
+    #[serde(default)]
+    after_id: i64,
+}
+
+async fn account_favorites(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Query(q): Query<FavoritesQuery>,
+) -> Response {
     let tr = Translator::new(locale);
     let user = match auth.require_user() {
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    let ids = state
+    let after = parse_datetime(&q.after_at).zip(parse_after_id(q.after_id));
+    let favorites = state
         .contributions
-        .list_favorites(user.id)
+        .list_favorites(user.id, after, DEFAULT_PAGE_LIMIT)
         .await
         .unwrap_or_default();
+    let next_url = (favorites.len() as i64 == DEFAULT_PAGE_LIMIT)
+        .then(|| favorites.last())
+        .flatten()
+        .map(|last| {
+            format!(
+                "/account/favorites?after_at={}&after_id={}",
+                urlencoding_rfc3339(last.created_at),
+                last.location_id
+            )
+        });
     let now = chrono::Utc::now();
     let mut items = Vec::new();
-    for tid in ids {
+    for entry in favorites {
+        let tid = entry.location_id;
         // Read each favorite as a summary card (best-effort; skip missing).
         if let Some(view) = state.details.execute(tid).await.ok().flatten() {
             let loc = &view.location;
@@ -4854,26 +4902,50 @@ async fn account_favorites(State(state): State<AppState>, locale: Locale, auth: 
             tr,
             items,
             notice: None,
+            next_url,
         },
         StatusCode::OK,
     )
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ContributionsQuery {
+    /// Keyset cursor (`at`, RFC3339) of the last item on the previous page.
+    #[serde(default)]
+    after_at: String,
+    /// Keyset cursor (opaque `id`) of the last item on the previous page.
+    #[serde(default)]
+    after_id: i64,
 }
 
 async fn account_contributions(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    Query(q): Query<ContributionsQuery>,
 ) -> Response {
     let tr = Translator::new(locale);
     let user = match auth.require_user() {
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    let items = state
+    let after = parse_datetime(&q.after_at).zip(parse_after_id(q.after_id));
+    let history = state
         .contributions
-        .contribution_history(user.id)
+        .contribution_history(user.id, after, DEFAULT_PAGE_LIMIT)
         .await
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let next_url = (history.len() as i64 == DEFAULT_PAGE_LIMIT)
+        .then(|| history.last())
+        .flatten()
+        .map(|last| {
+            format!(
+                "/account/contributions?after_at={}&after_id={}",
+                urlencoding_rfc3339(last.at),
+                last.id
+            )
+        });
+    let items = history
         .into_iter()
         .map(|i| view::contribution_vm(tr, &i))
         .collect();
@@ -4887,6 +4959,7 @@ async fn account_contributions(
             ),
             tr,
             items,
+            next_url,
         },
         StatusCode::OK,
     )

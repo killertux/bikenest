@@ -80,29 +80,73 @@ impl ReportRepository for SqlxReportRepository {
         Ok(row.id)
     }
 
-    async fn list(&self, state: Option<ReportState>) -> Result<Vec<Report>, ModerationError> {
-        let rows: Vec<ReportRow> = match state {
-            Some(s) => sqlx::query_as::<_, ReportRow>(
+    /// Oldest first (`id ASC` — the moderation queue is a FIFO work list; `id`
+    /// alone also gives a simple, exact keyset cursor with no tie-breaking
+    /// needed, unlike the old `created_at, id` order).
+    async fn list(
+        &self,
+        state: Option<ReportState>,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<Report>, ModerationError> {
+        let limit = limit.clamp(1, 200);
+        let rows: Vec<ReportRow> = match (state, after_id) {
+            (Some(s), Some(after)) => sqlx::query_as::<_, ReportRow>(
+                r#"
+                    SELECT id, reporter_id, target_type, target_id, reason, description, state,
+                           claimed_by, resolved_by, resolution_note, created_at, updated_at
+                    FROM report
+                    WHERE state = $1 AND id > $2
+                    ORDER BY id ASC
+                    LIMIT $3
+                    "#,
+            )
+            .bind(s.as_code())
+            .bind(after)
+            .bind(limit)
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| db_err("report.list", e))?,
+            (Some(s), None) => sqlx::query_as::<_, ReportRow>(
                 r#"
                     SELECT id, reporter_id, target_type, target_id, reason, description, state,
                            claimed_by, resolved_by, resolution_note, created_at, updated_at
                     FROM report
                     WHERE state = $1
-                    ORDER BY created_at, id
+                    ORDER BY id ASC
+                    LIMIT $2
                     "#,
             )
             .bind(s.as_code())
+            .bind(limit)
             .fetch_all(self.db.pool())
             .await
             .map_err(|e| db_err("report.list", e))?,
-            None => sqlx::query_as::<_, ReportRow>(
+            (None, Some(after)) => sqlx::query_as::<_, ReportRow>(
                 r#"
                     SELECT id, reporter_id, target_type, target_id, reason, description, state,
                            claimed_by, resolved_by, resolution_note, created_at, updated_at
                     FROM report
-                    ORDER BY created_at, id
+                    WHERE id > $1
+                    ORDER BY id ASC
+                    LIMIT $2
                     "#,
             )
+            .bind(after)
+            .bind(limit)
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| db_err("report.list", e))?,
+            (None, None) => sqlx::query_as::<_, ReportRow>(
+                r#"
+                    SELECT id, reporter_id, target_type, target_id, reason, description, state,
+                           claimed_by, resolved_by, resolution_note, created_at, updated_at
+                    FROM report
+                    ORDER BY id ASC
+                    LIMIT $1
+                    "#,
+            )
+            .bind(limit)
             .fetch_all(self.db.pool())
             .await
             .map_err(|e| db_err("report.list", e))?,

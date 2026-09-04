@@ -80,15 +80,6 @@ impl ObjectStorage for FakeStorage {
         self.deletes.lock().unwrap().push(key.to_string());
         Ok(())
     }
-    async fn get(
-        &self,
-        _key: &str,
-    ) -> Result<(Vec<u8>, String), bikenest_application::StorageError> {
-        Err(bikenest_application::StorageError::NotFound)
-    }
-    fn verify_get(&self, _key: &str, _exp: u64, _sig: &str) -> bool {
-        false
-    }
     async fn exists(&self, key: &str) -> Result<bool, bikenest_application::StorageError> {
         Ok(self.puts.lock().unwrap().iter().any(|k| k == key))
     }
@@ -219,7 +210,11 @@ impl PhotoRepository for FakePhotoRepo {
             thumbnail_key: p.thumbnail_key.clone(),
         })
     }
-    async fn list_pending(&self) -> Result<Vec<bikenest_application::PendingPhoto>, PhotoError> {
+    async fn list_pending(
+        &self,
+        _after: Option<(chrono::DateTime<chrono::Utc>, i64)>,
+        _limit: i64,
+    ) -> Result<Vec<bikenest_application::PendingPhoto>, PhotoError> {
         let photos = self.photos.lock().unwrap();
         Ok(photos
             .values()
@@ -519,15 +514,6 @@ async fn upload_compensates_deletes_row_when_second_put_fails() {
         async fn delete(&self, key: &str) -> Result<(), bikenest_application::StorageError> {
             self.0.deletes.lock().unwrap().push(key.to_string());
             Ok(())
-        }
-        async fn get(
-            &self,
-            _key: &str,
-        ) -> Result<(Vec<u8>, String), bikenest_application::StorageError> {
-            Err(bikenest_application::StorageError::NotFound)
-        }
-        fn verify_get(&self, _key: &str, _exp: u64, _sig: &str) -> bool {
-            false
         }
         async fn exists(&self, key: &str) -> Result<bool, bikenest_application::StorageError> {
             self.0.exists(key).await

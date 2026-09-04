@@ -292,7 +292,12 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         Ok(row.id)
     }
 
-    async fn revision_history(&self, id: i64) -> Result<Vec<RevisionSummary>, ContributionError> {
+    async fn revision_history(
+        &self,
+        id: i64,
+        limit: i64,
+    ) -> Result<Vec<RevisionSummary>, ContributionError> {
+        let limit = limit.clamp(1, 200);
         #[derive(sqlx::FromRow)]
         struct RevRow {
             version: i64,
@@ -306,9 +311,11 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             FROM parking_revision
             WHERE location_id = $1
             ORDER BY version DESC
+            LIMIT $2
             "#,
         )
         .bind(id)
+        .bind(limit)
         .fetch_all(self.db.pool())
         .await
         .map_err(|e| db_err("contribution.revision_history", e))?;
@@ -403,6 +410,11 @@ fn cost_parts(cost: &Cost) -> (&'static str, Option<i64>, Option<String>, Option
     }
 }
 
+/// Replaces a location's opening hours in two statements (was: one DELETE +
+/// one INSERT per row). `opening_hours` has no natural per-range unique key —
+/// an edit can change a range's times entirely, which is a different primary
+/// key tuple — so a delete-then-insert stays the right shape; the insert side
+/// is now one multi-row statement via `unnest` instead of N round trips.
 async fn write_hours(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: i64,
@@ -413,60 +425,83 @@ async fn write_hours(
         .execute(&mut **tx)
         .await
         .map_err(|e| db_err("contribution.write_hours", e))?;
-    if let OpeningHours::Weekly(rows) = hours {
+    if let OpeningHours::Weekly(rows) = hours
+        && !rows.is_empty()
+    {
+        let mut days: Vec<i16> = Vec::with_capacity(rows.len());
+        let mut opens: Vec<chrono::NaiveTime> = Vec::with_capacity(rows.len());
+        let mut closes: Vec<chrono::NaiveTime> = Vec::with_capacity(rows.len());
+        let mut all_day: Vec<bool> = Vec::with_capacity(rows.len());
         for (day, range) in rows {
-            let opens = if range.all_day {
+            days.push(i16::from(*day));
+            opens.push(if range.all_day {
                 chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()
             } else {
                 range.opens_at
-            };
-            let closes = if range.all_day {
+            });
+            closes.push(if range.all_day {
                 chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap()
             } else {
                 range.closes_at
-            };
-            sqlx::query(
-                "INSERT INTO opening_hours (location_id, day_of_week, opens_at, closes_at, all_day) VALUES ($1,$2,$3,$4,$5)",
-            )
-            .bind(id)
-            .bind(i16::from(*day))
-            .bind(opens)
-            .bind(closes)
-            .bind(range.all_day)
-            .execute(&mut **tx)
-            .await
-            .map_err(|e| db_err("contribution.write_hours", e))?;
+            });
+            all_day.push(range.all_day);
         }
+        sqlx::query(
+            r#"
+            INSERT INTO opening_hours (location_id, day_of_week, opens_at, closes_at, all_day)
+            SELECT $1, d, o, c, a
+            FROM UNNEST($2::smallint[], $3::time[], $4::time[], $5::bool[]) AS t(d, o, c, a)
+            "#,
+        )
+        .bind(id)
+        .bind(days)
+        .bind(opens)
+        .bind(closes)
+        .bind(all_day)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| db_err("contribution.write_hours", e))?;
     }
     Ok(())
 }
 
+/// Upserts a location's security attributes in one statement (was: one
+/// DELETE plus N single-row INSERTs). Every call writes all codes in
+/// [`bikenest_domain::SECURITY_FEATURE_CODES`] (defaulting to `Unknown` for
+/// codes the caller didn't set) — the row set per location never shrinks —
+/// so `ON CONFLICT … DO UPDATE` is equivalent to delete-then-insert with no
+/// separate DELETE needed.
 async fn write_security(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: i64,
     security: &[SecurityFeature],
 ) -> Result<(), ContributionError> {
-    sqlx::query("DELETE FROM parking_security WHERE location_id = $1")
-        .bind(id)
-        .execute(&mut **tx)
-        .await
-        .map_err(|e| db_err("contribution.write_security", e))?;
-    for code in bikenest_domain::SECURITY_FEATURE_CODES {
-        let state = security
-            .iter()
-            .find(|f| f.code() == *code)
-            .map(|f| f.state())
-            .unwrap_or(SecurityState::Unknown);
-        sqlx::query(
-            "INSERT INTO parking_security (location_id, feature_code, state) VALUES ($1, $2, $3)",
-        )
-        .bind(id)
-        .bind(code)
-        .bind(state_smallint(state))
-        .execute(&mut **tx)
-        .await
-        .map_err(|e| db_err("contribution.write_security", e))?;
-    }
+    let codes: Vec<&'static str> = bikenest_domain::SECURITY_FEATURE_CODES.to_vec();
+    let states: Vec<i16> = codes
+        .iter()
+        .map(|code| {
+            let state = security
+                .iter()
+                .find(|f| f.code() == *code)
+                .map(|f| f.state())
+                .unwrap_or(SecurityState::Unknown);
+            state_smallint(state)
+        })
+        .collect();
+    sqlx::query(
+        r#"
+        INSERT INTO parking_security (location_id, feature_code, state)
+        SELECT $1, c, s
+        FROM UNNEST($2::text[], $3::smallint[]) AS t(c, s)
+        ON CONFLICT (location_id, feature_code) DO UPDATE SET state = EXCLUDED.state
+        "#,
+    )
+    .bind(id)
+    .bind(codes)
+    .bind(states)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| db_err("contribution.write_security", e))?;
     Ok(())
 }
 

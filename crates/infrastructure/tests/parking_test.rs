@@ -8,8 +8,8 @@
 //! Everything else in the suite still uses transaction-per-test rollback.
 
 use bikenest_application::{
-    CostFilter, Cursor, ParkingDetailsReader, ParkingSearchReader, ReaderError, SearchInput,
-    SearchPage, SearchParking, SearchRequest, Sort,
+    CostFilter, Cursor, ParkingDetailsReader, ReaderError, SearchInput, SearchPage, SearchParking,
+    SearchRequest, Sort,
 };
 use bikenest_domain::{Cost, CurrencyCode, Money, ParkingType, PricingUnit};
 use bikenest_test_support::{ParkingBuilder, db_test, pool};
@@ -51,6 +51,15 @@ async fn cleanup_fixture(marker: &str) {
         .expect("cleanup fixture");
 }
 
+/// A fixed instant (noon in São Paulo — clear of every fixture's hour
+/// boundaries in this file) so `real_search` results never depend on the
+/// wall-clock time the suite happens to run at. Tests that specifically
+/// exercise "open now" behavior use `search_at`/`sql_open_now` with their own
+/// pinned instants instead.
+fn fixed_now() -> chrono::DateTime<chrono::Utc> {
+    instant_at("America/Sao_Paulo", 2026, 3, 10, 12, 0)
+}
+
 async fn real_search(
     request: &SearchRequest,
     limit: usize,
@@ -58,7 +67,7 @@ async fn real_search(
 ) -> Result<SearchPage, ReaderError> {
     let db = bikenest_infrastructure::Db::from_pool(pool().await);
     bikenest_infrastructure::SqlxParkingSearchReader::new(db)
-        .search(request, limit, apply_cursor)
+        .search_at(request, limit, apply_cursor, fixed_now())
         .await
 }
 
@@ -198,13 +207,13 @@ async fn open_now_filter_agrees_with_domain_for_all_day_hours(tx: &mut TestTx) {
     const MARK: &str = "fix-open-now";
     cleanup_fixture(MARK).await;
     let conn = tx.executor();
-    at(4.0, 30.0)
+    let all_day = at(4.0, 30.0)
         .with_fixture_tag(MARK)
         .with_all_day_hours(1..=7)
         .create(&mut *conn)
         .await
         .unwrap();
-    at(4.0, 60.0)
+    let narrow = at(4.0, 60.0)
         .with_fixture_tag(MARK)
         .with_hours(1..=7, (3, 0), (4, 0)) // open only 03:00–04:00 local
         .create(&mut *conn)
@@ -212,9 +221,22 @@ async fn open_now_filter_agrees_with_domain_for_all_day_hours(tx: &mut TestTx) {
         .unwrap();
     tx.commit_fixture().await;
 
+    // Pinned to noon in São Paulo (Tue 2026-03-10) — clear of the narrow
+    // 03:00-04:00 window regardless of when the suite itself runs, and
+    // checked against the domain rule directly (not just the SQL flag).
+    let now = instant_at("America/Sao_Paulo", 2026, 3, 10, 12, 0);
+    assert!(
+        domain_open_now(&all_day, now),
+        "domain: all-day location is open at noon"
+    );
+    assert!(
+        !domain_open_now(&narrow, now),
+        "domain: narrow 03:00-04:00 window is closed at noon"
+    );
+
     let mut req = request_at(4.0, Sort::Distance);
     req.filters.open_now = true;
-    let page = real_search(&req, 20, false).await.unwrap();
+    let page = search_at(&req, now).await.unwrap();
     assert_eq!(page.total, 1);
     assert!(
         page.items[0].is_open_now,

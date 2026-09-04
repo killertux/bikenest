@@ -7,9 +7,7 @@
 
 use crate::audit::{AuditEvent, AuditLog};
 use crate::auth::Clock;
-use crate::ports::{
-    FreshnessConfig, ParkingDetailsReader, ReaderError, ReviewPhotosReader, StoredPhoto,
-};
+use crate::ports::{FreshnessConfig, ReaderError, ReviewPhotosReader, StoredPhoto};
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use crate::timezone::{TimezoneError, TimezoneResolver};
 use async_trait::async_trait;
@@ -215,6 +213,14 @@ impl NewVerification {
     }
 }
 
+/// One row of a user's favorites list — the location id plus the timestamp
+/// the keyset cursor paginates on (recency: most recently favorited first).
+#[derive(Debug, Clone, Copy)]
+pub struct FavoriteItem {
+    pub location_id: i64,
+    pub created_at: DateTime<Utc>,
+}
+
 /// One row of the C5 contribution-history feed.
 #[derive(Debug, Clone)]
 pub struct ContributionItem {
@@ -225,6 +231,10 @@ pub struct ContributionItem {
     /// A machine code for the current state: "active" | "pending" | "history"…
     pub state: String,
     pub at: DateTime<Utc>,
+    /// Opaque keyset-cursor value for this row (paired with `at`). Not a
+    /// foreign key into any one table — the feed unions six heterogeneous
+    /// sources, so this is a per-source id encoded to sort consistently.
+    pub id: i64,
 }
 
 /// The extended P3 detail view (reviews, confidence, verification, favorite,
@@ -290,7 +300,13 @@ pub trait ParkingContributionRepository: Send + Sync {
         now: DateTime<Utc>,
     ) -> Result<i64, ContributionError>;
     async fn create_proposal(&self, p: &NewProposal) -> Result<i64, ContributionError>;
-    async fn revision_history(&self, id: i64) -> Result<Vec<RevisionSummary>, ContributionError>;
+    /// Newest `limit` revisions (`version DESC`) — bounded, not the full
+    /// history (a location edited often would otherwise return every version).
+    async fn revision_history(
+        &self,
+        id: i64,
+        limit: i64,
+    ) -> Result<Vec<RevisionSummary>, ContributionError>;
     async fn duplicate_candidates(
         &self,
         point: GeoPoint,
@@ -315,8 +331,15 @@ pub trait ReviewRepository: Send + Sync {
         location_id: i64,
         author: UserId,
     ) -> Result<Option<Review>, ContributionError>;
-    /// Only `ACTIVE` reviews are public.
-    async fn list_active(&self, location_id: i64) -> Result<Vec<Review>, ContributionError>;
+    /// Only `ACTIVE` reviews are public. Keyset-paginated, newest first:
+    /// `after_id` is the last review id from the previous page (`None` for the
+    /// first page); `limit` is clamped by the implementation.
+    async fn list_active(
+        &self,
+        location_id: i64,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<Review>, ContributionError>;
 }
 
 #[async_trait]
@@ -333,11 +356,14 @@ pub trait VerificationRepository: Send + Sync {
         &self,
         location_id: i64,
     ) -> Result<Vec<ExistenceSignal>, ContributionError>;
-    async fn attribute_summary(
+    /// One-query fold of the per-attribute tally and the parked-here count:
+    /// both read `verification` for this location, differing only in `kind`,
+    /// so a single statement (two `FILTER`-aggregated subqueries joined on
+    /// `true`) answers both instead of two round trips.
+    async fn attribute_and_parked_summary(
         &self,
         location_id: i64,
-    ) -> Result<Vec<AttributeSummary>, ContributionError>;
-    async fn parked_here_count(&self, location_id: i64) -> Result<i64, ContributionError>;
+    ) -> Result<(Vec<AttributeSummary>, i64), ContributionError>;
     async fn mark_verified_at(
         &self,
         location_id: i64,
@@ -351,14 +377,32 @@ pub trait FavoriteRepository: Send + Sync {
     async fn toggle(&self, user: UserId, location_id: i64) -> Result<bool, ContributionError>;
     async fn is_favorited(&self, user: UserId, location_id: i64)
     -> Result<bool, ContributionError>;
-    /// Location ids (the web layer joins to cards).
-    async fn list(&self, user: UserId) -> Result<Vec<i64>, ContributionError>;
+    /// Keyset-paginated newest first (`created_at DESC, location_id DESC` —
+    /// most recently favorited first). `after` is the `(created_at,
+    /// location_id)` of the last item on the previous page. Returns
+    /// `created_at` alongside each id (not just `Vec<i64>`) so the caller can
+    /// build the next page's cursor without a second read.
+    async fn list(
+        &self,
+        user: UserId,
+        after: Option<(DateTime<Utc>, i64)>,
+        limit: i64,
+    ) -> Result<Vec<FavoriteItem>, ContributionError>;
 }
 
 /// C5 read-model: aggregate all of a user's contributions into one feed.
 #[async_trait]
 pub trait ContributionHistoryReader: Send + Sync {
-    async fn history(&self, user: UserId) -> Result<Vec<ContributionItem>, ContributionError>;
+    /// Keyset-paginated, newest first (`at DESC`, ties broken by `id`).
+    /// `after` is the `(at, id)` of the last item on the previous page; `id`
+    /// is an opaque per-source cursor value, not a foreign key into any one
+    /// table (the feed unions six heterogeneous sources).
+    async fn history(
+        &self,
+        user: UserId,
+        after: Option<(DateTime<Utc>, i64)>,
+        limit: i64,
+    ) -> Result<Vec<ContributionItem>, ContributionError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +504,10 @@ const PARKED_HERE_USER_LIMIT: u32 = 20;
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 const HOUR: Duration = Duration::from_secs(60 * 60);
 
+/// The P3 details page shows at most this many reviews inline, newest first
+/// (no "load more" control — see [`ContributionService::community_details`]).
+const DETAILS_REVIEW_LIMIT: i64 = 50;
+
 // ---------------------------------------------------------------------------
 // ContributionService
 // ---------------------------------------------------------------------------
@@ -467,7 +515,6 @@ const HOUR: Duration = Duration::from_secs(60 * 60);
 /// Everything the contribution use cases depend on, bundled for construction.
 pub struct ContributionDeps {
     pub tz: Box<dyn TimezoneResolver>,
-    pub details: Box<dyn ParkingDetailsReader>,
     pub contributions: Box<dyn ParkingContributionRepository>,
     pub reviews: Box<dyn ReviewRepository>,
     pub verifications: Box<dyn VerificationRepository>,
@@ -771,41 +818,56 @@ impl ContributionService {
         self.deps.favorites.toggle(user, location_id).await
     }
 
-    pub async fn list_favorites(&self, user: UserId) -> Result<Vec<i64>, ContributionError> {
-        self.deps.favorites.list(user).await
+    pub async fn list_favorites(
+        &self,
+        user: UserId,
+        after: Option<(DateTime<Utc>, i64)>,
+        limit: i64,
+    ) -> Result<Vec<FavoriteItem>, ContributionError> {
+        self.deps.favorites.list(user, after, limit).await
     }
 
     pub async fn contribution_history(
         &self,
         user: UserId,
+        after: Option<(DateTime<Utc>, i64)>,
+        limit: i64,
     ) -> Result<Vec<ContributionItem>, ContributionError> {
-        self.deps.history.history(user).await
+        self.deps.history.history(user, after, limit).await
     }
 
     // -----------------------------------------------------------------------
     // Extended P3 details (§24 + reviews/confidence/favorite/explanation)
     // -----------------------------------------------------------------------
 
-    /// Loads a location with its community view: reviews, confidence
-    /// (+ disuse disputes), verification panel, favorite state, own-review/own-
-    /// verification, and the "recommended because…" reasons (§105 — no origin on
-    /// the details page, so the distance factor is omitted).
+    /// Builds the community view over an **already-loaded** location: reviews,
+    /// confidence (+ disuse disputes), verification panel, favorite state,
+    /// own-review/own-verification, and the "recommended because…" reasons
+    /// (no origin on the details page, so the distance factor is omitted).
+    ///
+    /// Takes `location` by value instead of an id so the caller (which already
+    /// ran [`crate::search::GetParkingDetails`] to build the base P3 view) loads
+    /// the `parking_location` aggregate exactly once per request — this used to
+    /// re-fetch it here via `ParkingDetailsReader`, doubling that read.
     pub async fn community_details(
         &self,
-        id: i64,
+        location: ParkingLocation,
         viewer: Option<UserId>,
-    ) -> Result<Option<CommunityParkingDetails>, ContributionError> {
-        let Some(location) = self.deps.details.details(id).await? else {
-            return Ok(None);
-        };
-
+    ) -> Result<CommunityParkingDetails, ContributionError> {
+        let id = location.id();
         let now = self.now();
 
-        let reviews = self.deps.reviews.list_active(id).await?;
-        let mut review_photos = std::collections::HashMap::new();
-        for r in &reviews {
-            review_photos.insert(r.id, self.deps.review_photos.photos(r.id).await?);
-        }
+        // Capped, not paginated: the details page renders the newest reviews
+        // inline with no "load more" control (WP11 keeps this simple — a
+        // dedicated paginated reviews view is a separate feature, not a
+        // performance fix). `list_active`'s keyset API still supports one.
+        let reviews = self
+            .deps
+            .reviews
+            .list_active(id, None, DETAILS_REVIEW_LIMIT)
+            .await?;
+        let review_ids: Vec<i64> = reviews.iter().map(|r| r.id).collect();
+        let review_photos = self.deps.review_photos.for_reviews(&review_ids).await?;
         let signals = self
             .deps
             .verifications
@@ -813,8 +875,11 @@ impl ContributionService {
             .await?;
         let confidence =
             bikenest_domain::confidence(&signals, now, &self.deps.freshness.thresholds);
-        let attribute_summary = self.deps.verifications.attribute_summary(id).await?;
-        let parked_here_count = self.deps.verifications.parked_here_count(id).await?;
+        let (attribute_summary, parked_here_count) = self
+            .deps
+            .verifications
+            .attribute_and_parked_summary(id)
+            .await?;
         let has_attribute_dispute = attribute_summary.iter().any(|a| a.incorrect > 0);
         let has_info_changed = signals
             .iter()
@@ -842,7 +907,7 @@ impl ContributionService {
             &self.deps.freshness,
         );
 
-        Ok(Some(CommunityParkingDetails {
+        Ok(CommunityParkingDetails {
             location,
             reviews,
             review_photos,
@@ -854,7 +919,7 @@ impl ContributionService {
             own_review,
             own_verification,
             reasons,
-        }))
+        })
     }
 
     async fn audit(

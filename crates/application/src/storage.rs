@@ -1,7 +1,7 @@
-//! Object-storage port (Ledger #7): opaque byte storage behind a swappable
-//! implementation — local disk in dev, S3-compatible later. The port speaks in
-//! opaque keys and time-limited ("presigned") GET URLs so replacing the real
-//! provider is a wiring change, not a domain change (§84).
+//! Object-storage port: opaque byte storage behind an S3-compatible
+//! implementation. The port speaks in opaque keys and time-limited
+//! ("presigned") GET URLs, generated directly against the bucket — the app
+//! never proxies media bytes itself.
 
 use async_trait::async_trait;
 use std::time::Duration;
@@ -39,16 +39,6 @@ pub trait ObjectStorage: Send + Sync {
 
     /// Remove an object. Missing objects are not an error (idempotent).
     async fn delete(&self, key: &str) -> Result<(), StorageError>;
-
-    /// Fetch an object's bytes + content type for serving *through the app*
-    /// (local-disk mode: presigned URLs point at our `/media` route). A store
-    /// whose presigned URLs bypass the app (S3/CDN) may return
-    /// `StorageError::Unexpected` — the app just won't mount a media route.
-    async fn get(&self, key: &str) -> Result<(Vec<u8>, String), StorageError>;
-
-    /// Verify a presigned-GET signature+expiry for the `/media` route
-    /// (local-disk mode). Returns false when tampered or expired.
-    fn verify_get(&self, key: &str, exp: u64, sig: &str) -> bool;
 
     /// Whether `key` currently exists in the store (a metadata-only check —
     /// no bytes are fetched). Used to verify a write actually landed (e.g. the

@@ -129,6 +129,15 @@ pub struct Proposal {
     pub created_at: DateTime<Utc>,
 }
 
+/// The M1 moderation dashboard's four counts (one query, not four full lists).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QueueCounts {
+    pub pending_photos: i64,
+    pub open_reports: i64,
+    pub under_review_reports: i64,
+    pub pending_proposals: i64,
+}
+
 /// Per-attribute change tally for a proposal's "current vs proposed" context.
 /// The web layer derives a diff from `proposed`; this struct is the typed shape
 /// the service validates before applying.
@@ -206,7 +215,14 @@ impl ProposalApplication {
 #[async_trait]
 pub trait ReportRepository: Send + Sync {
     async fn create(&self, r: &NewReport) -> Result<i64, ModerationError>;
-    async fn list(&self, state: Option<ReportState>) -> Result<Vec<Report>, ModerationError>;
+    /// Keyset-paginated, oldest first (`id ASC` — the moderation queue is a
+    /// FIFO work list). `after_id` is the last id from the previous page.
+    async fn list(
+        &self,
+        state: Option<ReportState>,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<Report>, ModerationError>;
     /// Returns the report incl. its `reporter_id` (needed by the self-resolve guard).
     async fn get(&self, id: i64) -> Result<Option<Report>, ModerationError>;
     /// `OPEN → UNDER_REVIEW`, setting `claimed_by`/`updated_at`. 0 rows → `InvalidState`.
@@ -258,7 +274,16 @@ pub trait ModerationRepository: Send + Sync {
         to: ModerationState,
         moderator: UserId,
     ) -> Result<(), ModerationError>;
-    async fn list_pending_proposals(&self) -> Result<Vec<Proposal>, ModerationError>;
+    /// Keyset-paginated, oldest first (`id ASC`). `after_id` is the last id
+    /// from the previous page.
+    async fn list_pending_proposals(
+        &self,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<Proposal>, ModerationError>;
+    /// The four moderation-dashboard counts in one statement (four scalar
+    /// subqueries), instead of loading and `.len()`-ing four full lists.
+    async fn queue_counts(&self) -> Result<QueueCounts, ModerationError>;
     async fn get_proposal(&self, id: i64) -> Result<Option<Proposal>, ModerationError>;
     /// Apply the proposal's change (or the moderator's adjusted values), bump
     /// version + append a `moderation` revision, set status `APPROVED`, and
@@ -421,14 +446,26 @@ impl ModerationService {
         Ok(id)
     }
 
-    /// The report queue. `require_moderator`. Returns `None` to list all states.
+    /// The report queue, bounded + keyset-paginated. `require_moderator`.
+    /// `state` of `None` lists all states; `limit` is clamped by the repo.
     pub async fn list_reports(
         &self,
         moderator: &crate::auth::AuthenticatedUser,
         state: Option<ReportState>,
+        after_id: Option<i64>,
+        limit: i64,
     ) -> Result<Vec<Report>, ModerationError> {
         self.require_moderator(moderator)?;
-        self.deps.reports.list(state).await
+        self.deps.reports.list(state, after_id, limit).await
+    }
+
+    /// The M1 dashboard's four counts in one call (`require_moderator`).
+    pub async fn queue_counts(
+        &self,
+        moderator: &crate::auth::AuthenticatedUser,
+    ) -> Result<QueueCounts, ModerationError> {
+        self.require_moderator(moderator)?;
+        self.deps.moderation.queue_counts().await
     }
 
     pub async fn get_report(
@@ -698,9 +735,14 @@ impl ModerationService {
     pub async fn list_pending_proposals(
         &self,
         moderator: &crate::auth::AuthenticatedUser,
+        after_id: Option<i64>,
+        limit: i64,
     ) -> Result<Vec<Proposal>, ModerationError> {
         self.require_moderator(moderator)?;
-        self.deps.moderation.list_pending_proposals().await
+        self.deps
+            .moderation
+            .list_pending_proposals(after_id, limit)
+            .await
     }
 
     pub async fn get_proposal(
@@ -784,11 +826,13 @@ impl ModerationService {
         &self,
         moderator: &crate::auth::AuthenticatedUser,
         target: UserId,
+        after: Option<(DateTime<Utc>, i64)>,
+        limit: i64,
     ) -> Result<Vec<crate::community::ContributionItem>, ModerationError> {
         self.require_moderator(moderator)?;
         self.deps
             .history
-            .history(target)
+            .history(target, after, limit)
             .await
             .map_err(|_| ModerationError::Internal)
     }
