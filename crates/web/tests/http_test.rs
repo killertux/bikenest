@@ -7,14 +7,16 @@
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
 use bikenest_infrastructure::Db;
-use bikenest_test_support::{ParkingBuilder, db_test, pool};
-use bikenest_web::app_router;
+use bikenest_test_support::{ParkingBuilder, db_test, pool, test_config};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+/// The public-page router: the real providers the test `Config` selects (fake
+/// email/geocoder, in-memory limiter, the compose MinIO for media).
 async fn test_app() -> axum::Router {
     let db = Db::from_pool(pool().await);
-    app_router(db, std::time::Duration::from_secs(2))
+    bikenest_web::app_router(std::sync::Arc::new(test_config()), db)
+        .expect("test config builds every provider")
 }
 
 /// GET and return only the response headers (for security-header asserts).
@@ -531,7 +533,7 @@ async fn never_verified_location_shows_the_freshness_label_once(tx: &mut TestTx)
 
 use bikenest_infrastructure::{FakeEmailProvider, FakeOAuthProvider};
 use bikenest_test_support::TestPasswordHasher;
-use bikenest_web::app_router_with;
+use bikenest_web::{RouterDeps, app_router_with};
 
 fn urlencode(s: &str) -> String {
     let mut out = String::new();
@@ -558,18 +560,22 @@ async fn auth_app() -> (axum::Router, FakeEmailProvider) {
 /// (product decision: disabled by default until a real OAuth provider exists).
 async fn auth_app_opts(google_oauth_enabled: bool) -> (axum::Router, FakeEmailProvider) {
     let email = FakeEmailProvider::with_root(None);
-    let oauth = FakeOAuthProvider::new("oauth.user@example.com", "sub-oauth-1");
     let db = Db::from_pool(pool().await);
-    let app = app_router_with(
-        db,
-        std::time::Duration::from_secs(2),
-        Box::new(email.clone()),
-        oauth,
-        TestPasswordHasher,
-        Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
-        std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
+    let config = bikenest_infrastructure::Config {
         google_oauth_enabled,
-    );
+        ..test_config()
+    };
+    let deps = RouterDeps {
+        email: Box::new(email.clone()),
+        oauth: Some(FakeOAuthProvider::new(
+            "oauth.user@example.com",
+            "sub-oauth-1",
+        )),
+        hasher: TestPasswordHasher,
+        rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
+        storage: std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
+    };
+    let app = app_router_with(std::sync::Arc::new(config), db, deps);
     (app, email)
 }
 
@@ -3227,6 +3233,47 @@ fn no_error_colour_classes_remain_in_templates() {
     assert!(
         offenders.is_empty(),
         "found dead `-error` colour classes:\n{}",
+        offenders.join("\n")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Configuration hygiene (pure filesystem scan, no DB)
+// ---------------------------------------------------------------------------
+
+/// The web layer must never read the process environment: everything it needs
+/// is parsed once into `Config` at startup and reaches handlers through
+/// `AppState`. A stray `std::env::var` reintroduces per-request configuration
+/// (and a second, divergent config path) — including `main.rs`, whose only job
+/// is `dotenv` + `Config::from_env`.
+#[test]
+fn web_crate_never_reads_the_process_environment() {
+    let src = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+    let mut offenders = Vec::new();
+    let mut stack = vec![src.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
+        {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let contents = std::fs::read_to_string(&path).expect("read source file");
+            for (n, line) in contents.lines().enumerate() {
+                if line.contains("std::env::var") || line.contains("env::var(") {
+                    offenders.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "crates/web/src must read configuration from `Config`, not the environment:\n{}",
         offenders.join("\n")
     );
 }

@@ -10,6 +10,7 @@ pub mod view;
 
 use askama::Template;
 use bikenest_application::ParkingDetailsView;
+use bikenest_infrastructure::MapConfig;
 use i18n::Translator;
 
 /// Base layout data shared by all pages. `current` drives the active nav item;
@@ -25,8 +26,8 @@ pub struct PageLayout {
     pub description: String,
     /// OpenGraph type: "website" (default) or "article".
     pub og_type: &'static str,
-    /// Map style URL (Ledger #3); rendered onto `<body>` data attributes so the
-    /// map JS (search.js / details-map.js) reads it, CSP-safe (no inline script).
+    /// Map style URL; rendered onto `<body>` data attributes so the map JS
+    /// (search.js / details-map.js) reads it, CSP-safe (no inline script).
     pub map_style_url: String,
     /// Public Mapbox access token for the style/tiles; empty for a non-Mapbox
     /// style (e.g. demo tiles) so the token never lands on the page.
@@ -34,9 +35,10 @@ pub struct PageLayout {
 }
 
 impl PageLayout {
-    /// A public page layout (no CSRF token).
-    pub fn new(title: String, current: &str) -> Self {
-        let map = bikenest_infrastructure::map_config_from_env();
+    /// A public page layout (no CSRF token). The map style/token come from the
+    /// configuration parsed at startup and held in `AppState`, never from the
+    /// process environment at render time.
+    pub fn new(map: &MapConfig, title: String, current: &str) -> Self {
         Self {
             title,
             current: current.to_string(),
@@ -44,24 +46,14 @@ impl PageLayout {
             canonical: String::new(),
             description: String::new(),
             og_type: "website",
-            map_style_url: map.style_url,
-            map_access_token: map.access_token,
+            map_style_url: map.style_url.clone(),
+            map_access_token: map.access_token.clone(),
         }
     }
 
     /// A layout carrying the session's CSRF token (for authenticated forms).
-    pub fn with_csrf(title: String, current: &str, csrf: String) -> Self {
-        let map = bikenest_infrastructure::map_config_from_env();
-        Self {
-            title,
-            current: current.to_string(),
-            csrf,
-            canonical: String::new(),
-            description: String::new(),
-            og_type: "website",
-            map_style_url: map.style_url,
-            map_access_token: map.access_token,
-        }
+    pub fn with_csrf(map: &MapConfig, title: String, current: &str, csrf: String) -> Self {
+        Self::new(map, title, current).csrf(csrf)
     }
 
     /// Set (or overwrite) the canonical URL (SEO §109).
@@ -231,6 +223,7 @@ pub struct PhotoVm {
 
 impl DetailsPage {
     pub fn build(
+        map: &MapConfig,
         tr: Translator,
         v: ParkingDetailsView,
         gallery: Vec<PhotoVm>,
@@ -247,7 +240,7 @@ impl DetailsPage {
         };
         let open_label = view::open_label(tr, v.is_open_now);
         Self {
-            layout: PageLayout::new(format!("{} — BikeNest", loc.name()), "").csrf(csrf),
+            layout: PageLayout::new(map, format!("{} — BikeNest", loc.name()), "").csrf(csrf),
             tr,
             id: loc.id(),
             name: loc.name().to_string(),
@@ -323,6 +316,7 @@ impl DetailsPage {
     /// contributor actions; anonymous viewers get a public-only page.
     #[allow(clippy::too_many_arguments)]
     pub async fn build_community(
+        map: &MapConfig,
         tr: Translator,
         v: bikenest_application::ParkingDetailsView,
         gallery: Vec<PhotoVm>,
@@ -333,7 +327,7 @@ impl DetailsPage {
         viewer_is_moderator: bool,
         storage: &dyn bikenest_application::ObjectStorage,
     ) -> Self {
-        let mut page = Self::build(tr, v, gallery, csrf);
+        let mut page = Self::build(map, tr, v, gallery, csrf);
         let Some(c) = community else { return page };
         let mut reviews = Vec::with_capacity(c.reviews.len());
         for r in &c.reviews {
@@ -785,36 +779,4 @@ pub struct ModerationActionResultVm {
     pub message: String,
 }
 
-pub fn app_router(
-    db: bikenest_infrastructure::Db,
-    probe_timeout: std::time::Duration,
-) -> axum::Router {
-    http::app_router(db, probe_timeout)
-}
-
-/// Test-oriented constructor: inject email/OAuth/password/rate-limiter providers
-/// (tests pass a fast [`bikenest_test_support::TestPasswordHasher`] and a fresh
-/// in-memory limiter to keep argon2 and ValKey out of the suite).
-// Parameter list collapses into `Arc<Config>` in WP6; see `http::app_router_with`.
-#[allow(clippy::too_many_arguments)]
-pub fn app_router_with<H: bikenest_application::PasswordHasher + Clone + 'static>(
-    db: bikenest_infrastructure::Db,
-    probe_timeout: std::time::Duration,
-    email: Box<dyn bikenest_application::EmailProvider>,
-    oauth: bikenest_infrastructure::FakeOAuthProvider,
-    hasher: H,
-    rate_limiter: Box<dyn bikenest_application::RateLimiter>,
-    storage: std::sync::Arc<dyn bikenest_application::ObjectStorage>,
-    google_oauth_enabled: bool,
-) -> axum::Router {
-    http::app_router_with(
-        db,
-        probe_timeout,
-        email,
-        oauth,
-        hasher,
-        rate_limiter,
-        storage,
-        google_oauth_enabled,
-    )
-}
+pub use http::{RouterDeps, app_router, app_router_with};

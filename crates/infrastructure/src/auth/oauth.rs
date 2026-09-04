@@ -3,6 +3,8 @@
 //! identity. The port signature stays compatible with a real Google client
 //! (PKCE / state / nonce) that lands in M7.
 
+use crate::config::FakeOAuthConfig;
+
 use async_trait::async_trait;
 use bikenest_application::{AuthError, OAuthProvider};
 use bikenest_domain::{AuthenticationProvider, ProviderIdentity, UserEmail};
@@ -22,19 +24,15 @@ impl FakeOAuthProvider {
         }
     }
 
-    /// Build from `FAKE_OAUTH_EMAIL` / `FAKE_OAUTH_SUB` with dev defaults.
-    pub fn from_env() -> Self {
-        let email = std::env::var("FAKE_OAUTH_EMAIL")
-            .unwrap_or_else(|_| "dev.user@example.com".to_string());
-        let subject = std::env::var("FAKE_OAUTH_SUB")
-            .unwrap_or_else(|_| "fake-google-sub-000001".to_string());
-        Self::new(email, subject)
+    /// Build from the parsed `FAKE_OAUTH_*` block.
+    pub fn from_config(config: &FakeOAuthConfig) -> Self {
+        Self::new(config.email.clone(), config.subject.clone())
     }
 }
 
 impl Default for FakeOAuthProvider {
     fn default() -> Self {
-        Self::from_env()
+        Self::from_config(&FakeOAuthConfig::default())
     }
 }
 

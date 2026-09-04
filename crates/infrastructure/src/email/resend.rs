@@ -1,6 +1,8 @@
 //! Resend API email provider (`EMAIL_PROVIDER=resend`). POSTs to
 //! `https://api.resend.com/emails` with the account auth key.
 
+use crate::config::{ConfigError, EmailConfig};
+
 use async_trait::async_trait;
 use bikenest_application::{EmailError, EmailProvider, OutboundEmail};
 use reqwest::Client;
@@ -27,14 +29,15 @@ impl ResendEmailProvider {
         }
     }
 
-    /// Build from the environment (`RESEND_API_KEY`, `RESEND_FROM`).
-    pub fn from_env() -> Result<Self, EmailError> {
-        let api_key = std::env::var("RESEND_API_KEY")
-            .map_err(|_| EmailError::Unexpected("RESEND_API_KEY not set".into()))?;
-        let from = std::env::var("RESEND_FROM")
-            .or_else(|_| std::env::var("EMAIL_FROM"))
-            .unwrap_or_else(|_| "no-reply@bikenest.local".to_string());
-        Ok(Self::new(api_key, from))
+    /// Build from the parsed `RESEND_*` block.
+    pub fn from_config(config: &EmailConfig) -> Result<Self, ConfigError> {
+        let EmailConfig::Resend { api_key, from } = config else {
+            return Err(ConfigError::invalid(
+                "EMAIL_PROVIDER",
+                "expected the resend configuration",
+            ));
+        };
+        Ok(Self::new(api_key.clone(), from.clone()))
     }
 }
 

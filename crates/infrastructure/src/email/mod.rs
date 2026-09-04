@@ -1,6 +1,6 @@
-//! Generic email-provider implementations (§84). Selected at wiring time by the
-//! `EMAIL_PROVIDER` env var (`fake` | `smtp` | `resend`), so swapping backends
-//! is a configuration change rather than a domain/app change.
+//! Generic email-provider implementations (§84). Selected at wiring time from
+//! the parsed `EMAIL_PROVIDER` setting (`fake` | `smtp` | `resend`), so swapping
+//! backends is a configuration change rather than a domain/app change.
 
 pub mod fake;
 pub mod resend;
@@ -10,33 +10,22 @@ pub use fake::{CapturedEmail, FakeEmailProvider};
 pub use resend::ResendEmailProvider;
 pub use smtp::SmtpEmailProvider;
 
-/// Build the email provider selected by `EMAIL_PROVIDER`. Unknown/missing
-/// values (and a misconfigured `smtp`/`resend`) fall back to the in-memory fake
-/// so `cargo run` and the test harness always work; dev sets `smtp` (Mailpit).
-pub fn from_env() -> Box<dyn bikenest_application::EmailProvider> {
-    match std::env::var("EMAIL_PROVIDER")
-        .unwrap_or_else(|_| "fake".to_string())
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "smtp" => match SmtpEmailProvider::from_env() {
-            Ok(p) => Box::new(p),
-            Err(e) => {
-                eprintln!(
-                    "EMAIL_PROVIDER=smtp but SMTP config is invalid: {e}; falling back to fake"
-                );
-                Box::new(FakeEmailProvider::new())
-            }
-        },
-        "resend" => match ResendEmailProvider::from_env() {
-            Ok(p) => Box::new(p),
-            Err(e) => {
-                eprintln!(
-                    "EMAIL_PROVIDER=resend but Resend config is invalid: {e}; falling back to fake"
-                );
-                Box::new(FakeEmailProvider::new())
-            }
-        },
-        _ => Box::new(FakeEmailProvider::new()),
+use crate::config::{ConfigError, EmailConfig};
+
+/// Build the email provider the parsed configuration selected.
+///
+/// There is no fallback: an SMTP relay that cannot be reached is a startup
+/// error, because a silent downgrade to the in-memory fake makes every
+/// verification and password-reset message disappear. The fake is chosen only
+/// when the configuration asked for it (development default).
+pub fn from_config(
+    config: &EmailConfig,
+) -> Result<Box<dyn bikenest_application::EmailProvider>, ConfigError> {
+    match config {
+        EmailConfig::Fake { outbox_root } => {
+            Ok(Box::new(FakeEmailProvider::with_root(outbox_root.clone())))
+        }
+        EmailConfig::Smtp { .. } => Ok(Box::new(SmtpEmailProvider::from_config(config)?)),
+        EmailConfig::Resend { .. } => Ok(Box::new(ResendEmailProvider::from_config(config)?)),
     }
 }

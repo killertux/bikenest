@@ -45,6 +45,13 @@ fn database_url() -> String {
         .unwrap_or_else(|_| "postgres://bikenest:bikenest@localhost:5432/bikenest".to_string())
 }
 
+/// The configuration the HTTP tests build their router from: a development
+/// config with every provider on its fake, pointed at the test database. Tests
+/// override individual fields rather than touching the process environment.
+pub fn test_config() -> bikenest_infrastructure::Config {
+    bikenest_infrastructure::Config::for_tests(database_url())
+}
+
 async fn connect_and_migrate() -> PgPool {
     let pool = PgPoolOptions::new()
         .max_connections(25)

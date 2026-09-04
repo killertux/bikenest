@@ -7,8 +7,9 @@
 //!   sorted set via an atomic Lua script. Limits aggregate across instances and
 //!   survive restarts. Supports a single node (`VALKEY_URL`) or a cluster
 //!   (`VALKEY_CLUSTER_URLS`).
-//! - [`rate_limiter_from_env`] wires whichever backend the environment asks for,
-//!   falling back to in-memory when no ValKey config is present.
+//! - [`rate_limiter_from_config`] wires whichever backend the parsed
+//!   configuration selected; a ValKey backend that fails to connect is a startup
+//!   error rather than a silent downgrade to the per-process limiter.
 //!
 //! ## Failure mode
 //! The application maps *any* [`RateLimitError`] to "RateLimited" (fail closed).
@@ -17,6 +18,8 @@
 //! connectivity/CAS error it logs a `warn!` and returns `Ok(true)` (allow), so a
 //! ValKey outage degrades protection without an outage. Set `RATE_LIMIT_FAIL_OPEN=false`
 //! to fail closed instead (stricter, but a ValKey outage 429s auth/photo/moderation).
+
+use crate::config::{ConfigError, RateLimiterBackend, RateLimiterConfig};
 
 use async_trait::async_trait;
 use bikenest_application::{RateLimitError, RateLimiter};
@@ -257,54 +260,28 @@ fn now_millis() -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Env selection + shared instance
+// Selection + shared instance
 // ---------------------------------------------------------------------------
 
-/// Build the rate limiter the environment asks for.
-///
-/// - `VALKEY_CLUSTER_URLS` (comma-separated node URLs) → [`ValKeyRateLimiter::cluster`].
-/// - `VALKEY_URL` → [`ValKeyRateLimiter::single`].
-/// - Neither (or an invalid config) → [`InMemoryRateLimiter`] (dev fallback, so
-///   `cargo run` and the test harness always work).
-pub fn rate_limiter_from_env() -> Box<dyn RateLimiter> {
-    let fail_open = fail_open_from_env();
-
-    if let Ok(nodes) = std::env::var("VALKEY_CLUSTER_URLS").map(|s| {
-        s.split(',')
-            .map(|n| n.trim().to_string())
-            .filter(|n| !n.is_empty())
-            .collect::<Vec<_>>()
-    }) && !nodes.is_empty()
-    {
-        match ValKeyRateLimiter::cluster(nodes, fail_open) {
-            Ok(l) => return Box::new(l),
-            Err(e) => {
-                tracing::warn!(error = %e, "VALKEY_CLUSTER_URLS invalid; falling back to in-memory");
-            }
+/// Build the rate limiter the parsed configuration selected. A ValKey backend
+/// that cannot be constructed is a startup error, not a silent downgrade to the
+/// per-process in-memory limiter (which would multiply every limit by the
+/// replica count).
+pub fn rate_limiter_from_config(
+    config: &RateLimiterConfig,
+) -> Result<Box<dyn RateLimiter>, ConfigError> {
+    let fail_open = config.fail_open;
+    match &config.backend {
+        RateLimiterBackend::InMemory => Ok(Box::new(InMemoryRateLimiter::new())),
+        RateLimiterBackend::Valkey { url } => ValKeyRateLimiter::single(url.clone(), fail_open)
+            .map(|l| Box::new(l) as Box<dyn RateLimiter>)
+            .map_err(|e| ConfigError::invalid("VALKEY_URL", e.to_string())),
+        RateLimiterBackend::ValkeyCluster { urls } => {
+            ValKeyRateLimiter::cluster(urls.clone(), fail_open)
+                .map(|l| Box::new(l) as Box<dyn RateLimiter>)
+                .map_err(|e| ConfigError::invalid("VALKEY_CLUSTER_URLS", e.to_string()))
         }
     }
-
-    if let Ok(url) = std::env::var("VALKEY_URL")
-        && !url.is_empty()
-    {
-        match ValKeyRateLimiter::single(url, fail_open) {
-            Ok(l) => return Box::new(l),
-            Err(e) => {
-                tracing::warn!(error = %e, "VALKEY_URL invalid; falling back to in-memory");
-            }
-        }
-    }
-
-    Box::new(InMemoryRateLimiter::new())
-}
-
-fn fail_open_from_env() -> bool {
-    std::env::var("RATE_LIMIT_FAIL_OPEN")
-        .map(|v| {
-            let v = v.to_ascii_lowercase();
-            !(v == "false" || v == "0" || v == "no" || v == "off")
-        })
-        .unwrap_or(true)
 }
 
 /// Shares a single [`RateLimiter`] across several service instances without

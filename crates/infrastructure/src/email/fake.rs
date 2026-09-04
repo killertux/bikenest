@@ -1,8 +1,8 @@
-//! In-memory capturing fake (`EMAIL_PROVIDER=fake`, **Ledger #4**). Records
-//! every [`OutboundEmail`] in memory (inspectable in tests via
-//! [`FakeEmailProvider::emails`]) and, in dev, appends a capture to
-//! `<MEDIA_ROOT>/outbox/` plus `tracing::info!`s the message so the flow can be
-//! followed without a real provider.
+//! In-memory capturing fake (`EMAIL_PROVIDER=fake`). Records every
+//! [`OutboundEmail`] in memory (inspectable in tests via
+//! [`FakeEmailProvider::emails`]) and, when given an outbox root, appends a
+//! capture to `<root>/outbox/` plus `tracing::info!`s the message so the flow
+//! can be followed without a real provider.
 
 use async_trait::async_trait;
 use bikenest_application::{EmailError, EmailProvider, OutboundEmail};
@@ -25,20 +25,11 @@ pub struct FakeEmailProvider {
 }
 
 impl FakeEmailProvider {
-    /// A fake that captures in-memory and writes a dev outbox under
-    /// `MEDIA_ROOT` (defaults to `<repo>/media`).
+    /// A fake that only captures in memory. The dev outbox on disk is opt-in
+    /// via [`FakeEmailProvider::with_root`], which the wiring passes the
+    /// configured media root.
     pub fn new() -> Self {
-        Self::with_root(
-            std::env::var("MEDIA_ROOT")
-                .ok()
-                .map(PathBuf::from)
-                .or_else(|| {
-                    Some(PathBuf::from(concat!(
-                        env!("CARGO_MANIFEST_DIR"),
-                        "/../../media"
-                    )))
-                }),
-        )
+        Self::with_root(None)
     }
 
     /// A fake with an explicit outbox root (or `None` for in-memory capture

@@ -1,7 +1,7 @@
 //! Geocoders (§21, §84): the deterministic dev `FakeGeocoder` and a real
-//! `MapboxGeocoder` (**Ledger #2**; hosted OSM-derived provider, §83). Selected
-//! at wiring time by the `GEOCODER` env var (`fake` | `mapbox`) — swapping
-//! providers is a config change, never a domain/app change.
+//! `MapboxGeocoder` (hosted OSM-derived provider, §83). Selected at wiring time
+//! by the parsed `GEOCODER` setting (`fake` | `mapbox`) — swapping providers is
+//! a config change, never a domain/app change.
 //!
 //! **§77 (third-party boundary):** the geocoder is called **server-side** with
 //! only the free-text destination query. No account identity, cookie, or client
@@ -16,6 +16,8 @@
 //! **Failure mode:** a geocoder error is surfaced to the web layer, which
 //! renders a friendly "couldn't reach the geocoder" message (the search handler
 //! maps it to a no-results page, never a 500).
+
+use crate::config::GeocoderConfig;
 
 use async_trait::async_trait;
 use bikenest_application::{GeoHit, GeocodeError, Geocoder};
@@ -111,7 +113,11 @@ fn encode_path_segment(s: &str) -> String {
 /// `.query(...)` so it never appears in a URL we might log or format into an
 /// error message (`reqwest::Error`'s `Display` embeds the full request URL).
 fn mapbox_url(endpoint: &str, query: &str, limit: u32) -> String {
-    format!("{}/{}.json?limit={limit}", endpoint, encode_path_segment(query))
+    format!(
+        "{}/{}.json?limit={limit}",
+        endpoint,
+        encode_path_segment(query)
+    )
 }
 
 /// Summarize a `reqwest::Error` for logs/error messages using only structured
@@ -183,12 +189,6 @@ impl MapboxGeocoder {
             endpoint: MAPBOX_ENDPOINT.to_string(),
         }
     }
-
-    pub fn from_env() -> Result<Self, String> {
-        std::env::var("MAPBOX_ACCESS_TOKEN")
-            .map(Self::new)
-            .map_err(|_| "MAPBOX_ACCESS_TOKEN is not set".to_string())
-    }
 }
 
 #[async_trait]
@@ -226,30 +226,17 @@ impl Geocoder for MapboxGeocoder {
 }
 
 // ---------------------------------------------------------------------------
-// Env selection
+// Selection
 // ---------------------------------------------------------------------------
 
-/// Build a geocoder from an explicit provider name + optional token. Separated
-/// from env so the mapping is unit-testable without mutating process globals.
-pub fn geocoder_from(provider: &str, token: Option<&str>) -> Box<dyn Geocoder> {
-    match provider.to_ascii_lowercase().as_str() {
-        "mapbox" => match token.map(ToOwned::to_owned).map(MapboxGeocoder::new) {
-            Some(g) => Box::new(g),
-            None => {
-                eprintln!("geocoder: MAPBOX_ACCESS_TOKEN is not set; falling back to FakeGeocoder");
-                Box::new(FakeGeocoder)
-            }
-        },
-        _ => Box::new(FakeGeocoder),
+/// Build the geocoder the parsed configuration selected. `Mapbox` carries its
+/// token, so there is no "asked for Mapbox, got the fake" path any more: a
+/// missing token is rejected while the configuration is parsed.
+pub fn geocoder_from_config(config: &GeocoderConfig) -> Box<dyn Geocoder> {
+    match config {
+        GeocoderConfig::Fake => Box::new(FakeGeocoder),
+        GeocoderConfig::Mapbox { token } => Box::new(MapboxGeocoder::new(token.clone())),
     }
-}
-
-/// Build the geocoder selected by `GEOCODER` (`mapbox` | `fake`, default `fake`),
-/// so `cargo run` and the test harness always work without credentials.
-pub fn geocoder_from_env() -> Box<dyn Geocoder> {
-    let provider = std::env::var("GEOCODER").unwrap_or_else(|_| "fake".to_string());
-    let token = std::env::var("MAPBOX_ACCESS_TOKEN").ok();
-    geocoder_from(&provider, token.as_deref())
 }
 
 #[cfg(test)]
@@ -413,13 +400,13 @@ mod tests {
         );
     }
 
-    // --- env selection -----------------------------------------------------
+    // --- selection ---------------------------------------------------------
 
     #[tokio::test]
-    async fn unknown_provider_is_fake() {
+    async fn fake_config_builds_the_deterministic_fake() {
         // The returned geocoder must be the deterministic fake (resolves a
         // known landmark to its precise coordinate).
-        let geo = geocoder_from("bogus", None);
+        let geo = geocoder_from_config(&GeocoderConfig::Fake);
         let hit = geo.geocode("Rua XV de Novembro").await.unwrap().unwrap();
         assert!((hit.point.lat() - -25.429_700).abs() < 1e-5);
     }

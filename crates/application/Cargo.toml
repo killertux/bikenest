@@ -7,15 +7,15 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-async-trait = "0.1"
+async-trait = { workspace = true }
 base64 = "0.22"
-bikenest-domain = { version = "0.1.0", path = "../domain" }
-chrono = "0.4"
+bikenest-domain = { workspace = true }
+chrono = { workspace = true }
 chrono-tz = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "2"
+thiserror = { workspace = true }
 
 [dev-dependencies]
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true }

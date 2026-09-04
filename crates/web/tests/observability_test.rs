@@ -14,11 +14,19 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 
 use bikenest_infrastructure::Db;
-use bikenest_web::app_router;
+use bikenest_web::{RouterDeps, app_router_with};
 
 async fn test_app() -> axum::Router {
     let db = Db::from_pool(pool().await);
-    app_router(db, std::time::Duration::from_secs(2))
+    let config = std::sync::Arc::new(bikenest_test_support::test_config());
+    let deps = RouterDeps {
+        email: Box::new(bikenest_infrastructure::FakeEmailProvider::with_root(None)),
+        oauth: None,
+        hasher: bikenest_test_support::TestPasswordHasher,
+        rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
+        storage: std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
+    };
+    app_router_with(config, db, deps)
 }
 
 /// Collects every span-field and event-field value into a shared buffer.

@@ -1,5 +1,6 @@
-use bikenest_infrastructure::{Config, Db};
-use bikenest_web::app_router;
+use bikenest_infrastructure::{Config, Db, S3ObjectStorage};
+use bikenest_web::{RouterDeps, app_router_with};
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -7,11 +8,18 @@ async fn main() {
     // Load .env from the workspace root if present (dev convenience; §10).
     dotenvy::dotenv().ok();
 
+    // The single configuration read of the whole process: every knob below,
+    // and everything the router and the worker use, comes from this value.
+    let config = Config::from_env().unwrap_or_else(|err| {
+        eprintln!("configuration error: {err}");
+        eprintln!("hint: copy .env.example to .env and adjust values");
+        std::process::exit(1);
+    });
+
     // Logging (§86): JSON structured in production (machine-parseable, forwarded to
     // a log driver/aggregator), human-readable in dev. `RUST_LOG` overrides the level.
-    let app_env = std::env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    if app_env == "production" {
+    if config.app_env.is_production() {
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .json()
@@ -22,11 +30,20 @@ async fn main() {
         tracing_subscriber::fmt().with_env_filter(filter).init();
     }
 
-    let config = Config::from_env().unwrap_or_else(|err| {
-        eprintln!("configuration error: {err}");
-        eprintln!("hint: copy .env.example to .env and adjust values");
+    // The subcommand is read up front so production validation can run before
+    // any connection attempt: a misconfigured deploy sees the whole list of
+    // missing settings first, not a database error.
+    let subcommand = std::env::args().nth(1);
+    if matches!(subcommand.as_deref(), None | Some("serve"))
+        && let Err(problems) = config.validate_for_production()
+    {
+        eprintln!("refusing to start: APP_ENV=production requires the following settings");
+        for problem in &problems {
+            eprintln!("  - {problem}");
+        }
+        eprintln!("see docs/deployment.md (startup validation) and .env.example");
         std::process::exit(1);
-    });
+    }
 
     let db = Db::connect(&config.database_url)
         .await
@@ -36,17 +53,15 @@ async fn main() {
         });
 
     // Subcommand dispatch: default = serve the app.
-    match std::env::args().nth(1).as_deref() {
+    match subcommand.as_deref() {
         Some("seed-mock") => {
             // Explicit, reproducible migrations first (§10).
             db.migrate().await.unwrap_or_else(|err| {
                 eprintln!("migration error: {err}");
                 std::process::exit(1);
             });
-            let storage = bikenest_infrastructure::storage_from_env();
-            let processor = bikenest_infrastructure::LocalImageProcessor::new(
-                bikenest_infrastructure::config::photo_config_from_env(),
-            );
+            let storage = S3ObjectStorage::from_config(&config.storage);
+            let processor = bikenest_infrastructure::LocalImageProcessor::new(config.photo);
             match bikenest_infrastructure::parking::seed_mock(&db, &storage, &processor).await {
                 Ok(n) => {
                     println!(
@@ -84,15 +99,12 @@ async fn main() {
                 eprintln!("migration error: {err}");
                 std::process::exit(1);
             });
-            let media_root = std::env::var("MEDIA_ROOT")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::path::PathBuf::from("media"));
-            let storage = bikenest_infrastructure::storage_from_env();
+            let storage = S3ObjectStorage::from_config(&config.storage);
             let retention = bikenest_infrastructure::SqlxRetentionRepository::new(
                 db.clone(),
                 config.retention,
-                std::sync::Arc::new(storage),
-                media_root,
+                Arc::new(storage),
+                config.media_root.clone(),
             );
             let job = bikenest_application::RetentionJob::new(
                 Box::new(retention),
@@ -123,27 +135,12 @@ async fn main() {
                 eprintln!("migration error: {err}");
                 std::process::exit(1);
             });
-            let version =
-                std::env::var("POLICY_VERSION").unwrap_or_else(|_| "2026-09-03.1".to_string());
-            let effective_at = std::env::var("POLICY_EFFECTIVE_AT")
-                .ok()
-                .and_then(|v| {
-                    chrono::DateTime::parse_from_rfc3339(&v)
-                        .ok()
-                        .map(|d| d.with_timezone(&chrono::Utc))
-                })
-                .unwrap_or_else(chrono::Utc::now);
+            let version = config.policy.version.clone();
+            let effective_at = config.policy.effective_at;
             // §70: controller identity + contact come from the environment
             // (POLICY_OPERATOR_*, POLICY_CONTACT_EMAIL) and are substituted
             // into the {{TOKEN}}s of policies/*.md. Never seed with a hole.
-            let lookup = |token: &str| -> Option<String> {
-                bikenest_infrastructure::POLICY_PLACEHOLDERS
-                    .iter()
-                    .find(|(t, _)| *t == token)
-                    .and_then(|(_, var)| std::env::var(var).ok())
-                    .map(|v| v.trim().to_string())
-                    .filter(|v| !v.is_empty())
-            };
+            let lookup = |token: &str| -> Option<String> { config.policy.placeholder(token) };
             let mut ok = true;
             for locale in bikenest_infrastructure::POLICY_LOCALES {
                 for kind_code in ["privacy", "terms", "cookies"] {
@@ -205,6 +202,14 @@ async fn main() {
 }
 
 async fn serve(config: Config, db: Db) {
+    // Production validation already ran in `main` (before the database
+    // connection). Development runs on fakes by design; say which ones, once.
+    for fake in config.fakes_in_use() {
+        tracing::warn!(component = fake, "development fake in use");
+    }
+
+    let config = Arc::new(config);
+
     // Explicit, reproducible migrations on startup (dev workflow; §10).
     if let Err(err) = db.migrate().await {
         eprintln!("migration error: {err}");
@@ -212,12 +217,17 @@ async fn serve(config: Config, db: Db) {
     }
     tracing::info!(migrations = "applied", "database ready");
 
+    let deps = RouterDeps::from_config(&config).unwrap_or_else(|err| {
+        eprintln!("provider configuration error: {err}");
+        std::process::exit(1);
+    });
+
     // Background worker (plans/m9-background-jobs.md): a tokio task that claims
     // and runs durable one-shot + recurring jobs. Disable with `JOBS_ENABLED=false`
     // for web-only instances (or to run jobs elsewhere).
     if config.jobs.enabled {
-        let storage: std::sync::Arc<dyn bikenest_application::ObjectStorage> =
-            std::sync::Arc::new(bikenest_infrastructure::storage_from_env());
+        let storage: Arc<dyn bikenest_application::ObjectStorage> =
+            Arc::new(S3ObjectStorage::from_config(&config.storage));
         let services = bikenest_infrastructure::job_services(db.clone(), &config, storage);
         let worker =
             bikenest_infrastructure::Worker::new(services.repo, services.registry, config.jobs);
@@ -227,13 +237,14 @@ async fn serve(config: Config, db: Db) {
         tracing::info!(jobs = "disabled", "background worker not started");
     }
 
-    let app = app_router(db, config.probe_timeout);
-    let listener = tokio::net::TcpListener::bind(&config.bind_addr)
+    let bind_addr = config.bind_addr.clone();
+    let app = app_router_with(config, db, deps);
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
         .unwrap_or_else(|err| {
-            eprintln!("failed to bind {}: {err}", config.bind_addr);
+            eprintln!("failed to bind {bind_addr}: {err}");
             std::process::exit(1);
         });
-    tracing::info!(addr = %config.bind_addr, "bikenest listening");
+    tracing::info!(addr = %bind_addr, "bikenest listening");
     axum::serve(listener, app).await.expect("server error");
 }

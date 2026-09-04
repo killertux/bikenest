@@ -10,14 +10,15 @@
 //! `style-src 'unsafe-inline'` is retained only because MapLibre injects inline
 //! styles (attribution/controls/markers); we add no inline styles of our own, so
 //! that surface is MapLibre's alone. The tile/geocode/media origins are templated
-//! from env so the same binary works against any hosted provider (dev defaults
-//! to the `demotiles.maplibre.org` demo style for tiles).
+//! from configuration so the same binary works against any hosted provider (dev
+//! defaults to the `demotiles.maplibre.org` demo style for tiles).
 
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderValue, Request};
 use axum::middleware::Next;
 use axum::response::Response;
+use bikenest_infrastructure::SecurityConfig;
 
 /// Config-driven security-header policy for the running instance.
 #[derive(Debug, Clone)]
@@ -37,13 +38,14 @@ pub struct SecurityHeaders {
 }
 
 impl SecurityHeaders {
-    pub fn from_env() -> Self {
+    /// Built once at startup from the parsed CSP origins plus whether TLS
+    /// terminates here (which gates HSTS).
+    pub fn new(config: &SecurityConfig, tls_on: bool) -> Self {
         Self {
-            tls_on: env_flag("TLS_ON"),
-            tile_hosts: env_hosts("CSP_TILE_HOSTS")
-                .unwrap_or_else(|| vec!["https://demotiles.maplibre.org".to_string()]),
-            geocode_hosts: env_hosts("CSP_GEOCODE_HOSTS").unwrap_or_default(),
-            media_hosts: env_hosts("CSP_MEDIA_HOSTS").unwrap_or_default(),
+            tls_on,
+            tile_hosts: config.tile_hosts.clone(),
+            geocode_hosts: config.geocode_hosts.clone(),
+            media_hosts: config.media_hosts.clone(),
         }
     }
 
@@ -130,22 +132,6 @@ fn is_private_path(path: &str) -> bool {
     path.starts_with("/account") || path.starts_with("/admin") || path.starts_with("/moderation")
 }
 
-fn env_flag(key: &str) -> bool {
-    std::env::var(key)
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false)
-}
-
-fn env_hosts(key: &str) -> Option<Vec<String>> {
-    std::env::var(key).ok().map(|raw| {
-        raw.split(',')
-            .map(str::trim)
-            .filter(|h| !h.is_empty())
-            .map(str::to_string)
-            .collect()
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,13 +189,15 @@ mod tests {
 
     #[test]
     fn dev_defaults_to_demo_tiles() {
-        let h = SecurityHeaders::from_env();
+        let cfg = bikenest_infrastructure::Config::for_tests("postgres://localhost/x");
+        let h = SecurityHeaders::new(&cfg.security, cfg.tls_on);
         assert!(
             h.tile_hosts
                 .iter()
                 .any(|h| h == "https://demotiles.maplibre.org")
         );
-        assert!(h.geocode_hosts.is_empty() || !h.tls_on);
+        assert!(h.geocode_hosts.is_empty());
+        assert!(!h.tls_on, "plaintext dev never emits HSTS");
     }
 
     #[test]

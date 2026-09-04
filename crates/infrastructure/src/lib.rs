@@ -19,19 +19,23 @@ pub mod timezone;
 pub use auth::{
     Argon2PasswordHasher, FakeOAuthProvider, InMemoryRateLimiter, RealTokenGenerator, SeedOutcome,
     SharedRateLimiter, SqlxAccountRepository, SqlxAuditLog, SqlxSessionStore, SqlxTokenStore,
-    SystemClock, ValKeyRateLimiter, rate_limiter_from_env, seed_admin,
+    SystemClock, ValKeyRateLimiter, rate_limiter_from_config, seed_admin,
 };
 pub use community::{
     SqlxContributionHistoryReader, SqlxFavoriteRepository, SqlxParkingContributionRepository,
     SqlxReviewRepository, SqlxVerificationRepository,
 };
-pub use config::{Config, JobConfig, MapConfig, job_config_from_env, map_config_from_env};
+pub use config::{
+    AppEnv, Config, ConfigError, EmailConfig, FakeOAuthConfig, GeocoderConfig, JobConfig,
+    MapConfig, ModerationConfig, PhotoConfig, PolicySeedConfig, RateLimiterBackend,
+    RateLimiterConfig, S3Config, SecurityConfig,
+};
 pub use db::Db;
 pub use email::{
     CapturedEmail, FakeEmailProvider, ResendEmailProvider, SmtpEmailProvider,
-    from_env as email_from_env,
+    from_config as email_from_config,
 };
-pub use geocoding::{FakeGeocoder, MapboxGeocoder, geocoder_from, geocoder_from_env};
+pub use geocoding::{FakeGeocoder, MapboxGeocoder, geocoder_from_config};
 pub use job::{ClaimedJob, JobRegistry, JobServices, SqlxJobRepository, Worker, job_services};
 pub use moderation::{SqlxAuditLogReader, SqlxModerationRepository, SqlxReportRepository};
 pub use parking::{SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader};
@@ -41,5 +45,5 @@ pub use privacy::{
     SqlxPolicyReader, SqlxPrivacyRequestRepository, SqlxRetentionRepository,
     fill_policy_placeholders, seed_policy,
 };
-pub use storage::{S3ObjectStorage, SharedObjectStorage, storage_from_env};
+pub use storage::{S3ObjectStorage, SharedObjectStorage};
 pub use timezone::OfflineTimezoneResolver;

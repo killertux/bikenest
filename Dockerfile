@@ -33,14 +33,15 @@ WORKDIR /app
 # The server binary.
 COPY --from=builder /usr/local/bin/bikenest-web /usr/local/bin/bikenest-web
 
-# Static assets must land at the path baked into the binary at compile time:
-# `env!("CARGO_MANIFEST_DIR")/../../web/static` = /app/web/static here.
+# Static assets, served from STATIC_ROOT (below) rather than any path baked
+# into the binary — the binary is relocatable.
 COPY --from=builder /app/web/static /app/web/static
 
 # Uploaded media (object storage) lives on a mounted volume.
 RUN mkdir -p /app/media && chown -R bikenest:bikenest /app
 USER bikenest
 ENV MEDIA_ROOT=/app/media
+ENV STATIC_ROOT=/app/web/static
 
 EXPOSE 8080
 CMD ["bikenest-web"]

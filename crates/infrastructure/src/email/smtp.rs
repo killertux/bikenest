@@ -4,6 +4,8 @@
 //! relay uses `SMTP_TLS=true` (STARTTLS) plus credentials. Swapping backends is
 //! a config change, not a code change (§84).
 
+use crate::config::{ConfigError, EmailConfig};
+
 use async_trait::async_trait;
 use bikenest_application::{EmailError, EmailProvider, OutboundEmail};
 use lettre::message::{Mailbox, MultiPart, SinglePart};
@@ -31,23 +33,31 @@ impl SmtpEmailProvider {
         Ok(Self { mailer, from })
     }
 
-    /// Build from the environment.
-    pub fn from_env() -> Result<Self, EmailError> {
-        let host = std::env::var("SMTP_HOST")
-            .map_err(|_| EmailError::Unexpected("SMTP_HOST not set".into()))?;
-        let port = std::env::var("SMTP_PORT")
-            .ok()
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(1025);
-        let username = std::env::var("SMTP_USERNAME").unwrap_or_default();
-        let password = std::env::var("SMTP_PASSWORD").unwrap_or_default();
-        let from =
-            std::env::var("EMAIL_FROM").unwrap_or_else(|_| "no-reply@bikenest.local".to_string());
-        let tls = std::env::var("SMTP_TLS")
-            .ok()
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        Self::new(host, port, username, password, from, tls)
+    /// Build from the parsed `SMTP_*` block.
+    pub fn from_config(config: &EmailConfig) -> Result<Self, ConfigError> {
+        let EmailConfig::Smtp {
+            host,
+            port,
+            username,
+            password,
+            tls,
+            from,
+        } = config
+        else {
+            return Err(ConfigError::invalid(
+                "EMAIL_PROVIDER",
+                "expected the smtp configuration",
+            ));
+        };
+        Self::new(
+            host.clone(),
+            *port,
+            username.clone(),
+            password.clone(),
+            from.clone(),
+            *tls,
+        )
+        .map_err(|e| ConfigError::invalid("SMTP_HOST", e.to_string()))
     }
 
     fn message(&self, email: OutboundEmail) -> Result<Message, EmailError> {

@@ -35,9 +35,9 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | `BIND_ADDR` | default `0.0.0.0:8080` |
 | `BASE_URL` | the public origin, e.g. `https://bikenest.example.com` — builds links + canonical URLs. **Must be reachable** |
 | `MEDIA_ROOT` | legacy local media directory (default `/app/media`) — only used by the retention orphan-media sweep; with direct S3 presign the objects live in the bucket |
-| `S3_ENDPOINT` | **Object storage** (Ledger #7): the S3-compatible endpoint (default `http://localhost:9000` → MinIO). Set `S3_ENDPOINT=` (empty) for the standard AWS endpoint |
-| `S3_REGION` / `S3_BUCKET` | coverage: region (default `us-east-1`) + bucket name (default `bikenest`) |
-| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | S3 credentials (default MinIO `minioadmin`; **required** real creds in prod) |
+| `S3_ENDPOINT` | **Object storage** (Ledger #7): the S3-compatible endpoint. Unset defaults to `http://localhost:9000` (MinIO) in development only; set it empty for the standard AWS endpoint. **Required in production** |
+| `S3_REGION` / `S3_BUCKET` | region (default `us-east-1`) + bucket name (development default `bikenest`; **required in production**) |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | S3 credentials (development default MinIO `minioadmin`, which production rejects outright) |
 | `TLS_ON` | set `true` to emit HSTS behind a real TLS terminator |
 | `VALKEY_URL` | **Rate limiter** (Ledger #6) single node, e.g. `valkey://valkey:6379`. Shared across auth/photo/contribution/moderation, survives restarts, aggregates across instances |
 | `VALKEY_CLUSTER_URLS` | comma-separated node URLs → **cluster** mode (wins over `VALKEY_URL`) |
@@ -48,9 +48,10 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | `JOBS_HISTORY_RETENTION_DAYS` | `jobs.gc` deletes `succeeded`/`failed` rows older than this (default 7) |
 | `CSP_TILE_HOSTS` / `CSP_GEOCODE_HOSTS` | origins allowed by the strict CSP for map tiles / geocoding |
 | `CSP_MEDIA_HOSTS` | object-storage origin(s) allowed in the CSP `img-src` that parking photos are served from as direct pre-signed URLs (dev: `http://localhost:9000`; AWS: `https://<bucket>.s3.<region>.amazonaws.com`) |
-| `APP_ENV` | `production` → JSON structured logs (machine-parseable, forward to a log aggregator) |
+| `APP_ENV` | `production` → JSON structured logs (machine-parseable, forward to a log aggregator) **and the startup validation in §2a** |
+| `STATIC_ROOT` | directory `/static` is served from; the image sets `/app/web/static`. Unset falls back to `web/static` beside the working directory, then to the compile-time path |
 | `GEOCODER` | **Geocoder** (Ledger #2): `mapbox` \| `fake` (default `fake`). `mapbox` sends the query to Mapbox server-side (§77/§83) |
-| `MAPBOX_ACCESS_TOKEN` | Mapbox token; required when `GEOCODER=mapbox` (missing token falls back to `fake`) |
+| `MAPBOX_ACCESS_TOKEN` | Mapbox token; required when `GEOCODER=mapbox` (a missing token is a startup error, never a fallback to `fake`) |
 | `MAP_STYLE_URL` | **Basemap** (Ledger #3): style URL; default MapLibre demo tiles |
 | `MAPBOX_MAP_ACCESS_TOKEN` | **Basemap** public Mapbox token (client-side); falls back to `MAPBOX_ACCESS_TOKEN` if unset; only loaded when the style is Mapbox-based |
 | `EMAIL_PROVIDER` | `smtp` or `resend` in production (not `fake`) |
@@ -62,6 +63,37 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | `REC_*`, `FRESHNESS_*`, `PHOTO_*`, `MOD_*`, `RETENTION_*` | tuning constants (see `.env.example`) |
 
 **Never** put secrets in the image; the `.dockerignore` excludes `.env*`.
+
+## 2a. Startup validation
+
+The whole environment is parsed once, at startup, into one typed `Config` — no
+setting is re-read per request. With `APP_ENV=production` the process then
+validates that configuration and **refuses to start** (exit code 1, one line per
+problem on stderr) unless all of the following hold:
+
+- `BASE_URL` is set and does not point at `localhost` / `127.0.0.1` — otherwise
+  every verification and password-reset e-mail links to the wrong host.
+- `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are
+  all set, and the credentials are not the MinIO development default
+  (`minioadmin`).
+- `EMAIL_PROVIDER` is `smtp` or `resend`, with its credentials present. The
+  `fake` provider discards every message, so production never runs on it.
+- `GEOCODER=mapbox` with `MAPBOX_ACCESS_TOKEN`. The fake geocoder fabricates
+  coordinates for unknown queries.
+- `VALKEY_URL` or `VALKEY_CLUSTER_URLS` is set. The in-memory limiter is
+  per-process, so N replicas would multiply every rate limit by N.
+- `TLS_ON=true`, so `Strict-Transport-Security` is emitted.
+- `CSP_MEDIA_HOSTS` names the object-storage origin photos are served from;
+  without it the CSP blocks every photo.
+- `GOOGLE_OAUTH_ENABLED=false` — only the deterministic fake provider exists.
+
+Every failing rule is reported in one run, so a misconfigured deploy is fixed in
+one pass rather than one restart per missing variable. Independently of
+`APP_ENV`, asking for a provider without its credentials (e.g.
+`EMAIL_PROVIDER=resend` with no `RESEND_API_KEY`, or a ValKey URL that cannot be
+reached) is a hard startup error — the app never silently downgrades to a fake.
+
+Development runs no validation; it logs a `warn!` naming each fake in use.
 
 ## 3. TLS, reverse proxy, health checks
 
@@ -101,8 +133,8 @@ remain (Google OAuth) are documented below and must be replaced before launch.
 
 - `fake` — deterministic dev geocoder (landmark table + hashed jitter).
 - `mapbox` — real `MapboxGeocoder` calling the Mapbox Geocoding API
-  (hosted, OSM-derived; §83). Requires `MAPBOX_ACCESS_TOKEN`; if the token is
-  missing it logs and falls back to `fake`.
+  (hosted, OSM-derived; §83). Requires `MAPBOX_ACCESS_TOKEN`; without it the
+  process refuses to start rather than falling back to `fake`.
 
   **§77 boundary:** the query is sent **server-side** with only the free-text
   destination — no account identity, cookie, or client IP crosses to Mapbox
@@ -117,10 +149,13 @@ remain (Google OAuth) are documented below and must be replaced before launch.
 (MinIO in dev, AWS/S3/R2/B2 in prod; `S3_*` env) and served via **direct S3
 presigned GET URLs** — the browser hits the bucket and S3's SigV4 signature
 authorizes the read (no app-side proxy, no app signing secret). Selectable by
-`S3_ENDPOINT`/`S3_BUCKET`; defaults target the compose MinIO.
+`S3_ENDPOINT`/`S3_BUCKET`; the compose MinIO is the DEVELOPMENT default only —
+production must set every `S3_*` value (see §2a).
 
 **Email (Ledger #4) — done in code.** Provider is selected by `EMAIL_PROVIDER`
-(`fake` | `smtp` | `resend`, default `fake`; dev uses `smtp` → Mailpit). For
+(`fake` | `smtp` | `resend`, default `fake`; dev uses `smtp` → Mailpit). Asking
+for `smtp`/`resend` without its credentials is a startup error, never a silent
+fallback to the fake. For
 production set `EMAIL_PROVIDER=resend` + `RESEND_API_KEY`/`RESEND_FROM`, or
 `smtp` + `SMTP_*`. Only the production relay/ESP credentials remain (ops).
 
@@ -144,7 +179,7 @@ and moderation. Dev uses an in-memory limiter; production should run ValKey
 (Redis-compatible), which aggregates limits across instances and survives
 restarts. The app picks the backend from env (no code change):
 
-- no `VALKEY_URL`/`VALKEY_CLUSTER_URLS` → in-memory (default, dev/test).
+- no `VALKEY_URL`/`VALKEY_CLUSTER_URLS` → in-memory (default, dev/test only — production refuses to start on it).
 - `VALKEY_URL` → `ValKeyRateLimiter::single` (one node).
 - `VALKEY_CLUSTER_URLS` → `ValKeyRateLimiter::cluster` (a real cluster; the
   `redis-rs` `ClusterClient` auto-discovers nodes and routes each key to its

@@ -8,6 +8,6 @@ workspace = true
 
 [dependencies]
 base64 = "0.22"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { workspace = true }
 chrono-tz = "0.10"
-thiserror = "2"
+thiserror = { workspace = true }

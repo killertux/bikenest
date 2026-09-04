@@ -27,15 +27,15 @@ use bikenest_domain::{
 use bikenest_domain::{ExistenceResult, ProposalKind, Role, UserEmail, UserId};
 use bikenest_infrastructure::probe::SqlxDatabaseProbe;
 use bikenest_infrastructure::{
-    Argon2PasswordHasher, Db, FakeOAuthProvider, LocalImageProcessor, OfflineTimezoneResolver,
-    RealTokenGenerator, SharedObjectStorage, SharedRateLimiter, SqlxAccountRepository,
-    SqlxAnonymizationRepository, SqlxAuditLog, SqlxAuditLogReader, SqlxContributionHistoryReader,
-    SqlxExportRepository, SqlxFavoriteRepository, SqlxModerationRepository,
-    SqlxParkingContributionRepository, SqlxParkingDetailsReader, SqlxParkingPhotoReader,
-    SqlxParkingSearchReader, SqlxPhotoRepository, SqlxPolicyReader, SqlxPrivacyRequestRepository,
-    SqlxReportRepository, SqlxReviewPhotosReader, SqlxReviewRepository, SqlxSessionStore,
-    SqlxTokenStore, SqlxVerificationRepository, SystemClock, geocoder_from_env,
-    rate_limiter_from_env,
+    Argon2PasswordHasher, Config, ConfigError, Db, FakeOAuthProvider, LocalImageProcessor,
+    MapConfig, OfflineTimezoneResolver, RealTokenGenerator, S3ObjectStorage, SharedObjectStorage,
+    SharedRateLimiter, SqlxAccountRepository, SqlxAnonymizationRepository, SqlxAuditLog,
+    SqlxAuditLogReader, SqlxContributionHistoryReader, SqlxExportRepository,
+    SqlxFavoriteRepository, SqlxModerationRepository, SqlxParkingContributionRepository,
+    SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader, SqlxPhotoRepository,
+    SqlxPolicyReader, SqlxPrivacyRequestRepository, SqlxReportRepository, SqlxReviewPhotosReader,
+    SqlxReviewRepository, SqlxSessionStore, SqlxTokenStore, SqlxVerificationRepository,
+    SystemClock, email_from_config, geocoder_from_config, rate_limiter_from_config,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -57,15 +57,17 @@ use crate::{
     SearchResultsVm, VerifyEmailPage,
 };
 
-/// Shared application state wired at startup.
+/// Shared application state wired at startup. Everything configuration-derived
+/// is resolved once here — no handler reads the process environment.
 #[derive(Clone)]
 pub struct AppState {
+    pub config: Arc<Config>,
     pub readiness: Arc<CheckReadiness<SqlxDatabaseProbe>>,
     pub db: Db,
     pub search: Arc<SearchParking>,
     pub details: Arc<GetParkingDetails>,
     /* Configured freshness thresholds, used for display categorization so the
-    cards honour the same env-tunable value as the search/detail services. */
+    cards honour the same tunable value as the search/detail services. */
     pub freshness: FreshnessConfig,
     pub photos: Arc<dyn ParkingPhotoReader>,
     pub storage: Arc<dyn ObjectStorage>,
@@ -75,65 +77,81 @@ pub struct AppState {
     pub moderation: Arc<ModerationService>,
     pub privacy: Arc<PrivacyService>,
     pub policy: Arc<dyn bikenest_application::PolicyReader>,
-    /// Google sign-in feature flag (product decision: disabled until a real
-    /// OAuth provider exists), read from `GOOGLE_OAUTH_ENABLED`.
+    /// Security/CSP header policy, built once from the configured origins.
+    pub security: SecurityHeaders,
+    /// Client-side map style/token rendered into every page layout.
+    pub map: MapConfig,
+    /// Public origin absolute links are built from (canonical URLs, sitemap).
+    pub base_url: String,
+    /// Google sign-in feature flag (disabled until a real OAuth provider exists).
     pub google_oauth_enabled: bool,
 }
 
-/// Builds the full application router with a real database handle and the
-/// email provider selected by `EMAIL_PROVIDER` (default dev = SMTP → Mailpit).
-/// The rate limiter is selected by `VALKEY_URL`/`VALKEY_CLUSTER_URLS`
-/// (`rate_limiter_from_env`, falling back to in-memory).
-pub fn app_router(db: Db, probe_timeout: std::time::Duration) -> Router {
-    let google_oauth_enabled = bikenest_infrastructure::config::google_oauth_enabled_from_env();
-    let app_env = std::env::var("APP_ENV").unwrap_or_default();
-    if google_oauth_enabled && app_env.eq_ignore_ascii_case("production") {
-        panic!(
-            "GOOGLE_OAUTH_ENABLED=true is not allowed in production: only the fake provider exists"
-        );
-    }
-    app_router_with(
-        db,
-        probe_timeout,
-        bikenest_infrastructure::email_from_env(),
-        FakeOAuthProvider::from_env(),
-        Argon2PasswordHasher,
-        rate_limiter_from_env(),
-        Arc::new(bikenest_infrastructure::storage_from_env()), // MinIO/S3-compatible object storage
-        google_oauth_enabled,
-    )
+/// The doubles a test injects. Production passes [`RouterDeps::from_config`],
+/// which builds every one of them from the parsed configuration.
+pub struct RouterDeps<H: PasswordHasher + Clone + 'static> {
+    pub email: Box<dyn EmailProvider>,
+    /// `None` builds the deterministic stub from `Config::fake_oauth`.
+    pub oauth: Option<FakeOAuthProvider>,
+    pub hasher: H,
+    pub rate_limiter: Box<dyn RateLimiter>,
+    pub storage: Arc<dyn ObjectStorage>,
 }
 
-/// Builds the router with injectable email/OAuth/password/rate-limiter
-/// providers (tests pass fakes — e.g. a fast [`TestPasswordHasher`] and a fresh
-/// in-memory limiter — to keep the suite fast and isolated).
+impl RouterDeps<Argon2PasswordHasher> {
+    /// The real providers the configuration selected. Fails rather than
+    /// substituting a fake when a provider the operator asked for cannot be
+    /// built.
+    pub fn from_config(config: &Config) -> Result<Self, ConfigError> {
+        Ok(Self {
+            email: email_from_config(&config.email)?,
+            oauth: None,
+            hasher: Argon2PasswordHasher,
+            rate_limiter: rate_limiter_from_config(&config.rate_limiter)?,
+            storage: Arc::new(S3ObjectStorage::from_config(&config.storage)),
+        })
+    }
+}
+
+/// Builds the full application router with the real providers the configuration
+/// selected.
+pub fn app_router(config: Arc<Config>, db: Db) -> Result<Router, ConfigError> {
+    let deps = RouterDeps::from_config(&config)?;
+    Ok(app_router_with(config, db, deps))
+}
+
+/// Builds the router from the parsed configuration plus injectable
+/// email/OAuth/password/rate-limiter/storage providers (tests pass fakes — e.g.
+/// a fast [`TestPasswordHasher`] and a fresh in-memory limiter — to keep the
+/// suite fast and isolated).
 ///
 /// The passed limiter is shared by the auth, contributions, photo and
 /// moderation services so they all read one store.
-// The parameter list is replaced by a single `Arc<Config>` in the configuration
-// work package (WP6); until then the extra flag pushes it past clippy's limit.
-#[allow(clippy::too_many_arguments)]
 pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
+    config: Arc<Config>,
     db: Db,
-    probe_timeout: std::time::Duration,
-    email: Box<dyn EmailProvider>,
-    oauth: FakeOAuthProvider,
-    hasher: H,
-    rate_limiter: Box<dyn RateLimiter>,
-    storage: Arc<dyn ObjectStorage>,
-    google_oauth_enabled: bool,
+    deps: RouterDeps<H>,
 ) -> Router {
+    let RouterDeps {
+        email,
+        oauth,
+        hasher,
+        rate_limiter,
+        storage,
+    } = deps;
+    let oauth = oauth.unwrap_or_else(|| FakeOAuthProvider::from_config(&config.fake_oauth));
+    let google_oauth_enabled = config.google_oauth_enabled;
     let rate_limiter: Arc<dyn RateLimiter> = Arc::from(rate_limiter);
-    let probe = SqlxDatabaseProbe::new(db.clone(), probe_timeout);
+    let probe = SqlxDatabaseProbe::new(db.clone(), config.probe_timeout);
     let search_uc = SearchParking::new(
-        geocoder_from_env(), // Ledger #2 (mapbox | fake)
+        geocoder_from_config(&config.geocoder),
         Box::new(SqlxParkingSearchReader::new(db.clone())),
-        bikenest_infrastructure::config::recommendation_config_from_env(), // Ledger #8
-        bikenest_infrastructure::config::freshness_config_from_env(),      // Ledger #9/#17
+        config.recommendation,
+        config.freshness,
     );
     let details = GetParkingDetails::new(
         Box::new(SqlxParkingDetailsReader::new(db.clone())),
-        bikenest_infrastructure::config::freshness_config_from_env(),
+        config.freshness,
     );
     let auth_service = AuthService::new(
         Box::new(SqlxAccountRepository::new(db.clone())),
@@ -142,14 +160,14 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         Box::new(hasher.clone()), // password hasher (Argon2 in prod, fast fake in tests)
         Box::new(RealTokenGenerator),
         Box::new(SystemClock),
-        email,                                                  // EmailProvider (Ledger #4)
-        Box::new(oauth),                                        // Ledger #5
-        Box::new(SharedRateLimiter::new(rate_limiter.clone())), // Ledger #6 (shared ValKey)
+        email,
+        Box::new(oauth),
+        Box::new(SharedRateLimiter::new(rate_limiter.clone())), // shared ValKey store
         Box::new(SqlxAuditLog::new(db.clone())),
-        base_url_from_env(),
+        config.base_url.clone(),
     );
     let contribution_service = ContributionService::new(ContributionDeps {
-        tz: Box::new(OfflineTimezoneResolver::new()), // Ledger #16
+        tz: Box::new(OfflineTimezoneResolver::new()),
         details: Box::new(SqlxParkingDetailsReader::new(db.clone())),
         contributions: Box::new(SqlxParkingContributionRepository::new(db.clone())),
         reviews: Box::new(SqlxReviewRepository::new(db.clone())),
@@ -157,21 +175,19 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         favorites: Box::new(SqlxFavoriteRepository::new(db.clone())),
         history: Box::new(SqlxContributionHistoryReader::new(db.clone())),
         review_photos: Box::new(SqlxReviewPhotosReader::new(db.clone())),
-        rate_limiter: Box::new(SharedRateLimiter::new(rate_limiter.clone())), // Ledger #6
+        rate_limiter: Box::new(SharedRateLimiter::new(rate_limiter.clone())),
         audit: Box::new(SqlxAuditLog::new(db.clone())),
         clock: Box::new(SystemClock),
-        freshness: bikenest_infrastructure::config::freshness_config_from_env(),
+        freshness: config.freshness,
     });
     let photo_service = PhotoService::new(PhotoDeps {
-        processor: Box::new(LocalImageProcessor::new(
-            bikenest_infrastructure::config::photo_config_from_env(),
-        )),
+        processor: Box::new(LocalImageProcessor::new(config.photo)),
         repository: Box::new(SqlxPhotoRepository::new(db.clone())),
-        storage: Box::new(SharedObjectStorage::new(storage.clone())), // Ledger #7
-        rate_limiter: Box::new(SharedRateLimiter::new(rate_limiter.clone())), // Ledger #6
+        storage: Box::new(SharedObjectStorage::new(storage.clone())),
+        rate_limiter: Box::new(SharedRateLimiter::new(rate_limiter.clone())),
         audit: Box::new(SqlxAuditLog::new(db.clone())),
         clock: Box::new(SystemClock),
-        limits: bikenest_infrastructure::config::photo_config_from_env(),
+        limits: config.photo,
     });
     let moderation_service = ModerationService::new(ModerationDeps {
         reports: Box::new(SqlxReportRepository::new(db.clone())),
@@ -179,8 +195,8 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         audit: Box::new(SqlxAuditLog::new(db.clone())),
         audit_reader: Box::new(SqlxAuditLogReader::new(db.clone())),
         history: Box::new(SqlxContributionHistoryReader::new(db.clone())),
-        rate_limiter: Box::new(SharedRateLimiter::new(rate_limiter.clone())), // Ledger #6
-        limits: bikenest_infrastructure::config::moderation_config_from_env(), // Ledger #19
+        rate_limiter: Box::new(SharedRateLimiter::new(rate_limiter.clone())),
+        limits: config.moderation,
     });
     let privacy_service = PrivacyService::new(PrivacyDeps {
         exports: Box::new(SqlxExportRepository::new(db.clone())),
@@ -200,7 +216,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         db: db.clone(),
         search: Arc::new(search_uc),
         details: Arc::new(details),
-        freshness: bikenest_infrastructure::config::freshness_config_from_env(),
+        freshness: config.freshness,
         photos: Arc::new(SqlxParkingPhotoReader::new(db.clone())),
         storage: storage.clone(),
         auth: Arc::new(auth_service),
@@ -209,7 +225,11 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         moderation: Arc::new(moderation_service),
         privacy: Arc::new(privacy_service),
         policy: policy_reader,
+        security: SecurityHeaders::new(&config.security, config.tls_on),
+        map: config.map.clone(),
+        base_url: config.base_url.clone(),
         google_oauth_enabled,
+        config: config.clone(),
     };
     let mut router = Router::new()
         .route("/", get(home))
@@ -299,9 +319,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         // --- M4 photos (upload → moderate → publish) ---
         .route(
             "/parking/{id}/photo",
-            post(upload_photo).layer(DefaultBodyLimit::max(
-                bikenest_infrastructure::config::photo_config_from_env().max_bytes + 64 * 1024,
-            )),
+            post(upload_photo).layer(DefaultBodyLimit::max(config.photo.max_bytes + 64 * 1024)),
         )
         .route("/moderation/photos", get(moderation_photos))
         .route(
@@ -368,12 +386,11 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
             get(admin_user_contributions),
         )
         .route("/admin/audit", get(admin_audit))
+        // Served from `STATIC_ROOT` (resolved at startup), so the binary is
+        // relocatable instead of pinned to its compile-time manifest path.
         .nest_service(
             "/static",
-            tower_http::services::ServeDir::new(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../web/static"
-            )),
+            tower_http::services::ServeDir::new(&config.static_root),
         )
         .fallback(not_found)
         // Order matters: the LAST `.layer()` is the OUTERMOST middleware. We want
@@ -386,7 +403,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
             crate::auth::auth_middleware,
         ))
         .layer(middleware::from_fn_with_state(
-            SecurityHeaders::from_env(),
+            state.security.clone(),
             crate::security::security_headers,
         ))
         .layer(
@@ -395,10 +412,6 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
                 .on_response(crate::observability::RequestLog),
         )
         .with_state(state)
-}
-
-fn base_url_from_env() -> String {
-    std::env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
 }
 
 async fn healthz() -> &'static str {
@@ -436,7 +449,7 @@ async fn robots_txt() -> Response {
 
 /// GET /sitemap.xml — static pages + ACTIVE public parking (§111 stable URLs).
 async fn sitemap_xml(State(state): State<AppState>) -> Response {
-    let base = base_url_from_env();
+    let base = state.base_url.clone();
     let static_urls = ["/", "/search", "/about", "/privacy", "/terms", "/cookies"];
     let parking_ids: Vec<i64> = bikenest_infrastructure::parking::active_parking_ids(&state.db)
         .await
@@ -492,8 +505,8 @@ async fn home(State(state): State<AppState>, locale: Locale, auth: Auth) -> Resp
     }
 
     let page = HomePage {
-        layout: PageLayout::new(tr.t("home.title").to_string(), "home")
-            .canonical(format!("{}/", base_url_from_env().trim_end_matches('/')))
+        layout: PageLayout::new(&state.map, tr.t("home.title").to_string(), "home")
+            .canonical(format!("{}/", state.base_url.trim_end_matches('/')))
             .description(tr.t("home.hero.subtitle").to_string())
             .csrf(auth.csrf_value()),
         tr,
@@ -641,7 +654,7 @@ async fn search(
             error: Some(tr.t("search.geocode_unavailable").to_string()),
             map_json: serde_json::json!({ "origin": null, "items": [] }).to_string(),
         },
-        Err(_) => return internal_error(tr),
+        Err(_) => return internal_error(&state.map, tr),
     };
 
     if is_htmx {
@@ -653,11 +666,8 @@ async fn search(
         render(vm, StatusCode::OK)
     } else {
         let vm = SearchPageVm {
-            layout: PageLayout::new(tr.t("search.title").to_string(), "search")
-                .canonical(format!(
-                    "{}/search",
-                    base_url_from_env().trim_end_matches('/')
-                ))
+            layout: PageLayout::new(&state.map, tr.t("search.title").to_string(), "search")
+                .canonical(format!("{}/search", state.base_url.trim_end_matches('/')))
                 .description(tr.t("search.title").to_string())
                 .csrf(auth.csrf_value()),
             tr,
@@ -718,7 +728,7 @@ async fn parking_details(
                 .map(|u| u.has_role(Role::Moderator) || u.has_role(Role::Admin))
                 .unwrap_or(false);
             if view.location.moderation_state() != ModerationState::Active && !is_moderator {
-                return not_found_page(tr);
+                return not_found_page(&state.map, tr);
             }
             // Approved photos (P3 gallery). A read failure degrades to no
             // gallery rather than failing the page.
@@ -760,6 +770,7 @@ async fn parking_details(
             // Post-action confirmation (e.g. "this change will be reviewed").
             let notice = details_notice(tr, &q);
             let page = DetailsPage::build_community(
+                &state.map,
                 tr,
                 view,
                 gallery,
@@ -774,8 +785,8 @@ async fn parking_details(
             .notice(notice);
             render(page, StatusCode::OK)
         }
-        Ok(None) => not_found_page(tr),
-        Err(_) => internal_error(tr),
+        Ok(None) => not_found_page(&state.map, tr),
+        Err(_) => internal_error(&state.map, tr),
     }
 }
 
@@ -915,6 +926,7 @@ async fn moderation_photos(State(state): State<AppState>, locale: Locale, auth: 
     render(
         ModerationPhotosPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("moderation.title").to_string(),
                 "moderation",
                 auth.csrf_value(),
@@ -1205,6 +1217,7 @@ async fn moderation_dashboard(
     render(
         ModerationDashboardPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("moderation.dashboard.title").to_string(),
                 "moderation",
                 auth.csrf_value(),
@@ -1254,6 +1267,7 @@ async fn moderation_reports(
     render(
         ModerationReportsPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("moderation.reports.title").to_string(),
                 "moderation",
                 auth.csrf_value(),
@@ -1372,6 +1386,7 @@ async fn moderation_proposals(
     render(
         ModerationProposalsPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("moderation.proposals.title").to_string(),
                 "moderation",
                 auth.csrf_value(),
@@ -1674,6 +1689,7 @@ async fn admin_user_contributions(
     render(
         AdminUserContributionsPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("admin.contrib.title").to_string(),
                 "admin",
                 auth.csrf_value(),
@@ -1738,6 +1754,7 @@ async fn admin_audit(
     render(
         AdminAuditPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("admin.audit.title").to_string(),
                 "admin",
                 auth.csrf_value(),
@@ -1810,14 +1827,11 @@ fn photo_error(tr: Translator, e: &PhotoError) -> (StatusCode, String) {
 }
 
 /// P7 — about / how it works.
-async fn about(locale: Locale, auth: Auth) -> Response {
+async fn about(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
     let tr = Translator::new(locale);
     let page = AboutPage {
-        layout: PageLayout::new(tr.t("about.title").to_string(), "about")
-            .canonical(format!(
-                "{}/about",
-                base_url_from_env().trim_end_matches('/')
-            ))
+        layout: PageLayout::new(&state.map, tr.t("about.title").to_string(), "about")
+            .canonical(format!("{}/about", state.base_url.trim_end_matches('/')))
             .description(tr.t("about.title").to_string())
             .csrf(auth.csrf_value()),
         tr,
@@ -1941,7 +1955,7 @@ struct RegisterForm {
     password: String,
 }
 
-async fn register_page(locale: Locale, auth: Auth) -> Response {
+async fn register_page(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
     if auth.authenticated() {
         return axum::response::Redirect::to("/account").into_response();
     }
@@ -1949,7 +1963,7 @@ async fn register_page(locale: Locale, auth: Auth) -> Response {
     let token = anon_csrf_token();
     render_anon(
         RegisterPage {
-            layout: PageLayout::new(tr.t("auth.register_title").to_string(), "auth")
+            layout: PageLayout::new(&state.map, tr.t("auth.register_title").to_string(), "auth")
                 .csrf(token.clone()),
             tr,
             email: String::new(),
@@ -1989,8 +2003,12 @@ async fn register_post(
             let token = anon_csrf_token();
             render_anon(
                 RegisterPage {
-                    layout: PageLayout::new(tr.t("auth.register_title").to_string(), "auth")
-                        .csrf(token.clone()),
+                    layout: PageLayout::new(
+                        &state.map,
+                        tr.t("auth.register_title").to_string(),
+                        "auth",
+                    )
+                    .csrf(token.clone()),
                     tr,
                     email: form.email,
                     display_name: form.display_name,
@@ -2054,7 +2072,7 @@ async fn login_page(
     let token = anon_csrf_token();
     render_anon(
         LoginPage {
-            layout: PageLayout::new(tr.t("auth.login_title").to_string(), "auth")
+            layout: PageLayout::new(&state.map, tr.t("auth.login_title").to_string(), "auth")
                 .csrf(token.clone()),
             tr,
             email: String::new(),
@@ -2089,8 +2107,12 @@ async fn login_post(
             let token = anon_csrf_token();
             render_anon(
                 LoginPage {
-                    layout: PageLayout::new(tr.t("auth.login_title").to_string(), "auth")
-                        .csrf(token.clone()),
+                    layout: PageLayout::new(
+                        &state.map,
+                        tr.t("auth.login_title").to_string(),
+                        "auth",
+                    )
+                    .csrf(token.clone()),
                     tr,
                     email: String::new(),
                     notice: None,
@@ -2130,7 +2152,7 @@ async fn verify_email(
         let t = anon_csrf_token();
         return render_anon(
             VerifyEmailPage {
-                layout: PageLayout::new(tr.t("auth.verify_title").to_string(), "auth")
+                layout: PageLayout::new(&state.map, tr.t("auth.verify_title").to_string(), "auth")
                     .csrf(t.clone()),
                 tr,
                 success: false,
@@ -2145,8 +2167,12 @@ async fn verify_email(
             let t = anon_csrf_token();
             render_anon(
                 VerifyEmailPage {
-                    layout: PageLayout::new(tr.t("auth.verify_title").to_string(), "auth")
-                        .csrf(t.clone()),
+                    layout: PageLayout::new(
+                        &state.map,
+                        tr.t("auth.verify_title").to_string(),
+                        "auth",
+                    )
+                    .csrf(t.clone()),
                     tr,
                     success: false,
                     error: Some(auth_error_message(tr, &err)),
@@ -2180,8 +2206,12 @@ async fn verify_resend(
             let t = anon_csrf_token();
             render_anon(
                 LoginPage {
-                    layout: PageLayout::new(tr.t("auth.login_title").to_string(), "auth")
-                        .csrf(t.clone()),
+                    layout: PageLayout::new(
+                        &state.map,
+                        tr.t("auth.login_title").to_string(),
+                        "auth",
+                    )
+                    .csrf(t.clone()),
                     tr,
                     email: String::new(),
                     notice: None,
@@ -2206,7 +2236,11 @@ struct ResetSent {
     sent: Option<String>,
 }
 
-async fn password_reset_page(locale: Locale, Query(q): Query<ResetSent>) -> Response {
+async fn password_reset_page(
+    State(state): State<AppState>,
+    locale: Locale,
+    Query(q): Query<ResetSent>,
+) -> Response {
     let tr = Translator::new(locale);
     let notice = if q.sent.is_some() {
         Some(tr.t("auth.reset_sent").to_string())
@@ -2216,7 +2250,7 @@ async fn password_reset_page(locale: Locale, Query(q): Query<ResetSent>) -> Resp
     let token = anon_csrf_token();
     render_anon(
         PasswordResetPage {
-            layout: PageLayout::new(tr.t("auth.reset_title").to_string(), "auth")
+            layout: PageLayout::new(&state.map, tr.t("auth.reset_title").to_string(), "auth")
                 .csrf(token.clone()),
             tr,
             email: String::new(),
@@ -2244,8 +2278,12 @@ async fn password_reset_post(
             let t = anon_csrf_token();
             render_anon(
                 PasswordResetPage {
-                    layout: PageLayout::new(tr.t("auth.reset_title").to_string(), "auth")
-                        .csrf(t.clone()),
+                    layout: PageLayout::new(
+                        &state.map,
+                        tr.t("auth.reset_title").to_string(),
+                        "auth",
+                    )
+                    .csrf(t.clone()),
                     tr,
                     email: form.email,
                     notice: None,
@@ -2257,13 +2295,17 @@ async fn password_reset_post(
     }
 }
 
-async fn password_reset_new(locale: Locale, Query(q): Query<VerifyParams>) -> Response {
+async fn password_reset_new(
+    State(state): State<AppState>,
+    locale: Locale,
+    Query(q): Query<VerifyParams>,
+) -> Response {
     let tr = Translator::new(locale);
     let token = q.token.unwrap_or_default();
     let t = anon_csrf_token();
     render_anon(
         PasswordResetNewPage {
-            layout: PageLayout::new(tr.t("auth.reset_new_title").to_string(), "auth")
+            layout: PageLayout::new(&state.map, tr.t("auth.reset_new_title").to_string(), "auth")
                 .csrf(t.clone()),
             tr,
             token,
@@ -2293,8 +2335,12 @@ async fn password_reset_new_post(
             let t = anon_csrf_token();
             render_anon(
                 PasswordResetNewPage {
-                    layout: PageLayout::new(tr.t("auth.reset_new_title").to_string(), "auth")
-                        .csrf(t.clone()),
+                    layout: PageLayout::new(
+                        &state.map,
+                        tr.t("auth.reset_new_title").to_string(),
+                        "auth",
+                    )
+                    .csrf(t.clone()),
                     tr,
                     token: form.token,
                     error: Some(auth_error_message(tr, &err)),
@@ -2356,7 +2402,12 @@ struct AccountNotices {
     email_pending: Option<String>,
 }
 
-async fn account(locale: Locale, auth: Auth, Query(q): Query<AccountNotices>) -> Response {
+async fn account(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Query(q): Query<AccountNotices>,
+) -> Response {
     let tr = Translator::new(locale);
     let user = match auth.require_user() {
         Ok(u) => u,
@@ -2372,6 +2423,7 @@ async fn account(locale: Locale, auth: Auth, Query(q): Query<AccountNotices>) ->
     render(
         AccountPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("account.title").to_string(),
                 "account",
                 auth.csrf_value(),
@@ -2395,7 +2447,7 @@ struct ChangePasswordForm {
     new_password: String,
 }
 
-async fn account_password(locale: Locale, auth: Auth) -> Response {
+async fn account_password(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
     let tr = Translator::new(locale);
     if let Err(resp) = auth.require_user() {
         return resp;
@@ -2403,6 +2455,7 @@ async fn account_password(locale: Locale, auth: Auth) -> Response {
     render(
         AccountPasswordPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("account.pw_title").to_string(),
                 "account",
                 auth.csrf_value(),
@@ -2440,6 +2493,7 @@ async fn account_password_post(
         Err(err) => render(
             AccountPasswordPage {
                 layout: PageLayout::with_csrf(
+                    &state.map,
                     tr.t("account.pw_title").to_string(),
                     "account",
                     auth.csrf_value(),
@@ -2461,7 +2515,7 @@ struct ChangeEmailForm {
     new_email: String,
 }
 
-async fn account_email(locale: Locale, auth: Auth) -> Response {
+async fn account_email(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
     let tr = Translator::new(locale);
     let user = match auth.require_user() {
         Ok(u) => u,
@@ -2470,6 +2524,7 @@ async fn account_email(locale: Locale, auth: Auth) -> Response {
     render(
         AccountEmailPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("account.email_title").to_string(),
                 "account",
                 auth.csrf_value(),
@@ -2498,6 +2553,7 @@ async fn account_email_post(
         return render(
             AccountEmailPage {
                 layout: PageLayout::with_csrf(
+                    &state.map,
                     tr.t("account.email_title").to_string(),
                     "account",
                     auth.csrf_value(),
@@ -2519,6 +2575,7 @@ async fn account_email_post(
         Err(err) => render(
             AccountEmailPage {
                 layout: PageLayout::with_csrf(
+                    &state.map,
                     tr.t("account.email_title").to_string(),
                     "account",
                     auth.csrf_value(),
@@ -2565,6 +2622,7 @@ async fn admin_users(
     render(
         AdminUsersPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("admin.users_title").to_string(),
                 "admin",
                 auth.csrf_value(),
@@ -2687,7 +2745,7 @@ fn policy_kind_meta(tr: Translator, kind: PolicyKind) -> (&'static str, &'static
 async fn policy_page_impl(state: &AppState, locale: Locale, kind: PolicyKind) -> Response {
     let tr = Translator::new(locale);
     let (kind_code, kind_label) = policy_kind_meta(tr, kind);
-    let layout = PageLayout::new(format!("{kind_label} — BikeNest"), kind_code);
+    let layout = PageLayout::new(&state.map, format!("{kind_label} — BikeNest"), kind_code);
     match current_policy(state, kind, locale).await {
         Some(doc) => render(
             PolicyPage {
@@ -2741,6 +2799,7 @@ async fn policy_versions_impl(state: &AppState, locale: Locale, kind: PolicyKind
     render(
         PolicyVersionsPage {
             layout: PageLayout::new(
+                &state.map,
                 format!("{} — BikeNest", tr.t("policy.versions_title")),
                 kind_code,
             ),
@@ -2764,7 +2823,7 @@ async fn cookies_versions(locale: Locale, State(state): State<AppState>) -> Resp
 }
 
 /// C6 — privacy & data hub.
-async fn account_privacy(locale: Locale, auth: Auth) -> Response {
+async fn account_privacy(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
     let tr = Translator::new(locale);
     let user = match auth.require_user() {
         Ok(u) => u,
@@ -2775,6 +2834,7 @@ async fn account_privacy(locale: Locale, auth: Auth) -> Response {
     render(
         AccountPrivacyPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("privacy.hub_title").to_string(),
                 "account",
                 auth.csrf_value(),
@@ -2878,6 +2938,7 @@ async fn account_export(
     render(
         AccountExportPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("export.title").to_string(),
                 "account",
                 auth.csrf_value(),
@@ -2947,7 +3008,7 @@ struct DeleteForm {
 }
 
 /// GET /account/delete — deletion confirmation form.
-async fn account_delete(locale: Locale, auth: Auth) -> Response {
+async fn account_delete(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
     let tr = Translator::new(locale);
     if let Err(resp) = auth.require_user() {
         return resp;
@@ -2955,6 +3016,7 @@ async fn account_delete(locale: Locale, auth: Auth) -> Response {
     render(
         AccountDeletePage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("delete.title").to_string(),
                 "account",
                 auth.csrf_value(),
@@ -2987,6 +3049,7 @@ async fn account_delete_post(
         render(
             AccountDeletePage {
                 layout: PageLayout::with_csrf(
+                    &state.map,
                     tr.t("delete.title").to_string(),
                     "account",
                     auth.csrf_value(),
@@ -3037,6 +3100,7 @@ async fn admin_privacy_requests(
     render(
         AdminPrivacyRequestsPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("admin.privacy_requests.title").to_string(),
                 "moderation",
                 auth.csrf_value(),
@@ -3085,9 +3149,15 @@ fn render_anon<T: Template>(page: T, token: &str) -> Response {
     resp
 }
 
-fn error_page(tr: Translator, status: StatusCode, title_key: &str, body_key: &str) -> Response {
+fn error_page(
+    map: &MapConfig,
+    tr: Translator,
+    status: StatusCode,
+    title_key: &str,
+    body_key: &str,
+) -> Response {
     let page = ErrorPage {
-        layout: PageLayout::new(format!("{} — BikeNest", tr.t(title_key)), ""),
+        layout: PageLayout::new(map, format!("{} — BikeNest", tr.t(title_key)), ""),
         tr,
         status: status.as_u16(),
         message: tr.t(body_key).to_string(),
@@ -3098,8 +3168,9 @@ fn error_page(tr: Translator, status: StatusCode, title_key: &str, body_key: &st
     }
 }
 
-fn internal_error(tr: Translator) -> Response {
+fn internal_error(map: &MapConfig, tr: Translator) -> Response {
     error_page(
+        map,
         tr,
         StatusCode::INTERNAL_SERVER_ERROR,
         "error.500.title",
@@ -3107,8 +3178,9 @@ fn internal_error(tr: Translator) -> Response {
     )
 }
 
-fn not_found_page(tr: Translator) -> Response {
+fn not_found_page(map: &MapConfig, tr: Translator) -> Response {
     error_page(
+        map,
         tr,
         StatusCode::NOT_FOUND,
         "error.404.title",
@@ -3117,8 +3189,8 @@ fn not_found_page(tr: Translator) -> Response {
 }
 
 /// Router fallback (E1). Resolves locale from the request for a translated 404.
-async fn not_found(locale: Locale) -> Response {
-    not_found_page(Translator::new(locale))
+async fn not_found(State(state): State<AppState>, locale: Locale) -> Response {
+    not_found_page(&state.map, Translator::new(locale))
 }
 
 // ---------------------------------------------------------------------------
@@ -3317,9 +3389,24 @@ fn security_yes_codes_string(loc: &ParkingLocation) -> String {
 }
 
 /// Build a `ParkingEditPage` with all reversible fields pre-filled from `loc`.
+/// The page chrome shared by every render of the "edit parking" form.
+fn edit_parking_layout(map: &MapConfig, tr: Translator, auth: &Auth) -> PageLayout {
+    PageLayout::with_csrf(
+        map,
+        tr.t("edit.title").to_string(),
+        "edit",
+        auth.csrf_value(),
+    )
+}
+
+/// The page chrome shared by every render of the "add parking" form.
+fn new_parking_layout(map: &MapConfig, tr: Translator, auth: &Auth) -> PageLayout {
+    PageLayout::with_csrf(map, tr.t("new.title").to_string(), "new", auth.csrf_value())
+}
+
 fn parking_edit_page_vm(
+    layout: PageLayout,
     tr: Translator,
-    auth: Auth,
     id: i64,
     version: i64,
     loc: &ParkingLocation,
@@ -3328,7 +3415,7 @@ fn parking_edit_page_vm(
 ) -> ParkingEditPage {
     let (price, price_currency, price_unit) = cost_price_strings(loc.cost());
     ParkingEditPage {
-        layout: PageLayout::with_csrf(tr.t("edit.title").to_string(), "edit", auth.csrf_value()),
+        layout,
         tr,
         id,
         version,
@@ -3383,14 +3470,19 @@ struct NewParkingForm {
     security: String,
 }
 
-async fn parking_new_page(locale: Locale, auth: Auth) -> Response {
+async fn parking_new_page(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
     let tr = Translator::new(locale);
     if let Err(resp) = auth.require_verified() {
         return resp;
     }
     render(
         ParkingNewPage {
-            layout: PageLayout::with_csrf(tr.t("new.title").to_string(), "new", auth.csrf_value()),
+            layout: PageLayout::with_csrf(
+                &state.map,
+                tr.t("new.title").to_string(),
+                "new",
+                auth.csrf_value(),
+            ),
             tr,
             name: String::new(),
             address: String::new(),
@@ -3433,7 +3525,7 @@ async fn parking_new_post(
     let new = match new_location_from_form(&form) {
         Ok(n) => n,
         Err(e) => {
-            return render_form_error(tr, auth, &form, &e);
+            return render_form_error(&state.map, tr, auth, &form, &e);
         }
     };
 
@@ -3454,8 +3546,8 @@ async fn parking_new_post(
                 // Advisory (§36): the location was added, but similar listings
                 // exist. Re-render the form with the warnings + a success note.
                 render_new_form(
+                    new_parking_layout(&state.map, tr, &auth),
                     tr,
-                    auth,
                     &form,
                     None,
                     duplicates,
@@ -3468,21 +3560,21 @@ async fn parking_new_post(
             axum::response::Redirect::to("/account?verify=1").into_response()
         }
         Err(ContributionError::RateLimited) => render_new_form(
+            new_parking_layout(&state.map, tr, &auth),
             tr,
-            auth,
             &form,
             Some(tr.t("contribution.error.rate_limited").to_string()),
             Vec::new(),
             None,
             StatusCode::TOO_MANY_REQUESTS,
         ),
-        Err(e) => render_form_error(tr, auth, &form, &e),
+        Err(e) => render_form_error(&state.map, tr, auth, &form, &e),
     }
 }
 
 fn render_new_form(
+    layout: PageLayout,
     tr: Translator,
-    auth: Auth,
     form: &NewParkingForm,
     error: Option<String>,
     duplicates: Vec<view::DuplicateVm>,
@@ -3491,7 +3583,7 @@ fn render_new_form(
 ) -> Response {
     render(
         ParkingNewPage {
-            layout: PageLayout::with_csrf(tr.t("new.title").to_string(), "new", auth.csrf_value()),
+            layout,
             tr,
             name: form.name.clone(),
             address: form.address.clone(),
@@ -3517,14 +3609,15 @@ fn render_new_form(
 }
 
 fn render_form_error(
+    map: &MapConfig,
     tr: Translator,
     auth: Auth,
     form: &NewParkingForm,
     e: &ContributionError,
 ) -> Response {
     render_new_form(
+        new_parking_layout(map, tr, &auth),
         tr,
-        auth,
         form,
         Some(contribution_error_message(tr, e)),
         Vec::new(),
@@ -3586,13 +3679,21 @@ async fn parking_edit_page(
         return resp;
     }
     let Some(view) = state.details.execute(id).await.ok().flatten() else {
-        return not_found_page(tr);
+        return not_found_page(&state.map, tr);
     };
     let loc = &view.location;
     // Pre-fill every reversible field so editing one doesn't silently reset
     // cost/security/hours (§7 "editable fields pre-filled").
     render(
-        parking_edit_page_vm(tr, auth, id, loc.version(), loc, None, None),
+        parking_edit_page_vm(
+            edit_parking_layout(&state.map, tr, &auth),
+            tr,
+            id,
+            loc.version(),
+            loc,
+            None,
+            None,
+        ),
         StatusCode::OK,
     )
 }
@@ -3616,12 +3717,12 @@ async fn parking_edit_post(
     // can detect a version conflict against the latest values).
     let current = match state.details.execute(id).await {
         Ok(Some(v)) => v.location,
-        _ => return not_found_page(tr),
+        _ => return not_found_page(&state.map, tr),
     };
     let current_hours = current.hours().clone();
     let edit = match edit_from_form(&form, &current_hours) {
         Ok(e) => e,
-        Err(e) => return contribution_edit_error(tr, auth, id, &form, &e),
+        Err(e) => return contribution_edit_error(&state.map, tr, auth, id, &form, &e),
     };
     match state
         .contributions
@@ -3632,13 +3733,13 @@ async fn parking_edit_post(
         Err(ContributionError::VersionConflict) => {
             // §100: reload the latest values and tell the user.
             let Some(view) = state.details.execute(id).await.ok().flatten() else {
-                return not_found_page(tr);
+                return not_found_page(&state.map, tr);
             };
             let loc = view.location;
             render(
                 parking_edit_page_vm(
+                    edit_parking_layout(&state.map, tr, &auth),
                     tr,
-                    auth,
                     id,
                     loc.version(),
                     &loc,
@@ -3649,27 +3750,30 @@ async fn parking_edit_post(
             )
         }
         Err(ContributionError::RateLimited) => contribution_edit_notice(
+            &state.map,
             tr,
             auth,
             id,
             &form,
             tr.t("contribution.error.rate_limited").to_string(),
         ),
-        Err(e) => contribution_edit_error(tr, auth, id, &form, &e),
+        Err(e) => contribution_edit_error(&state.map, tr, auth, id, &form, &e),
     }
 }
 
 fn contribution_edit_error(
+    map: &MapConfig,
     tr: Translator,
     auth: Auth,
     id: i64,
     form: &EditParkingForm,
     e: &ContributionError,
 ) -> Response {
-    contribution_edit_notice(tr, auth, id, form, contribution_error_message(tr, e))
+    contribution_edit_notice(map, tr, auth, id, form, contribution_error_message(tr, e))
 }
 
 fn contribution_edit_notice(
+    map: &MapConfig,
     tr: Translator,
     auth: Auth,
     id: i64,
@@ -3679,6 +3783,7 @@ fn contribution_edit_notice(
     render(
         ParkingEditPage {
             layout: PageLayout::with_csrf(
+                map,
                 tr.t("edit.title").to_string(),
                 "edit",
                 auth.csrf_value(),
@@ -3792,6 +3897,7 @@ async fn review_page(
     render(
         ReviewFormPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("review.title").to_string(),
                 "review",
                 auth.csrf_value(),
@@ -3831,6 +3937,7 @@ async fn review_post(
             Ok(None) => break,
             Err(_) => {
                 return render_review_error(
+                    &state.map,
                     tr,
                     auth,
                     id,
@@ -3868,6 +3975,7 @@ async fn review_post(
         Ok(r) => r,
         Err(_) => {
             return render_review_error(
+                &state.map,
                 tr,
                 auth,
                 id,
@@ -3883,6 +3991,7 @@ async fn review_post(
         Ok(b) => b,
         Err(_) => {
             return render_review_error(
+                &state.map,
                 tr,
                 auth,
                 id,
@@ -3919,6 +4028,7 @@ async fn review_post(
             axum::response::Redirect::to(&format!("/parking/{id}?reviewed=1")).into_response()
         }
         Err(ContributionError::RateLimited) => render_review_error(
+            &state.map,
             tr,
             auth,
             id,
@@ -3929,6 +4039,7 @@ async fn review_post(
             tr.t("contribution.error.rate_limited").to_string(),
         ),
         Err(_) => render_review_error(
+            &state.map,
             tr,
             auth,
             id,
@@ -3942,6 +4053,7 @@ async fn review_post(
 }
 
 fn render_review_error(
+    map: &MapConfig,
     tr: Translator,
     auth: Auth,
     id: i64,
@@ -3951,6 +4063,7 @@ fn render_review_error(
     render(
         ReviewFormPage {
             layout: PageLayout::with_csrf(
+                map,
                 tr.t("review.title").to_string(),
                 "review",
                 auth.csrf_value(),
@@ -4165,6 +4278,7 @@ async fn account_favorites(State(state): State<AppState>, locale: Locale, auth: 
     render(
         FavoritesPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("favorites.title").to_string(),
                 "account",
                 auth.csrf_value(),
@@ -4198,6 +4312,7 @@ async fn account_contributions(
     render(
         ContributionsPage {
             layout: PageLayout::with_csrf(
+                &state.map,
                 tr.t("contrib.title").to_string(),
                 "account",
                 auth.csrf_value(),
