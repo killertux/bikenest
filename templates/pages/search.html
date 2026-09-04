@@ -30,7 +30,7 @@
         <input
           id="q" name="q" type="search" value="{{ form.q }}"
           placeholder="{{ tr.t("home.search.placeholder") }}"
-          class="h-12 w-full rounded-xl border border-border bg-bg pl-11 pr-4 text-[15px] text-fg placeholder:text-muted focus:border-accent focus:outline-none"
+          class="h-12 w-full rounded-xl border border-border bg-bg pl-11 pr-4 text-[15px] text-fg placeholder:text-muted focus:border-accent"
         />
       </div>
       <div class="flex gap-3">
@@ -79,7 +79,7 @@
             {{ tr.t("search.sort.label") }}
             <select
               name="sort" @change="submitSort"
-              class="h-9 rounded-lg border border-border bg-surface px-2.5 text-sm font-medium text-fg focus:border-accent focus:outline-none"
+              class="h-9 rounded-lg border border-border bg-surface px-2.5 text-sm font-medium text-fg focus:border-accent"
             >
               <option value="recommended" {% if sort_is("recommended") || sort_none() %}selected{% endif %}>{{ tr.t("search.sort.recommended") }}</option>
               <option value="distance" {% if sort_is("distance") %}selected{% endif %}>{{ tr.t("search.sort.distance") }}</option>
@@ -149,7 +149,7 @@
         </fieldset>
         <fieldset class="md:col-span-1">
           <legend class="mb-2.5 text-sm font-semibold text-fg">{{ tr.t("search.filters.radius") }}</legend>
-          <select name="radius" class="h-10 w-full rounded-lg border border-border bg-bg px-2.5 text-sm font-medium text-fg focus:border-accent focus:outline-none">
+          <select name="radius" class="h-10 w-full rounded-lg border border-border bg-bg px-2.5 text-sm font-medium text-fg focus:border-accent">
             <option value="" {% if radius_none() %}selected{% endif %}>1 km · {{ tr.t("search.radius.default") }}</option>
             <option value="250" {% if radius_is(250) %}selected{% endif %}>250 m</option>
             <option value="500" {% if radius_is(500) %}selected{% endif %}>500 m</option>
@@ -222,6 +222,14 @@
            Tailwind still generates them. -->
       <div :class="resultsClass">
         <div class="relative">
+          {# The map's data island: a sibling of `#results`, never a child of
+             it — `role="list"` must contain only `role="listitem"` articles
+             (WP21 a11y pass). The AJAX fragment (partials/search_results.html,
+             rendered standalone with `oob: true`) re-renders this same id via
+             `hx-swap-oob`, so search.js's `readData()` (a plain
+             `document.getElementById("search-data")`) keeps finding it after
+             every re-search. #}
+          <script type="application/json" id="search-data">{{ results.map_json|safe }}</script>
           <!-- HTMX loading overlay -->
           <div id="results-indicator" class="htmx-indicator absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-[oklch(98%_0.004_240_/_0.7)]" aria-hidden="true">
             <span class="inline-flex items-center gap-2.5 rounded-xl border border-border bg-surface px-4 py-2.5 text-sm font-medium text-fg shadow-pop">{{ tr.t("search.updating") }}</span>

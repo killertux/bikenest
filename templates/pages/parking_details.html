@@ -22,7 +22,7 @@
       {{ tr.t("moderation.banner") }} <span class="font-mono text-xs">{{ moderation_state }}</span>
       <span class="ml-2">
         {% if moderation_state == "INVALID" || moderation_state == "REMOVED" %}
-        <a href="/moderation/parking/{{ id }}/restore" class="rounded border border-border px-2 py-1 text-xs text-muted hover:text-fg">{{ tr.t("moderation.restore") }}</a>
+        <a href="/moderation/parking/{{ id }}/restore" class="btn-compact rounded border border-border px-2 text-xs text-muted hover:text-fg">{{ tr.t("moderation.restore") }}</a>
         {% endif %}
       </span>
     </div>
@@ -45,7 +45,7 @@
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-          <a href="{{ google_url }}" target="_blank" rel="noopener" class="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">
+          <a href="{{ google_url }}" target="_blank" rel="noopener" class="inline-flex items-center gap-2 rounded-xl bg-accent-strong px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">
             <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
             {{ tr.t("details.navigate.google") }}
           </a>
@@ -82,6 +82,7 @@
                 @click="openLightbox"
                 data-src="{{ photo.url }}"
                 data-alt="{{ photo.alt }}"
+                aria-label="{{ tr.t("gallery.view_photo") }}"
                 class="{% if loop.first %}sm:col-span-4 aspect-[16/9]{% else %}aspect-square{% endif %} overflow-hidden rounded-2xl border border-border"
               >
                 <img src="{{ photo.thumb_url }}" alt="{{ photo.alt }}" loading="lazy" class="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
@@ -89,7 +90,13 @@
             {% endfor %}
           </div>
           <!-- Lightbox -->
-          <div x-show="galleryOpen" x-cloak @keydown.escape.window="closeLightbox" class="fixed inset-0 z-50 flex items-center justify-center bg-[oklch(18%_0.015_240_/_0.85)] p-4" @click="closeLightbox">
+          <div
+            id="photo-lightbox" x-show="galleryOpen" x-cloak
+            role="dialog" aria-modal="true" aria-labelledby="photo-lightbox-title"
+            @keydown.escape.window="closeLightbox" @keydown.tab="trapTab"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-[oklch(18%_0.015_240_/_0.85)] p-4" @click="closeLightbox"
+          >
+            <h2 id="photo-lightbox-title" class="sr-only">{{ tr.t("a11y.dialog_photo_title") }}</h2>
             <img :src="gallerySrc" :alt="galleryAlt" class="max-h-[90vh] max-w-full rounded-xl" @click.stop />
             <button @click="closeLightbox" aria-label="{{ tr.t("a11y.close") }}" class="absolute right-5 top-5 grid h-10 w-10 place-items-center rounded-full bg-white/90 text-fg">✕</button>
           </div>
@@ -115,9 +122,9 @@
               class="mt-4 flex flex-wrap items-center gap-3">
           <input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required class="text-sm" />
           <input type="text" name="alt" maxlength="500" placeholder="{{ tr.t("photo.upload.title") }}" class="rounded-lg border border-border bg-bg px-3 py-2 text-sm" />
-          <button type="submit" class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark">{{ tr.t("photo.upload.submit") }}</button>
+          <button type="submit" class="rounded-lg bg-accent-strong px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark">{{ tr.t("photo.upload.submit") }}</button>
         </form>
-        <div id="photo-upload-result" class="mt-3" aria-live="polite"></div>
+        <div id="photo-upload-result" class="mt-3" aria-live="polite" tabindex="-1"></div>
       </section>
       {% endif %}
 
@@ -215,7 +222,7 @@
                   <div class="flex items-center gap-3">
                     {% if is_authenticated %}
                     <button type="button" @click="report('review', {{ r.id }})"
-                            class="text-xs text-muted hover:text-danger">{{ tr.t("report.action") }}</button>
+                            class="btn-compact text-xs text-muted hover:text-danger">{{ tr.t("report.action") }}</button>
                     {% endif %}
                     <span class="text-xs text-muted">{{ r.created_label }}</span>
                   </div>
@@ -247,7 +254,7 @@
 
       <div class="rounded-2xl border border-border bg-surface p-4">
         <div class="flex flex-col gap-2 text-sm">
-          <a href="{{ google_url }}" target="_blank" rel="noopener" class="rounded-lg bg-accent px-4 py-2 text-center font-medium text-white hover:bg-accent-dark">{{ tr.t("details.navigate.google") }}</a>
+          <a href="{{ google_url }}" target="_blank" rel="noopener" class="rounded-lg bg-accent-strong px-4 py-2 text-center font-medium text-white hover:bg-accent-dark">{{ tr.t("details.navigate.google") }}</a>
           <a href="{{ osm_url }}" target="_blank" rel="noopener" class="rounded-lg border border-border px-4 py-2 text-center hover:border-accent">{{ tr.t("details.navigate.osm") }}</a>
         </div>
       </div>
@@ -289,7 +296,7 @@
       <!-- Verification panel (M3 §39) -->
       <div class="rounded-2xl border border-border bg-surface p-4 text-sm">
         <h2 class="font-display text-sm font-semibold">{{ tr.t("verification.title") }}</h2>
-        <div id="verification-panel" class="mt-2">
+        <div id="verification-panel" class="mt-2" aria-live="polite" tabindex="-1">
           {% if can_contribute %}
             <div class="grid gap-2">
               <form action="/parking/{{ id }}/verify" method="post" hx-post="/parking/{{ id }}/verify" hx-target="#verification-panel" hx-swap="innerHTML" class="contents">
@@ -359,15 +366,18 @@
   <div x-show="open" x-cloak
        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
        @click.self="close">
-    <form action="/reports" method="post" hx-post="/reports"
+    <form
+          id="report-modal" action="/reports" method="post" hx-post="/reports"
           hx-target="#report-modal-feedback" hx-swap="innerHTML"
+          role="dialog" aria-modal="true" aria-labelledby="report-modal-title"
+          @keydown.tab="trapTab"
           class="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-xl"
           @htmx:after:request="afterRequest">
       <input type="hidden" name="csrf" value="{{ layout.csrf }}">
       <input type="hidden" name="target_type" :value="type">
       <input type="hidden" name="target_id" :value="tid">
       <input type="hidden" name="page" value="/parking/{{ id }}">
-      <h2 class="font-display text-lg font-bold">{{ tr.t("report.title") }}</h2>
+      <h2 id="report-modal-title" class="font-display text-lg font-bold">{{ tr.t("report.title") }}</h2>
       <label class="mt-4 block text-sm font-medium">{{ tr.t("report.reason") }}
         <select name="reason" required class="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm">
           {% for r in reason_options %}<option value="{{ r.value }}">{{ r.label }}</option>{% endfor %}
@@ -377,11 +387,11 @@
         <textarea name="description" rows="4" maxlength="1000"
                   class="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm"></textarea>
       </label>
-      <div id="report-modal-feedback" class="mt-4" role="status" aria-live="polite"></div>
+      <div id="report-modal-feedback" class="mt-4" role="status" aria-live="polite" tabindex="-1"></div>
       <div class="mt-4 flex justify-end gap-2">
         <button type="button" @click="close"
                 class="rounded-lg border border-border px-4 py-2 text-sm text-muted hover:text-fg">{{ tr.t("report.cancel") }}</button>
-        <button type="submit" class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white">{{ tr.t("report.submit") }}</button>
+        <button type="submit" class="rounded-lg bg-accent-strong px-4 py-2 text-sm font-medium text-white">{{ tr.t("report.submit") }}</button>
       </div>
     </form>
   </div>

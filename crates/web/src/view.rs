@@ -57,6 +57,52 @@ pub struct OptionVm {
     pub checked: bool,
 }
 
+/// Field-scoped form errors (WP21 accessibility pass): a small set of
+/// `(input name, message)` pairs a handler records when it already knows
+/// which input a rejected submission belongs to. Askama calls methods on a
+/// struct field directly (as it already does for `tr.t(...)`), so a template
+/// asks `{% if let Some(msg) = field_errors.err("email") %}` and renders
+/// `aria-invalid` + `aria-describedby` on the matching input without the
+/// template itself doing any string matching.
+///
+/// The page-level `error: Option<String>` banner is unchanged and still
+/// covers everything that is not field-specific (rate limits, conflicts,
+/// "try again").
+#[derive(Debug, Clone, Default)]
+pub struct FieldErrors(Vec<(&'static str, String)>);
+
+impl FieldErrors {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// One error for one field — the common case (most handlers reject at
+    /// most one input per submission).
+    pub fn single(field: &'static str, message: String) -> Self {
+        Self(vec![(field, message)])
+    }
+
+    /// Record another field error (e.g. the same message under more than one
+    /// input, when a validation failure cannot be attributed to just one —
+    /// `GeoPoint::new`'s "coordinates out of range" flags both `lat` and `lon`).
+    pub fn push(&mut self, field: &'static str, message: String) {
+        self.0.push((field, message));
+    }
+
+    /// The message recorded for `field`, if the handler that rendered this
+    /// page found one.
+    pub fn err(&self, field: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(f, _)| *f == field)
+            .map(|(_, m)| m.as_str())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 pub fn type_options(t: Translator, selected: Option<&str>) -> Vec<OptionVm> {
     let sel = selected.unwrap_or("");
     TYPE_CODES

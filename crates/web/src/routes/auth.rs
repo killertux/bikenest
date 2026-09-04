@@ -45,6 +45,17 @@ pub(crate) fn auth_error_message(tr: Translator, err: &AuthError) -> String {
     }
 }
 
+/// Which register input a rejected submission belongs to (WP21 a11y pass):
+/// `None` for the errors that are not about one particular field (rate
+/// limits, conflicts, "try again") — those stay a banner-only message.
+pub(crate) fn register_field_error(err: &AuthError) -> Option<&'static str> {
+    match err {
+        AuthError::EmailTaken | AuthError::InvalidEmail => Some("email"),
+        AuthError::WeakPassword => Some("password"),
+        _ => None,
+    }
+}
+
 pub(crate) fn format_roles(tr: Translator, mut roles: Vec<Role>) -> String {
     roles.sort();
     roles.dedup();
@@ -83,6 +94,7 @@ pub(crate) async fn register_page(
             email: String::new(),
             display_name: String::new(),
             error: None,
+            field_errors: view::FieldErrors::new(),
         },
         &token,
     )
@@ -120,6 +132,11 @@ pub(crate) async fn register_post(
         Err(err) => {
             // Re-render with a fresh double-submit CSRF token so the next POST validates.
             let token = anon_csrf_token();
+            let message = auth_error_message(tr, &err);
+            let field_errors = match register_field_error(&err) {
+                Some(field) => view::FieldErrors::single(field, message.clone()),
+                None => view::FieldErrors::new(),
+            };
             render_anon(
                 RegisterPage {
                     layout: PageLayout::new(
@@ -131,7 +148,8 @@ pub(crate) async fn register_post(
                     tr,
                     email: form.email,
                     display_name: form.display_name,
-                    error: Some(auth_error_message(tr, &err)),
+                    error: Some(message),
+                    field_errors,
                 },
                 &token,
             )
@@ -212,6 +230,7 @@ pub(crate) async fn login_page(
             email: String::new(),
             notice: login_notice(tr, &q),
             error: None,
+            field_errors: view::FieldErrors::new(),
             next: htmx::safe_local_path(&q.next).unwrap_or("").to_string(),
             google_enabled: state.google_oauth_enabled,
         },
@@ -251,6 +270,13 @@ pub(crate) async fn login_post(
         Err(_) => {
             tracing::warn!("login failed"); // no email/IP/PII in the log field
             let token = anon_csrf_token();
+            let message = tr.t("auth.error.invalid_credentials").to_string();
+            // Never disclose which of the two was wrong: both inputs are
+            // flagged with the same generic message (WP21 a11y pass) rather
+            // than only one, which would leak that the other was correct.
+            let mut field_errors = view::FieldErrors::new();
+            field_errors.push("email", message.clone());
+            field_errors.push("password", message.clone());
             render_anon(
                 LoginPage {
                     layout: PageLayout::new(
@@ -262,7 +288,8 @@ pub(crate) async fn login_post(
                     tr,
                     email: String::new(),
                     notice: None,
-                    error: Some(tr.t("auth.error.invalid_credentials").to_string()),
+                    error: Some(message),
+                    field_errors,
                     next: htmx::safe_local_path(&next).unwrap_or("").to_string(),
                     google_enabled: state.google_oauth_enabled,
                 },
@@ -362,6 +389,7 @@ pub(crate) async fn verify_resend(
                     email: String::new(),
                     notice: None,
                     error: Some(auth_error_message(tr, &err)),
+                    field_errors: view::FieldErrors::new(),
                     next: String::new(),
                     google_enabled: state.google_oauth_enabled,
                 },

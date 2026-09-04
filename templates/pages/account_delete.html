@@ -7,7 +7,7 @@
   <p class="mt-2 text-sm leading-relaxed text-muted">{{ tr.t("delete.intro") }}</p>
 
   {% if error.is_some() %}
-    <div class="mt-4 rounded-lg border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">{{ error.as_deref().unwrap_or("") }}</div>
+    <div class="mt-4 rounded-lg border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger" role="alert">{{ error.as_deref().unwrap_or("") }}</div>
   {% endif %}
 
   <form action="/account/delete" method="post" class="mt-6 space-y-4 rounded-2xl border border-border bg-surface p-6">

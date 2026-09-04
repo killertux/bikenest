@@ -7115,3 +7115,503 @@ async fn the_geocode_endpoint_refuses_over_budget(tx: &mut TestTx) {
     let _ = tx;
     cleanup_user(EMAIL).await;
 }
+
+// ---------------------------------------------------------------------------
+// WP21: accessibility pass
+// ---------------------------------------------------------------------------
+
+/// The full `<tag ...>` opening tag containing `id="{id}"` — a substring
+/// match on the whole tag rather than a literal attribute-order string, so a
+/// harmless reordering of attributes does not break the assertion.
+fn opening_tag_with_id<'a>(body: &'a str, id: &str) -> &'a str {
+    let needle = format!(r#"id="{id}""#);
+    let at = body
+        .find(&needle)
+        .unwrap_or_else(|| panic!("id=\"{id}\" not found in body"));
+    let start = body[..at].rfind('<').expect("a tag opens before the id");
+    let end = at + body[at..].find('>').expect("the tag closes") + 1;
+    &body[start..end]
+}
+
+#[db_test]
+async fn login_wrong_password_banner_is_an_alert(tx: &mut bikenest_test_support::TestTx) {
+    let (app, _) = auth_app().await;
+    const EMAIL: &str = "wp21-login-alert@example.com";
+    cleanup_user(EMAIL).await;
+    post_form(
+        &app,
+        "/register",
+        &[("email", EMAIL), ("password", "password123")],
+        None,
+    )
+    .await;
+
+    let (s, login_page) = get_c(&app, "/login", None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        !login_page.contains(r#"role="alert""#),
+        "no error banner before any attempt: {login_page}"
+    );
+
+    let (s, body, _) = post_form(
+        &app,
+        "/login",
+        &[("email", EMAIL), ("password", "wrong")],
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(body.contains(r#"role="alert""#), "{body}");
+    // The generic message never says which of the two was wrong, but a
+    // failure still flags both inputs (WP21 a11y pass) rather than neither.
+    assert!(
+        body.contains(r#"aria-describedby="email-error""#)
+            && body.contains(r#"aria-describedby="password-error""#),
+        "{body}"
+    );
+
+    let _ = tx;
+    cleanup_user(EMAIL).await;
+}
+
+/// `AuthError::EmailTaken` is defined but `AuthService::register` never
+/// returns it: a taken email is deliberately answered exactly like a fresh
+/// one (`Ok(())`, no mail sent) so the response cannot be used to enumerate
+/// registered addresses (§45 — see the comment in
+/// `crates/application/src/auth.rs`'s `register`). `register_field_error`'s
+/// `EmailTaken => Some("email")` arm therefore has no live producer through
+/// this form; the same field association is exercised here through
+/// `AuthError::InvalidEmail`, which *does* reach the error branch (a
+/// malformed address fails `UserEmail::parse` before any lookup).
+#[db_test]
+async fn register_with_an_invalid_email_flags_the_email_field(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let (app, _email) = auth_app().await;
+    let (s, body, _) = post_form(
+        &app,
+        "/register",
+        &[("email", "not-an-email"), ("password", "password123")],
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "the invalid-email re-render: {body}");
+    assert!(body.contains(r#"role="alert""#), "the banner too: {body}");
+    let email_input = opening_tag_with_id(&body, "email");
+    assert!(email_input.contains(r#"aria-invalid="true""#), "{email_input}");
+    assert!(
+        email_input.contains(r#"aria-describedby="email-error""#),
+        "{email_input}"
+    );
+    assert!(body.contains(r#"<p id="email-error""#), "{body}");
+
+    let _ = tx;
+}
+
+#[db_test]
+async fn parking_new_bad_currency_code_flags_the_price_field(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    // `cost_from_form` never rejects an unparsable numeric amount — a price
+    // that fails to parse just falls back to "paid, amount unknown" — so the
+    // one way to make the price group of fields fail server-side validation
+    // today is a currency/unit code `CurrencyCode::parse`/`PricingUnit::from_code`
+    // refuses, which is exactly what a stray non-ISO currency value is.
+    let (app, email) = auth_app().await;
+    const EMAIL_ADDR: &str = "wp21-price@example.com";
+    let cookie = verified_cookie(&app, &email, EMAIL_ADDR).await;
+    let (_, form) = get_c(&app, "/parking/new", Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+
+    let (s, body, _) = post_form(
+        &app,
+        "/parking/new",
+        &[
+            ("csrf", &csrf),
+            ("name", "Bad Price Spot"),
+            ("address", "Rua X, 1"),
+            ("parking_type", "rack"),
+            ("cost_kind", "paid"),
+            ("price", "10"),
+            ("price_currency", "X"),
+            ("price_unit", "hour"),
+            ("lat", "-23.4"),
+            ("lon", "-46.6"),
+            ("timezone", "America/Sao_Paulo"),
+            ("confirm", "1"),
+        ],
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::BAD_REQUEST,
+        "the invalid currency code is rejected: {body}"
+    );
+    let price_input = opening_tag_with_id(&body, "price");
+    assert!(price_input.contains(r#"aria-invalid="true""#), "{price_input}");
+    assert!(
+        price_input.contains(r#"aria-describedby="price-error""#),
+        "{price_input}"
+    );
+    assert!(body.contains(r#"<p id="price-error""#), "{body}");
+
+    let _ = tx;
+    cleanup_user_contributions(EMAIL_ADDR).await;
+}
+
+#[db_test]
+async fn review_with_an_empty_body_flags_the_body_field(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp21-review-body@example.com";
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+    let (_, form) = get_c(&app, "/parking/new", Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+    let id = add_location(&app, &cookie, &csrf, "WP21 Review Spot", &[]).await;
+
+    let (_, review_form) = get_c(&app, &format!("/parking/{id}/review"), Some(&cookie)).await;
+    let rcsrf = extract_csrf(&review_form);
+    let rbody = multipart_review("4", "", "----bikenestphoto");
+    let (s, body) = post_multipart(
+        &app,
+        &format!("/parking/{id}/review"),
+        rbody,
+        &cookie,
+        Some(&rcsrf),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "the empty body is rejected: {body}");
+    let body_field = opening_tag_with_id(&body, "body");
+    assert!(body_field.contains(r#"aria-invalid="true""#), "{body_field}");
+    assert!(
+        body_field.contains(r#"aria-describedby="body-error""#),
+        "{body_field}"
+    );
+    assert!(body.contains(r#"<p id="body-error""#), "{body}");
+
+    let _ = tx;
+    cleanup_user_contributions(EMAIL).await;
+}
+
+#[db_test]
+async fn parking_details_dialogs_and_swap_targets_are_accessible(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let (app, email) = auth_app().await;
+    let loc = fixture_location(tx, "wp21-dialogs", "WP21 Dialogs Spot").await;
+    const UPLOADER: &str = "wp21-dialogs-up@example.com";
+    const MODERATOR: &str = "wp21-dialogs-mod@example.com";
+    let uploader = verified_cookie(&app, &email, UPLOADER).await;
+
+    // A photo, approved, so the gallery — and the lightbox it feeds — renders.
+    let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
+    let csrf = extract_csrf(&page);
+    let (_, mbody) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
+    post_multipart(
+        &app,
+        &format!("/parking/{loc}/photo"),
+        mbody,
+        &uploader,
+        Some(&csrf),
+    )
+    .await;
+    let (photo_id,): (i64,) = sqlx::query_as("SELECT id FROM parking_photo WHERE location_id = $1")
+        .bind(loc)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    let mod_cookie = moderator_cookie(&app, &email, MODERATOR).await;
+    let (_, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
+    let mcs = extract_csrf(&queue);
+    post_form_hx(
+        &app,
+        &format!("/moderation/photos/parking/{photo_id}/approve"),
+        &[("csrf", &mcs)],
+        Some(&mod_cookie),
+    )
+    .await;
+
+    let (s, body) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // Report modal: role/aria-modal/aria-labelledby, and the target exists.
+    let report_modal = opening_tag_with_id(&body, "report-modal");
+    assert!(report_modal.contains(r#"role="dialog""#), "{report_modal}");
+    assert!(report_modal.contains(r#"aria-modal="true""#), "{report_modal}");
+    assert!(
+        report_modal.contains(r#"aria-labelledby="report-modal-title""#),
+        "{report_modal}"
+    );
+    assert!(
+        body.contains(r#"id="report-modal-title""#),
+        "the labelledby target exists: {body}"
+    );
+
+    // Lightbox — only rendered because the gallery is non-empty.
+    let lightbox = opening_tag_with_id(&body, "photo-lightbox");
+    assert!(lightbox.contains(r#"role="dialog""#), "{lightbox}");
+    assert!(lightbox.contains(r#"aria-modal="true""#), "{lightbox}");
+    assert!(
+        lightbox.contains(r#"aria-labelledby="photo-lightbox-title""#),
+        "{lightbox}"
+    );
+    assert!(
+        body.contains(r#"id="photo-lightbox-title""#),
+        "the labelledby target exists: {body}"
+    );
+
+    // Swap targets: aria-live + a focus anchor.
+    for id in ["verification-panel", "photo-upload-result", "report-modal-feedback"] {
+        let tag = opening_tag_with_id(&body, id);
+        assert!(tag.contains(r#"aria-live="polite""#), "{id}: {tag}");
+        assert!(tag.contains(r#"tabindex="-1""#), "{id}: {tag}");
+    }
+
+    let _ = tx;
+    cleanup_user_contributions(UPLOADER).await;
+    cleanup_user_contributions(MODERATOR).await;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = 'wp21-dialogs'")
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+#[db_test]
+async fn search_results_list_has_no_script_child_and_listitems_are_direct_children(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    const MARK: &str = "wp21-search-list";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    // The FakeGeocoder resolves "Rua XV de Novembro" to exactly this point
+    // (crates/infrastructure/src/geocoding.rs), so a fixture placed there is
+    // guaranteed to be in range of the query the task names.
+    ParkingBuilder::new()
+        .with_fixture_tag(MARK)
+        .with_name("WP21 List Structure Rack")
+        .at(-25.4284, -49.2733)
+        .create(tx.executor())
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    let (status, body) = get("/search?q=Rua+XV+de+Novembro").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("WP21 List Structure Rack"),
+        "the seeded fixture is in the results: {body}"
+    );
+
+    // `#search-data` lives outside `#results`: exactly one copy on a plain
+    // page load, and it renders before `#results`, not inside it.
+    assert_eq!(
+        body.matches(r#"id="search-data""#).count(),
+        1,
+        "one copy on a non-htmx page load: {body}"
+    );
+    let results_at = body
+        .find(r#"<div id="results""#)
+        .expect("the results container");
+    let script_at = body
+        .find(r#"<script type="application/json" id="search-data""#)
+        .expect("the search-data script");
+    assert!(
+        script_at < results_at,
+        "search-data must render before #results, not inside it"
+    );
+
+    // The first element inside `#results` must be a listitem, not a wrapper
+    // div — nothing but whitespace stands between the list's own opening tag
+    // and its first child.
+    let after_results = &body[results_at..];
+    let open_end = after_results.find('>').unwrap() + 1;
+    let after_open = &after_results[open_end..];
+    let next_tag_at = after_open.find('<').expect("a child tag follows");
+    let head = &after_open[next_tag_at..(next_tag_at + 80).min(after_open.len())];
+    // The tag's own attributes are one per line (see
+    // components/parking_card.html), so this checks the tag name and the
+    // presence of `role="listitem"` rather than an exact single-line prefix.
+    assert!(
+        head.starts_with("<article") && head.contains(r#"role="listitem""#),
+        "the first child of #results must be a listitem: {head}"
+    );
+
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+// --- Template/static-asset hygiene (pure filesystem scan, no DB) ------------
+
+/// No `focus:outline-none` may remain in a template: it strips the *keyboard*
+/// focus ring along with the mouse one, defeating the global `:focus-visible`
+/// rule input.css now carries (WP21 a11y pass).
+#[test]
+fn no_focus_outline_none_remains_in_templates() {
+    let templates_dir =
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates"));
+    let mut offenders = Vec::new();
+    let mut stack = vec![templates_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(contents) = std::fs::read_to_string(&path)
+                && contents.contains("focus:outline-none")
+            {
+                offenders.push(path.display().to_string());
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "focus:outline-none remains in:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// No cramped `<button>` (`text-xs` + `py-0.5`/exactly `py-1`) may remain: at
+/// that padding a button's tap target falls under the 24×24 CSS px minimum
+/// (WCAG 2.5.8). `.btn-compact` (input.css) is the fix; every real offender
+/// found during the WP21 audit now carries it.
+#[test]
+fn no_tiny_text_xs_buttons_remain_in_templates() {
+    let templates_dir =
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates"));
+    let button = regex::Regex::new(r"(?s)<button\b[^>]*>").unwrap();
+    let tiny_py = regex::Regex::new(r#"(?:^|[\s"])py-0\.5(?:[\s"]|$)|(?:^|[\s"])py-1(?:[\s"]|$)"#)
+        .unwrap();
+    let mut offenders = Vec::new();
+    let mut stack = vec![templates_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Ok(contents) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for m in button.find_iter(&contents) {
+                let tag = m.as_str();
+                if tag.contains("text-xs") && tiny_py.is_match(tag) {
+                    offenders.push(format!("{}: {tag}", path.display()));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "cramped text-xs buttons remain:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// Every `<button>` must have an accessible name: either visible text content
+/// or an `aria-label` (a bound `:aria-label` counts too — it always ships
+/// alongside a matching static `aria-label` fallback in this codebase, see
+/// templates/pages/admin_users.html's reveal-email toggle). A button whose
+/// only content is an `<img alt="…">` also passes: the image's alt text
+/// becomes the button's accessible name.
+///
+/// Heuristic, not a real DOM/accessible-name computation — false positives go
+/// in `ALLOWED` with a comment, not a code change. Empty today: the WP21
+/// audit found and fixed every real gap.
+#[test]
+fn every_button_has_visible_text_or_an_aria_label() {
+    // (path substring, snippet substring) — none needed yet: the WP21 audit
+    // found and fixed every real gap.
+    const ALLOWED: &[(&str, &str)] = &[];
+    let templates_dir =
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates"));
+    let button = regex::Regex::new(r"(?s)<button\b([^>]*)>(.*?)</button>").unwrap();
+    let tag_strip = regex::Regex::new(r"(?s)<[^>]+>").unwrap();
+    let mut offenders = Vec::new();
+    let mut stack = vec![templates_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Ok(contents) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for cap in button.captures_iter(&contents) {
+                let attrs = &cap[1];
+                let inner = &cap[2];
+                if attrs.contains("aria-label") {
+                    continue;
+                }
+                let text = tag_strip.replace_all(inner, "");
+                if !text.trim().is_empty() {
+                    continue;
+                }
+                if inner.contains("x-text") || attrs.contains("x-text") {
+                    continue;
+                }
+                if inner.contains("alt=\"") && !inner.contains("alt=\"\"") {
+                    continue;
+                }
+                let snippet = format!("{attrs} ... {inner}");
+                if ALLOWED
+                    .iter()
+                    .any(|(p, s)| path.display().to_string().contains(p) && snippet.contains(s))
+                {
+                    continue;
+                }
+                offenders.push(format!("{}: {snippet}", path.display()));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "buttons without an accessible name:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// JS static check: the shared focus-trap helper and the after-swap focus
+/// listener both live in app.js (WP21 a11y pass), and search.js still finds
+/// `#search-data` by id regardless of where in the DOM it now renders.
+#[test]
+fn app_js_has_the_focus_trap_and_after_swap_focus_listener() {
+    let app_js = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../web/static/js/app.js"
+    ));
+    let js = std::fs::read_to_string(app_js).expect("read app.js");
+    assert!(js.contains("FocusTrap"), "the shared helper: {js}");
+    assert!(js.contains("trapTab"), "Tab/Shift+Tab cycling: {js}");
+    assert!(
+        js.contains("inertBackground") || js.contains(".inert"),
+        "background content is inerted while a dialog is open"
+    );
+    assert!(
+        js.contains("htmx:after:swap"),
+        "the after-swap focus listener"
+    );
+    assert!(
+        js.contains("verification-panel"),
+        "it targets the verification panel specifically: {js}"
+    );
+
+    let search_js = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../web/static/js/search.js"
+    ));
+    let js = std::fs::read_to_string(search_js).expect("read search.js");
+    assert!(
+        js.contains(r#"document.getElementById("search-data")"#),
+        "readData() must query by id from `document`, not a page-specific root: {js}"
+    );
+}

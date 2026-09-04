@@ -12,7 +12,7 @@
       <form action="/verify-email/resend" method="post" class="mt-3 flex items-center gap-3">
         <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
         <input type="hidden" name="email" value="{{ email }}" />
-        <button type="submit" class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("auth.resend_link") }}</button>
+        <button type="submit" class="rounded-lg bg-accent-strong px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("auth.resend_link") }}</button>
       </form>
     </div>
   {% endif %}

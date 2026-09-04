@@ -13,6 +13,95 @@
 document.addEventListener('alpine:init', function () {
   var Alpine = window.Alpine;
 
+  /* ---- Shared focus trap (WP21 accessibility pass) ------------------------------
+   * Both dialogs below (the report modal, the photo lightbox) call this from
+   * their own open/close methods — it is plain JS, never a template
+   * expression, so the CSP build's evaluator never has to parse it.
+   *
+   * open(dialog):  remember the opener, move focus to the first focusable
+   *                descendant of `dialog` (or `dialog` itself, given
+   *                `tabindex="-1"`, when it has none), and `inert` the rest
+   *                of the page so a keyboard/screen-reader user cannot tab
+   *                or land into content behind the overlay.
+   * close():       undo both — `inert` lifts, focus returns to the opener.
+   * trapTab(e, dialog): Tab/Shift+Tab cycles within `dialog`'s focusable
+   *                descendants; bind `@keydown.tab="trapTab"` directly on
+   *                the dialog's own root so `e.currentTarget` in the
+   *                component method already *is* the boundary to cycle
+   *                within — no `$root`/`$refs` needed.
+   *
+   * Both dialogs here render *inside* `<main id="content">` (nested in
+   * whatever section triggered them), not portalled out to `<body>` — so
+   * `inert`-ing `#content` itself would inert the dialog too, since `inert`
+   * cascades to descendants and a descendant cannot opt back out. Instead,
+   * `inertBackground` walks up from the dialog to `<body>` and inerts each
+   * *sibling* it passes — header, footer, and every other part of the page
+   * end up inert, while the dialog's own ancestor chain never does. */
+  var FocusTrap = {
+    opener: null,
+    inerted: [],
+    focusableSelector:
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    focusable: function (dialog) {
+      if (!dialog) return [];
+      return Array.prototype.filter.call(
+        dialog.querySelectorAll(this.focusableSelector),
+        function (el) { return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length); }
+      );
+    },
+    inertBackground: function (dialog) {
+      var inerted = [];
+      var node = dialog;
+      while (node && node !== document.body && node.parentElement) {
+        var parent = node.parentElement;
+        Array.prototype.forEach.call(parent.children, function (sibling) {
+          if (sibling !== node && !sibling.hasAttribute('inert')) {
+            sibling.setAttribute('inert', '');
+            inerted.push(sibling);
+          }
+        });
+        node = parent;
+      }
+      return inerted;
+    },
+    open: function (dialog) {
+      if (!dialog) return;
+      this.opener = document.activeElement;
+      this.inerted = this.inertBackground(dialog);
+      var items = this.focusable(dialog);
+      if (items.length) {
+        items[0].focus();
+      } else {
+        if (!dialog.hasAttribute('tabindex')) dialog.setAttribute('tabindex', '-1');
+        dialog.focus();
+      }
+    },
+    close: function () {
+      this.inerted.forEach(function (el) { el.removeAttribute('inert'); });
+      this.inerted = [];
+      var opener = this.opener;
+      this.opener = null;
+      if (opener && typeof opener.focus === 'function') opener.focus();
+    },
+    trapTab: function (e, dialog) {
+      if (!dialog) return;
+      var items = this.focusable(dialog);
+      if (!items.length) return;
+      var first = items[0];
+      var last = items[items.length - 1];
+      var active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || !dialog.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !dialog.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    },
+  };
+
   /* ---- base.html: mobile menu -------------------------------------------------- */
   Alpine.data('mobileMenu', function () {
     return {
@@ -303,8 +392,20 @@ document.addEventListener('alpine:init', function () {
         this.galleryOpen = true;
         this.gallerySrc = e.currentTarget.dataset.src;
         this.galleryAlt = e.currentTarget.dataset.alt;
+        // `x-show` only applies on the next tick — focusing (or even
+        // measuring) the dialog before then finds it still `display:none`.
+        this.$nextTick(function () {
+          FocusTrap.open(document.getElementById('photo-lightbox'));
+        });
       },
-      closeLightbox: function () { this.galleryOpen = false; },
+      closeLightbox: function () {
+        this.galleryOpen = false;
+        FocusTrap.close();
+      },
+      /* Bound `@keydown.tab="trapTab"` on the lightbox's own root (see
+       * templates/pages/parking_details.html), so `e.currentTarget` there is
+       * exactly the dialog FocusTrap should cycle within. */
+      trapTab: function (e) { FocusTrap.trapTab(e, e.currentTarget); },
       report: function (type, id) {
         this.$dispatch('bikenest:report', { type: type, id: id });
       },
@@ -324,8 +425,15 @@ document.addEventListener('alpine:init', function () {
         this.type = e.detail.type;
         this.tid = e.detail.id;
         this.open = true;
+        this.$nextTick(function () {
+          FocusTrap.open(document.getElementById('report-modal'));
+        });
       },
-      close: function () { this.open = false; },
+      close: function () {
+        this.open = false;
+        FocusTrap.close();
+      },
+      trapTab: function (e) { FocusTrap.trapTab(e, e.currentTarget); },
       /* htmx 4 fires `htmx:after:request` once the response body has been read
        * and before the swap, with the whole request context on
        * `detail.ctx` (see `#issueRequest` in web/static/vendor/htmx.js:
@@ -336,7 +444,10 @@ document.addEventListener('alpine:init', function () {
       afterRequest: function (e) {
         var status = e.detail && e.detail.ctx && e.detail.ctx.response
           ? e.detail.ctx.response.status : 0;
-        if (status >= 200 && status < 300) this.open = false;
+        if (status >= 200 && status < 300) {
+          this.open = false;
+          FocusTrap.close();
+        }
       },
     };
   });
@@ -365,3 +476,23 @@ document.addEventListener('alpine:init', function () {
     };
   });
 });
+
+/* ---- parking_details.html: move focus after a verification swap (WP21) ------
+ * `#verification-panel`'s own forms (verify.still_exists / no_longer_exists /
+ * info_changed / parked_here) all target `hx-target="#verification-panel"
+ * hx-swap="innerHTML"`, so the form that fired the request is *inside* the
+ * subtree htmx just replaced — it is gone once the swap lands. htmx 4 reacts
+ * to exactly that (see the `!e.sourceElement?.isConnected` branch right
+ * before the `htmx:after:swap` dispatch in web/static/vendor/htmx.js) by
+ * firing the event on the swap target instead, so `e.target` here already is
+ * `#verification-panel` and needs no lookup. Not Alpine-specific — a plain
+ * `document` listener, guarded the same way search.js guards its own (a
+ * boosted navigation reruns every script, this one included). */
+if (!window.__bnA11yBound) {
+  window.__bnA11yBound = true;
+  document.addEventListener('htmx:after:swap', function (e) {
+    if (e.target && e.target.id === 'verification-panel') {
+      e.target.focus();
+    }
+  });
+}

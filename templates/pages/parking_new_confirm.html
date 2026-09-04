@@ -26,7 +26,7 @@
       {% for f in fields %}
         <input type="hidden" name="{{ f.name }}" value="{{ f.value }}" />
       {% endfor %}
-      <button type="submit" class="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("new.confirm.create_anyway") }}</button>
+      <button type="submit" class="w-full rounded-lg bg-accent-strong px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("new.confirm.create_anyway") }}</button>
     </form>
 
     <p class="mt-4 text-sm">

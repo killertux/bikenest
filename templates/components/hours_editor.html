@@ -18,6 +18,7 @@
           <select
             id="h_{{ d.key }}_state" name="h_{{ d.key }}_state" x-model="state"
             class="flex-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
+            {% if d.error.is_some() %}aria-invalid="true" aria-describedby="h_{{ d.key }}_state-error"{% endif %}
           >
             {% for o in d.state_options %}
               <option value="{{ o.value }}" {% if o.checked %}selected{% endif %}>{{ o.label }}</option>
@@ -47,7 +48,7 @@
         </div>
 
         {% if d.error.is_some() %}
-          <p class="mt-2 text-xs font-medium text-danger">{{ d.error.as_deref().unwrap_or("") }}</p>
+          <p id="h_{{ d.key }}_state-error" role="alert" class="mt-2 text-xs font-medium text-danger">{{ d.error.as_deref().unwrap_or("") }}</p>
         {% endif %}
       </div>
     {% endfor %}

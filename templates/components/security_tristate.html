@@ -15,7 +15,7 @@
           {% for o in s.options %}
             <label class="cursor-pointer">
               <input type="radio" name="{{ s.name }}" value="{{ o.value }}" class="peer sr-only" {% if o.checked %}checked{% endif %} />
-              <span class="block px-3 py-1.5 text-xs font-medium text-muted peer-checked:bg-accent peer-checked:text-white peer-focus-visible:ring-2 peer-focus-visible:ring-accent-strong">{{ o.label }}</span>
+              <span class="block px-3 py-1.5 text-xs font-medium text-muted peer-checked:bg-accent-strong peer-checked:text-white peer-focus-visible:ring-2 peer-focus-visible:ring-accent-strong">{{ o.label }}</span>
             </label>
           {% endfor %}
         </div>

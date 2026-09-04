@@ -41,7 +41,7 @@ All values are OKLch. Raw values live only in the token block (`colors_and_type.
 | `bg` | `oklch(98% 0.004 240)` | Page background (cool near-white) |
 | `surface` | `oklch(100% 0 0)` | Cards, panels, sheets |
 | `fg` | `oklch(20% 0.02 240)` | Primary text (near-black, cool) |
-| `muted` | `oklch(50% 0.018 240)` | Secondary text, inactive nav, meta |
+| `muted` | `oklch(45% 0.018 240)` | Secondary text, inactive nav, meta (≈7:1 on `bg`, up from 50% L's ≈5.6:1 — WP21 a11y pass) |
 | `line` | `oklch(90% 0.006 240)` | Hairline borders, dividers |
 | `accent` | `oklch(56% 0.12 170)` | Brand green-teal: links, active states, primary buttons |
 | `accent-strong` | `oklch(45% 0.11 170)` | Accent text on tinted backgrounds (≥4.5:1) |
@@ -96,7 +96,7 @@ Scale (from the source screens):
 
 Component shapes observed across the source screens (implemented in `ui_kits/app/`):
 
-- **Buttons** — Primary: `accent` fill, white text, `rounded-lg`, h-10, semibold, hover `accent-dark`. Secondary: white/`surface` fill, `line` border, `fg` text, hover neutral wash. Danger: `danger` fill, white text, hover darker (`oklch(40% 0.15 30)`). Ghost/text links for tertiary actions. One primary button per action per viewport.
+- **Buttons** — Primary: `accent-strong` fill, white text (`accent` itself is ≈4.4:1 with white — under the 4.5:1 text minimum; `accent-strong` is ≈7:1 — WP21 a11y pass), `rounded-lg`, h-10, semibold, hover `accent-dark`. Secondary: white/`surface` fill, `line` border, `fg` text, hover neutral wash. Danger: `danger` fill, white text, hover darker (`oklch(40% 0.15 30)`). Ghost/text links for tertiary actions. One primary button per action per viewport.
 - **Inputs** — h-10/11, `rounded-md`, `line` border, white fill, focus-visible 2px `accent-strong` outline with 2px offset. Labels 14px medium; hints 13px muted; errors 13px `danger` with a `danger`-bordered input state.
 - **Cards** — `surface` fill, `line` border, `rounded-xl`, `box-shadow-card` (`0 1px 2px …0.06, 0 8px 24px …0.08`). Optional icon tile: 44px `rounded-xl` `accent-soft` fill with `accent-strong` icon.
 - **Badges/chips** — `rounded-full`, 11–12px semibold, tinted fill (`accent-soft`, `fresh/10%`, `aging/12%`, `danger-soft`) with matching strong text; outlined variants use 45%-alpha borders.

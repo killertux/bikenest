@@ -11,8 +11,13 @@
 <p id="result-count" hx-swap-oob="true" aria-live="polite" class="text-sm text-muted">
   {% if results.error.is_some() %}{% else %}{{ results.total_label }}{% endif %}
 </p>
+{# `#search-data` itself lives outside `#results` (search.html renders the
+   primary copy as a sibling, WP21 a11y pass: `role="list"` must contain only
+   `role="listitem"` children) — this fragment only re-renders it here,
+   out-of-band, so a re-search's `hx-target="#results" hx-swap="innerHTML"`
+   never leaves a second copy sitting inside the list. #}
+<script type="application/json" id="search-data" hx-swap-oob="true">{{ results.map_json|safe }}</script>
 {% endif %}
-<script type="application/json" id="search-data">{{ results.map_json|safe }}</script>
 
 {% if let Some(err) = results.error %}
   <div class="rounded-2xl border border-border bg-surface p-8 text-center text-muted">
@@ -61,11 +66,13 @@
     {% if results.browse %}
       <p class="font-mono text-xs text-muted">{{ tr.t("search.browse.from_center") }}</p>
     {% endif %}
-    <div class="space-y-4">
-      {% for item in results.items %}
-        {% include "components/parking_card.html" %}
-      {% endfor %}
-    </div>
+    {# No wrapper here: `#results` (search.html) is `role="list"` and already
+       carries `space-y-4` itself, so each card — `role="listitem"` in
+       components/parking_card.html — is a direct child of the list, not
+       nested inside an extra div (WP21 a11y pass). #}
+    {% for item in results.items %}
+      {% include "components/parking_card.html" %}
+    {% endfor %}
 
     {% if let Some(hint) = results.refine_hint %}
       <p class="mt-6 rounded-xl border border-dashed border-border bg-surface px-4 py-3 text-sm text-muted">{{ hint }}</p>

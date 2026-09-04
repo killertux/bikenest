@@ -192,6 +192,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "a11y.close" => ("Close", "Fechar"),
         "a11y.report_filter" => ("Report state filter", "Filtro de estado do relato"),
         "a11y.results_pages" => ("Results pages", "Páginas de resultados"),
+        "a11y.dialog_photo_title" => ("Photo", "Foto"),
         "nav.how" => ("How it works", "Como funciona"),
         "nav.spots" => ("Parking spots", "Vagas de bike"),
         "nav.community" => ("Community", "Comunidade"),
@@ -495,6 +496,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Be the first to add a photo",
             "Seja o primeiro a enviar uma foto",
         ),
+        // A fixed name on the button itself (WP21 a11y pass): an uploaded
+        // photo's own caption is optional, so the thumbnail's accessible name
+        // cannot rely on it alone.
+        "gallery.view_photo" => ("View photo", "Ver foto"),
         "details.add_nearby" => (
             "Missing a spot around here?",
             "Faltou alguma vaga por aqui?",

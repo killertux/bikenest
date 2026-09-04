@@ -66,6 +66,45 @@ impl FormError {
             FormError::Hours(_) => default,
         }
     }
+
+    /// Which input(s) this rejection belongs to (WP21 a11y pass), so the page
+    /// can flag them directly instead of leaving the contributor to guess from
+    /// one generic banner. The hours editor already reports its own per-day
+    /// error, so it is deliberately not represented here.
+    fn field_errors(&self, tr: Translator) -> view::FieldErrors {
+        let mut out = view::FieldErrors::new();
+        if let FormError::Contribution(ContributionError::InvalidField(raw)) = self {
+            let message = contribution_error_message(tr, &ContributionError::InvalidField(raw.clone()));
+            for field in invalid_field_names(raw) {
+                out.push(field, message.clone());
+            }
+        }
+        out
+    }
+}
+
+/// `ContributionError::InvalidField` carries the raw validation message (the
+/// application layer's own `"name is required"`, or a domain parse error's
+/// `Display`), not a field tag — this is the one place that turns that text
+/// back into the input name(s) the form should flag. New wording changes here
+/// too; that coupling is the cost of not growing the application-layer error
+/// into a field enum for what is, so far, a handful of known messages.
+fn invalid_field_names(raw: &str) -> &'static [&'static str] {
+    if raw.contains("name is required") {
+        &["name"]
+    } else if raw.contains("address is required") {
+        &["address"]
+    } else if raw.contains("latitude is required") {
+        &["lat"]
+    } else if raw.contains("longitude is required") {
+        &["lon"]
+    } else if raw.contains("coordinates out of range") {
+        &["lat", "lon"]
+    } else if raw.contains("currency") || raw.contains("pricing unit") {
+        &["price"]
+    } else {
+        &[]
+    }
 }
 
 /// Parse a price in major units ("5", "5.50", "5,50") into cents.
@@ -240,6 +279,9 @@ pub(crate) fn parking_edit_page_vm(
         lat: loc.point().lat(),
         lon: loc.point().lon(),
         error,
+        // The two callers (a fresh GET, and re-rendering after a version
+        // conflict) never reject one particular input — nothing to flag.
+        field_errors: view::FieldErrors::new(),
         notice,
     }
 }
@@ -259,6 +301,7 @@ pub(crate) async fn parking_new_page(
             tr,
             &ContributionForm::default(),
             None,
+            view::FieldErrors::new(),
             Vec::new(),
             None,
         ),
@@ -347,6 +390,7 @@ pub(crate) async fn parking_new_post(
                         tr,
                         &form,
                         None,
+                        view::FieldErrors::new(),
                         duplicates,
                         Some(outcome.id),
                     ),
@@ -363,6 +407,7 @@ pub(crate) async fn parking_new_post(
                 tr,
                 &form,
                 Some((tr.t("contribution.error.rate_limited").to_string(), None)),
+                view::FieldErrors::new(),
                 Vec::new(),
                 None,
             ),
@@ -374,11 +419,13 @@ pub(crate) async fn parking_new_post(
 
 /// The add page, rendered from whatever the form currently holds. `error` is
 /// the banner message plus (for an hours problem) the day whose row is wrong.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn new_page_vm(
     layout: PageLayout,
     tr: Translator,
     form: &ContributionForm,
     error: Option<(String, Option<HoursError>)>,
+    field_errors: view::FieldErrors,
     duplicates: Vec<view::DuplicateVm>,
     added_id: Option<i64>,
 ) -> ParkingNewPage {
@@ -415,6 +462,7 @@ pub(crate) fn new_page_vm(
         security_states: security_editor_vm(tr, &form.security_fields()),
         type_options: view::type_options(tr, Some(&form.parking_type)),
         error: message,
+        field_errors,
         duplicates,
         added_id,
     }
@@ -427,12 +475,14 @@ pub(crate) fn render_form_error(
     form: &ContributionForm,
     e: FormError,
 ) -> Response {
+    let field_errors = e.field_errors(tr);
     render(
         new_page_vm(
             new_parking_layout(map, tr, &auth),
             tr,
             form,
             Some(e.parts(tr)),
+            field_errors,
             Vec::new(),
             None,
         ),
@@ -583,6 +633,7 @@ pub(crate) fn contribution_edit_error(
     form: &ContributionForm,
     e: FormError,
 ) -> Response {
+    let field_errors = e.field_errors(tr);
     let (message, hours_error) = e.parts(tr);
     render(
         edit_page_vm(
@@ -594,6 +645,7 @@ pub(crate) fn contribution_edit_error(
             form,
             hours_error,
             Some(message),
+            field_errors,
             None,
         ),
         e.status(StatusCode::OK),
@@ -611,7 +663,18 @@ pub(crate) fn contribution_edit_notice(
     notice: String,
 ) -> Response {
     render(
-        edit_page_vm(map, tr, &auth, id, point, form, None, None, Some(notice)),
+        edit_page_vm(
+            map,
+            tr,
+            &auth,
+            id,
+            point,
+            form,
+            None,
+            None,
+            view::FieldErrors::new(),
+            Some(notice),
+        ),
         StatusCode::OK,
     )
 }
@@ -628,6 +691,7 @@ pub(crate) fn edit_page_vm(
     form: &ContributionForm,
     hours_error: Option<HoursError>,
     error: Option<String>,
+    field_errors: view::FieldErrors,
     notice: Option<String>,
 ) -> ParkingEditPage {
     ParkingEditPage {
@@ -649,6 +713,7 @@ pub(crate) fn edit_page_vm(
         lat: point.lat(),
         lon: point.lon(),
         error,
+        field_errors,
         notice,
     }
 }

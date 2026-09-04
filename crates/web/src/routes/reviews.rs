@@ -64,6 +64,7 @@ pub(crate) async fn review_page(
             rating: own.as_ref().map(|r| r.rating.value()).unwrap_or(0),
             body: own.map(|r| r.body.as_str().to_string()).unwrap_or_default(),
             error: None,
+            field_errors: view::FieldErrors::new(),
         },
         StatusCode::OK,
     )
@@ -131,7 +132,7 @@ pub(crate) async fn review_post(
     let rating = match StarRating::new(rating_u8) {
         Ok(r) => r,
         Err(_) => {
-            return render_review_error(
+            return render_review_field_error(
                 &state.map,
                 tr,
                 auth,
@@ -141,13 +142,14 @@ pub(crate) async fn review_post(
                     body,
                 },
                 tr.t("review.error.invalid").to_string(),
+                Some("rating"),
             );
         }
     };
     let review_body = match ReviewBody::new(&body) {
         Ok(b) => b,
         Err(_) => {
-            return render_review_error(
+            return render_review_field_error(
                 &state.map,
                 tr,
                 auth,
@@ -157,6 +159,7 @@ pub(crate) async fn review_post(
                     body,
                 },
                 tr.t("review.error.length").to_string(),
+                Some("body"),
             );
         }
     };
@@ -212,6 +215,7 @@ pub(crate) async fn review_post(
                 body,
             },
             contribution_error_message(tr, &e),
+            None,
             contribution_error_status(&e, StatusCode::OK),
         ),
         Err(_) => render_review_error(
@@ -236,9 +240,25 @@ pub(crate) fn render_review_error(
     form: ReviewForm,
     message: String,
 ) -> Response {
-    render_review_error_status(map, tr, auth, id, form, message, StatusCode::OK)
+    render_review_field_error(map, tr, auth, id, form, message, None)
 }
 
+/// Like [`render_review_error`], but also flags the one input (`"rating"` or
+/// `"body"`) the rejection is about (WP21 a11y pass) — `None` for the errors
+/// that are not about one particular field (rate limits, conflicts).
+pub(crate) fn render_review_field_error(
+    map: &MapConfig,
+    tr: Translator,
+    auth: Auth,
+    id: i64,
+    form: ReviewForm,
+    message: String,
+    field: Option<&'static str>,
+) -> Response {
+    render_review_error_status(map, tr, auth, id, form, message, field, StatusCode::OK)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_review_error_status(
     map: &MapConfig,
     tr: Translator,
@@ -246,8 +266,13 @@ pub(crate) fn render_review_error_status(
     id: i64,
     form: ReviewForm,
     message: String,
+    field: Option<&'static str>,
     status: StatusCode,
 ) -> Response {
+    let field_errors = match field {
+        Some(f) => view::FieldErrors::single(f, message.clone()),
+        None => view::FieldErrors::new(),
+    };
     render(
         ReviewFormPage {
             layout: PageLayout::for_request(tr.t("review.title").to_string(), "review", &auth, map),
@@ -256,6 +281,7 @@ pub(crate) fn render_review_error_status(
             rating: form.rating,
             body: form.body,
             error: Some(message),
+            field_errors,
         },
         status,
     )

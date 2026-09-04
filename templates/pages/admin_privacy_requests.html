@@ -53,7 +53,7 @@
             {% if item.state_code == "OPEN" %}
               <form action="/admin/privacy-requests/{{ item.id }}/fulfill" method="post">
                 <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
-                <button type="submit" class="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("admin.privacy_requests.fulfill") }}</button>
+                <button type="submit" class="rounded-lg bg-accent-strong px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("admin.privacy_requests.fulfill") }}</button>
               </form>
             {% else %}
               <span class="text-xs text-muted">—</span>

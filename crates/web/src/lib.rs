@@ -580,6 +580,8 @@ pub struct RegisterPage {
     pub email: String,
     pub display_name: String,
     pub error: Option<String>,
+    /// Which input(s) a rejected submission belongs to (WP21 a11y pass).
+    pub field_errors: view::FieldErrors,
 }
 
 /// A2 — login.
@@ -591,6 +593,10 @@ pub struct LoginPage {
     pub email: String,
     pub notice: Option<String>,
     pub error: Option<String>,
+    /// Which input(s) a rejected submission belongs to (WP21 a11y pass). A
+    /// bad login never says which of email/password was wrong, so a failure
+    /// flags both rather than disclosing one over the other.
+    pub field_errors: view::FieldErrors,
     /// Where to send the user after a successful login — already reduced to a
     /// safe local path (`htmx::safe_local_path`), empty when there is none.
     /// Rendered as a hidden field so the no-JS round trip keeps it.
@@ -777,6 +783,8 @@ pub struct ParkingNewPage {
     pub security_states: Vec<ContributionTriStateVm>,
     pub type_options: Vec<view::OptionVm>,
     pub error: Option<String>,
+    /// Which input(s) a rejected submission belongs to (WP21 a11y pass).
+    pub field_errors: view::FieldErrors,
     pub duplicates: Vec<view::DuplicateVm>,
     /// Set when the add succeeded but similar listings turned up anyway — the
     /// safety net behind the interstitial, not the normal path.
@@ -818,6 +826,8 @@ pub struct ParkingEditPage {
     pub lat: f64,
     pub lon: f64,
     pub error: Option<String>,
+    /// Which input(s) a rejected submission belongs to (WP21 a11y pass).
+    pub field_errors: view::FieldErrors,
     pub notice: Option<String>,
 }
 
@@ -831,6 +841,8 @@ pub struct ReviewFormPage {
     pub rating: u8,
     pub body: String,
     pub error: Option<String>,
+    /// Which input(s) a rejected submission belongs to (WP21 a11y pass).
+    pub field_errors: view::FieldErrors,
 }
 
 /// C4 — favorites list.

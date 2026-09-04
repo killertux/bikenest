@@ -6,7 +6,7 @@
     <p class="mt-2 text-muted">{{ tr.t("review.subtitle") }}</p>
 
     {% if error.is_some() %}
-      <div class="mt-4 rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">{{ error.as_deref().unwrap_or("") }}</div>
+      <div class="mt-4 rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger" role="alert">{{ error.as_deref().unwrap_or("") }}</div>
     {% endif %}
 
     {# A plain multipart POST: the handler answers with a redirect, so there is
@@ -20,7 +20,9 @@
       <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
       <div>
         <label for="rating" class="mb-1 block text-sm font-medium">{{ tr.t("review.rating") }}</label>
-        <select id="rating" name="rating" class="w-full rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-accent">
+        <select id="rating" name="rating"
+                {% if let Some(msg) = field_errors.err("rating") %}aria-invalid="true" aria-describedby="rating-error"{% endif %}
+                class="w-full rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-accent">
           <option value="" disabled {% if rating == 0 %}selected{% endif %}>{{ tr.t("review.select") }}</option>
           <option value="1" {% if rating == 1 %}selected{% endif %}>1 ★</option>
           <option value="2" {% if rating == 2 %}selected{% endif %}>2 ★</option>
@@ -28,11 +30,19 @@
           <option value="4" {% if rating == 4 %}selected{% endif %}>4 ★</option>
           <option value="5" {% if rating == 5 %}selected{% endif %}>5 ★</option>
         </select>
+        {% if let Some(msg) = field_errors.err("rating") %}
+          <p id="rating-error" role="alert" class="mt-1 text-sm text-danger">{{ msg }}</p>
+        {% endif %}
       </div>
       <div>
         <label for="body" class="mb-1 block text-sm font-medium">{{ tr.t("review.body") }}</label>
-        <textarea id="body" name="body" rows="6" class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent">{{ body }}</textarea>
+        <textarea id="body" name="body" rows="6"
+                  {% if let Some(msg) = field_errors.err("body") %}aria-invalid="true" aria-describedby="body-error"{% endif %}
+                  class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent">{{ body }}</textarea>
         <p class="mt-1 text-xs text-muted">{{ tr.t("review.length_hint") }}</p>
+        {% if let Some(msg) = field_errors.err("body") %}
+          <p id="body-error" role="alert" class="mt-1 text-sm text-danger">{{ msg }}</p>
+        {% endif %}
       </div>
       <div>
         <label for="photos" class="mb-1 block text-sm font-medium">{{ tr.t("review.photos") }}</label>
@@ -40,7 +50,7 @@
                class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm">
         <p class="mt-1 text-xs text-muted">{{ tr.t("review.photos_hint") }}</p>
       </div>
-      <button type="submit" class="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("review.submit") }}</button>
+      <button type="submit" class="w-full rounded-lg bg-accent-strong px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("review.submit") }}</button>
     </form>
   </div>
 </div>
