@@ -484,6 +484,47 @@ async fn parking_details_renders_full_page_and_404_for_unknown(tx: &mut TestTx) 
         .unwrap();
 }
 
+#[db_test]
+async fn never_verified_location_shows_the_freshness_label_once(tx: &mut TestTx) {
+    // Problem #4 regression: a never-verified location's freshness card must
+    // not render the "never verified" copy twice — `freshness_label` and
+    // `verified_label` both resolve to the same string when there's no
+    // `last_verified_at`, so the template must collapse them into one.
+    const MARK: &str = "fix-http-never-verified";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let conn = tx.executor();
+    let created = ParkingBuilder::new()
+        .with_fixture_tag(MARK)
+        .with_name("Never Verified Fixture")
+        .at(-25.4300, -49.2700)
+        .never_verified()
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    let (status, body) = get(&format!("/parking/{}", created.id())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.contains("Never verified · Never verified"),
+        "freshness card must not repeat the never-verified label"
+    );
+    assert!(
+        body.contains("Never verified"),
+        "freshness card should still show the label once"
+    );
+
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // M2: accounts & authentication
 // ---------------------------------------------------------------------------

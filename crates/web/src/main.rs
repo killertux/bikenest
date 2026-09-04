@@ -44,9 +44,14 @@ async fn main() {
                 std::process::exit(1);
             });
             let storage = bikenest_infrastructure::storage_from_env();
-            match bikenest_infrastructure::parking::seed_mock(&db, &storage).await {
+            let processor = bikenest_infrastructure::LocalImageProcessor::new(
+                bikenest_infrastructure::config::photo_config_from_env(),
+            );
+            match bikenest_infrastructure::parking::seed_mock(&db, &storage, &processor).await {
                 Ok(n) => {
-                    println!("seeded {n} mock parking locations + photos (Ledger #1/#7, dev only)");
+                    println!(
+                        "seeded {n} mock parking locations + photos + reviews (dev only); every photo verified retrievable"
+                    );
                 }
                 Err(err) => {
                     eprintln!("seed error: {err}");

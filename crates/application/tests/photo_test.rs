@@ -89,6 +89,9 @@ impl ObjectStorage for FakeStorage {
     fn verify_get(&self, _key: &str, _exp: u64, _sig: &str) -> bool {
         false
     }
+    async fn exists(&self, key: &str) -> Result<bool, bikenest_application::StorageError> {
+        Ok(self.puts.lock().unwrap().iter().any(|k| k == key))
+    }
 }
 
 #[derive(Clone)]
@@ -525,6 +528,9 @@ async fn upload_compensates_deletes_row_when_second_put_fails() {
         }
         fn verify_get(&self, _key: &str, _exp: u64, _sig: &str) -> bool {
             false
+        }
+        async fn exists(&self, key: &str) -> Result<bool, bikenest_application::StorageError> {
+            self.0.exists(key).await
         }
     }
     let repo = Arc::new(FakePhotoRepo::new());

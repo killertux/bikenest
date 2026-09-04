@@ -84,4 +84,8 @@ impl ObjectStorage for TestObjectStorage {
     fn verify_get(&self, _key: &str, _exp: u64, _sig: &str) -> bool {
         true
     }
+
+    async fn exists(&self, key: &str) -> Result<bool, StorageError> {
+        Ok(self.contains(key))
+    }
 }

@@ -144,6 +144,19 @@ impl ObjectStorage for S3ObjectStorage {
         // No app-side signature scheme; presigned URLs are self-authorizing.
         false
     }
+
+    async fn exists(&self, key: &str) -> Result<bool, StorageError> {
+        match self.client.head_object().bucket(&self.bucket).key(key).send().await {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                if e.as_service_error().is_some_and(|s| s.is_not_found()) {
+                    return Ok(false);
+                }
+                tracing::warn!(error = %e, key = %key, "S3 head_object failed");
+                Err(StorageError::Unavailable)
+            }
+        }
+    }
 }
 
 /// Shares a single [`ObjectStorage`] across a `Box<dyn ObjectStorage>` consumer
@@ -178,6 +191,10 @@ impl ObjectStorage for SharedObjectStorage {
 
     fn verify_get(&self, key: &str, exp: u64, sig: &str) -> bool {
         self.0.verify_get(key, exp, sig)
+    }
+
+    async fn exists(&self, key: &str) -> Result<bool, StorageError> {
+        self.0.exists(key).await
     }
 }
 

@@ -49,4 +49,9 @@ pub trait ObjectStorage: Send + Sync {
     /// Verify a presigned-GET signature+expiry for the `/media` route
     /// (local-disk mode). Returns false when tampered or expired.
     fn verify_get(&self, key: &str, exp: u64, sig: &str) -> bool;
+
+    /// Whether `key` currently exists in the store (a metadata-only check —
+    /// no bytes are fetched). Used to verify a write actually landed (e.g. the
+    /// mock seeder confirming every photo it pushed is really retrievable).
+    async fn exists(&self, key: &str) -> Result<bool, StorageError>;
 }
