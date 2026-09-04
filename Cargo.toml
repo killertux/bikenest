@@ -33,7 +33,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "regis
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "migrate", "chrono"] }
 axum = "0.8"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["fs", "trace"] }
+# `compression-gzip`/`compression-br`: `CompressionLayer` on the whole router
+# (WP14). `set-header`: `SetResponseHeaderLayer` for the plain `/static/...`
+# short-cache `Cache-Control` (the hashed `/static/h/...` path sets its own
+# immutable header directly in the handler).
+tower-http = { version = "0.6", features = ["fs", "trace", "compression-gzip", "compression-br", "set-header"] }
 askama = "0.14"
 
 [workspace.lints.rust]

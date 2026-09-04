@@ -4714,6 +4714,12 @@ async fn the_anonymous_htmx_401_carries_exactly_one_vary(_tx: &mut TestTx) {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    // `CompressionLayer` (outermost, WP14) only appends its own
+    // `Vary: accept-encoding` to a response it actually compresses, and this
+    // one is `text/html` — excluded from compression (BREACH) — so it never
+    // gets that extra header. The strict count still guards the app's own
+    // invariant: the styled-error fallback must skip an already-rendered
+    // response instead of appending a second `Vary`.
     assert_eq!(
         res.headers()
             .get_all(axum::http::header::VARY)
@@ -5700,4 +5706,270 @@ async fn wp13_admin_user_list_searches_masks_and_confirms(tx: &mut bikenest_test
     cleanup_user_contributions(ADMIN).await;
     cleanup_user_contributions(NEEDLE).await;
     cleanup_user_contributions(OTHER).await;
+}
+
+// ---------------------------------------------------------------------------
+// WP14: assets and page weight
+// ---------------------------------------------------------------------------
+
+/// Like `get`, but keeps the raw response (headers + bytes) instead of
+/// decoding the body as UTF-8 — a br/gzip-compressed body isn't valid UTF-8.
+/// `extra_header` lets a caller negotiate compression (`Accept-Encoding`) or
+/// anything else per-request.
+async fn get_raw(uri: &str, extra_header: (&str, &str)) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let app = test_app().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header(extra_header.0, extra_header.1)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let headers = res.headers().clone();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes().to_vec();
+    (status, headers, bytes)
+}
+
+#[db_test]
+async fn static_css_is_served_brotli_compressed_on_request(_tx: &mut TestTx) {
+    let (status, headers, _body) = get_raw("/static/css/app.css", ("accept-encoding", "br")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get("content-encoding")
+            .and_then(|v| v.to_str().ok()),
+        Some("br")
+    );
+}
+
+#[db_test]
+async fn static_css_is_served_gzip_compressed_on_request(_tx: &mut TestTx) {
+    let (status, headers, _body) =
+        get_raw("/static/css/app.css", ("accept-encoding", "gzip")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get("content-encoding")
+            .and_then(|v| v.to_str().ok()),
+        Some("gzip")
+    );
+}
+
+/// BREACH (CVE-2013-3587): every HTML response embeds the per-session CSRF
+/// token (`<meta name="csrf">` + hidden form fields) alongside
+/// attacker-influenced input (search query, `next`, error messages) —
+/// compressing that combination lets an attacker recover the secret byte by
+/// byte from the compressed length. `text/html` must never be compressed,
+/// even though the client offers both `br` and `gzip`.
+#[db_test]
+async fn html_pages_are_never_compressed(_tx: &mut TestTx) {
+    let (status, headers, _body) = get_raw("/", ("accept-encoding", "br, gzip")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        headers.get("content-encoding").is_none(),
+        "HTML must not be compressed (BREACH): {headers:?}"
+    );
+}
+
+#[db_test]
+async fn search_page_html_is_never_compressed(_tx: &mut TestTx) {
+    let (status, headers, _body) = get_raw("/search?q=x", ("accept-encoding", "br, gzip")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        headers.get("content-encoding").is_none(),
+        "the search page reflects the query and carries the CSRF token — never compress it: {headers:?}"
+    );
+}
+
+/// Pulls the hashed `href` the layout rendered for `css/app.css` out of a
+/// page body (`layout.asset("css/app.css")` → `/static/h/<hash>/css/app.css`).
+fn extract_hashed_app_css_url(body: &str) -> String {
+    let re = regex::Regex::new(r#"href="(/static/h/[0-9a-f]+/css/app\.css)""#).unwrap();
+    re.captures(body)
+        .unwrap_or_else(|| panic!("no hashed css/app.css href in body:\n{body}"))[1]
+        .to_string()
+}
+
+#[db_test]
+async fn hashed_static_url_is_cached_as_immutable(_tx: &mut TestTx) {
+    let (_, home_body) = get("/").await;
+    let hashed_url = extract_hashed_app_css_url(&home_body);
+
+    let (status, headers, _) = get_raw(&hashed_url, ("accept-encoding", "identity")).await;
+    assert_eq!(status, StatusCode::OK);
+    let cache_control = headers
+        .get("cache-control")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        cache_control.contains("immutable"),
+        "hashed asset must be immutably cached: {cache_control}"
+    );
+    assert!(
+        cache_control.contains("max-age=31536000"),
+        "{cache_control}"
+    );
+}
+
+#[db_test]
+async fn unhashed_static_url_keeps_a_short_cache_lifetime(_tx: &mut TestTx) {
+    let (status, headers, _) =
+        get_raw("/static/css/app.css", ("accept-encoding", "identity")).await;
+    assert_eq!(status, StatusCode::OK);
+    let cache_control = headers
+        .get("cache-control")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        !cache_control.contains("immutable"),
+        "the plain /static/... path must not claim immutability: {cache_control}"
+    );
+    assert!(cache_control.contains("max-age=3600"), "{cache_control}");
+}
+
+#[db_test]
+async fn hashed_static_url_with_a_wrong_hash_is_not_found(_tx: &mut TestTx) {
+    let (status, _, _) = get_raw(
+        "/static/h/deadbeef00/css/app.css",
+        ("accept-encoding", "identity"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[db_test]
+async fn login_page_never_loads_maplibre(_tx: &mut TestTx) {
+    let (status, body) = get("/login").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.contains("maplibre-gl"),
+        "a page with no map must not load MapLibre"
+    );
+}
+
+#[db_test]
+async fn search_page_loads_maplibre_once_with_a_preconnect(_tx: &mut TestTx) {
+    let (status, body) = get("/search?q=x").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.matches("maplibre-gl.js").count(),
+        1,
+        "maplibre-gl.js must load exactly once: {body}"
+    );
+    assert!(
+        body.contains(r#"rel="preconnect""#),
+        "a configured map style must get a tile-host preconnect"
+    );
+}
+
+#[db_test]
+async fn parking_details_page_loads_maplibre_once_with_a_preconnect(tx: &mut TestTx) {
+    const MARK: &str = "fix-http-wp14-details-map";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let conn = tx.executor();
+    let created = ParkingBuilder::new()
+        .with_fixture_tag(MARK)
+        .with_name("WP14 Map Assets Fixture")
+        .at(-25.4300, -49.2700)
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    let (status, body) = get(&format!("/parking/{}", created.id())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.matches("maplibre-gl.js").count(),
+        1,
+        "maplibre-gl.js must load exactly once: {body}"
+    );
+    assert!(
+        body.contains(r#"rel="preconnect""#),
+        "a configured map style must get a tile-host preconnect"
+    );
+
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+#[db_test]
+async fn home_hero_has_srcset_and_priority_and_featured_images_are_lazy(_tx: &mut TestTx) {
+    let (status, body) = get("/").await;
+    assert_eq!(status, StatusCode::OK);
+    let hero_start = body.find("hero-bike-parking").expect("hero image present");
+    let hero_tag = &body[body[..hero_start].rfind("<img").unwrap()..];
+    let hero_tag = &hero_tag[..hero_tag.find('>').unwrap()];
+    assert!(hero_tag.contains("srcset="), "hero has srcset: {hero_tag}");
+    assert!(
+        hero_tag.contains(r#"fetchpriority="high""#),
+        "hero is high priority: {hero_tag}"
+    );
+
+    // The suffixed variant filenames (not the bare basenames, which also
+    // appear in seeded-location presigned photo URLs such as
+    // `seed/curitiba/mtb-pair-rack.jpg` and would match the wrong `<img>`).
+    for needle in ["mtb-pair-rack-800", "cyclist-foggy-avenue-1600"] {
+        let start = body
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} present"));
+        let tag_start = body[..start].rfind("<img").unwrap();
+        let tag = &body[tag_start..];
+        let tag = &tag[..tag.find('>').unwrap()];
+        assert!(
+            tag.contains(r#"loading="lazy""#),
+            "{needle} image is lazy-loaded: {tag}"
+        );
+        assert!(tag.contains("srcset="), "{needle} image has srcset: {tag}");
+    }
+}
+
+/// No template may reference `/static/...css` or `/static/...js` by a literal
+/// path — every css/js asset goes through `layout.asset()` so it gets a
+/// content-hashed, immutably-cached URL. Nothing is exempted today; a future
+/// exception would be listed here.
+#[test]
+fn templates_reference_css_and_js_only_through_asset() {
+    const ALLOWED_LITERAL_STATIC_REFERENCES: &[&str] = &[];
+
+    let templates_dir =
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates"));
+    let pattern = regex::Regex::new(r#"["']/static/[^"']*\.(?:css|js)["']"#).unwrap();
+    let mut offenders = Vec::new();
+    let mut stack = vec![templates_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
+        {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(contents) = std::fs::read_to_string(&path) {
+                for m in pattern.find_iter(&contents) {
+                    let hit = format!("{}: {}", path.display(), m.as_str());
+                    if !ALLOWED_LITERAL_STATIC_REFERENCES
+                        .iter()
+                        .any(|allowed| hit.contains(allowed))
+                    {
+                        offenders.push(hit);
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "css/js must be referenced through layout.asset(), not a literal /static/ path:\n{}",
+        offenders.join("\n")
+    );
 }

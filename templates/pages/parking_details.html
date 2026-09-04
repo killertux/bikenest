@@ -389,7 +389,17 @@
 {% endif %}
 {% endblock %}
 
+{% block head %}
+<!-- MapLibre base styles (map clipping, canvas layout, control/attribution
+     positioning). Must load before map.css so the page's map overrides win. -->
+<link rel="stylesheet" href="{{ layout.asset("vendor/maplibre-gl.css") }}">
+<link rel="stylesheet" href="{{ layout.asset("css/map.css") }}">
+{% if !layout.map_style_url.is_empty() %}
+<link rel="preconnect" href="{{ layout.tile_origin() }}" crossorigin>
+{% endif %}
+{% endblock %}
+
 {% block scripts %}
-<script src="/static/vendor/maplibre-gl.js"></script>
-<script src="/static/js/details-map.js"></script>
+<script src="{{ layout.asset("vendor/maplibre-gl.js") }}"></script>
+<script src="{{ layout.asset("js/details-map.js") }}"></script>
 {% endblock %}

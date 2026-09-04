@@ -2,7 +2,7 @@
 
 use askama::Template;
 use axum::extract::{Form, Multipart};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Json, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{
@@ -41,6 +41,7 @@ use bikenest_infrastructure::{
 };
 use serde_json::json;
 use std::sync::Arc;
+use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 
 use crate::auth::{
     Auth, anon_csrf_token, clear_session_cookie, set_anon_csrf_cookie, set_session_cookie,
@@ -88,6 +89,11 @@ pub struct AppState {
     pub base_url: String,
     /// Google sign-in feature flag (disabled until a real OAuth provider exists).
     pub google_oauth_enabled: bool,
+    /// Content-hash manifest for `/static/...` (WP14): logical path → hash,
+    /// computed once at startup by `crate::assets::init`. Backs the
+    /// `/static/h/{hash}/{*path}` handler; `PageLayout::asset()` resolves
+    /// URLs from the same manifest.
+    pub assets: crate::assets::AssetManifest,
 }
 
 /// The doubles a test injects. Production passes [`RouterDeps::from_config`],
@@ -231,6 +237,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         map: config.map.clone(),
         base_url: config.base_url.clone(),
         google_oauth_enabled,
+        assets: crate::assets::init(&config.static_root),
         config: config.clone(),
     };
     let mut router = Router::new()
@@ -387,11 +394,30 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
             get(admin_user_contributions),
         )
         .route("/admin/audit", get(admin_audit))
+        // Content-hashed assets (WP14): a more specific static segment
+        // ("h") than the `/static/{*rest}` the `nest_service` below expands
+        // to, so this route wins the match for any hashed URL. Validates the
+        // hash against `state.assets` and answers with a long, immutable
+        // `Cache-Control` — see `crate::assets::hashed_static`.
+        .route(
+            "/static/h/{hash}/{*path}",
+            get(crate::assets::hashed_static),
+        )
         // Served from `STATIC_ROOT` (resolved at startup), so the binary is
         // relocatable instead of pinned to its compile-time manifest path.
+        // Everything under the plain `/static/...` path is unhashed content,
+        // so it only gets a short cache lifetime — a hashed URL above is what
+        // a page actually links to for anything long-cacheable.
         .nest_service(
             "/static",
-            tower_http::services::ServeDir::new(&config.static_root),
+            tower::ServiceBuilder::new()
+                .layer(
+                    tower_http::set_header::SetResponseHeaderLayer::if_not_present(
+                        header::CACHE_CONTROL,
+                        HeaderValue::from_static("public, max-age=3600"),
+                    ),
+                )
+                .service(tower_http::services::ServeDir::new(&config.static_root)),
         )
         .fallback(not_found)
         // Order matters: the LAST `.layer()` is the OUTERMOST middleware. We want
@@ -417,6 +443,19 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
             tower_http::trace::TraceLayer::new_for_http()
                 .make_span_with(crate::observability::RequestSpan)
                 .on_response(crate::observability::RequestLog),
+        )
+        // Outermost: compresses response bodies (br/gzip, negotiated from
+        // `Accept-Encoding`) — but never `text/html`. Every HTML response
+        // here embeds the per-session CSRF token (`<meta name="csrf">` +
+        // hidden form fields) alongside attacker-influenced input (search
+        // query, `next`, error messages); compressing that combination is
+        // the BREACH oracle — the compressed length leaks the secret byte by
+        // byte. Static assets (CSS/JS/JSON) carry no secret, so they still
+        // compress normally; `/healthz`/`/readyz` are small JSON/text and
+        // pass through the default's size/type exclusions untouched.
+        .layer(
+            tower_http::compression::CompressionLayer::new()
+                .compress_when(DefaultPredicate::new().and(NotForContentType::new("text/html"))),
         )
         .with_state(state)
 }

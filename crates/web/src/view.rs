@@ -175,8 +175,8 @@ pub fn open_label(t: Translator, s: OpenStatus) -> &'static str {
     }
 }
 
-/// One parking card in the results list (P2 search results) and the map JSON.
-#[derive(Debug, Clone, serde::Serialize)]
+/// One parking card in the results list (P2 search results).
+#[derive(Debug, Clone)]
 pub struct CardVm {
     pub id: i64,
     pub name: String,
@@ -271,6 +271,31 @@ fn image_for(ty: ParkingType) -> (&'static str, &'static str) {
     }
 }
 
+/// One marker's data for the search page's `<script type="application/json"
+/// id="search-data">` island (WP14) — only what `web/static/js/search.js`
+/// actually reads: `id` (card↔marker sync via `data-parking-id`), `lat`/`lon`
+/// (marker position) and `name` (marker title). Deliberately not the full
+/// `CardVm` — that duplicated every card field (labels, image paths, security
+/// chips…) into a ~30 KB JSON blob the map never touches.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MapItemVm {
+    pub id: i64,
+    pub lat: f64,
+    pub lon: f64,
+    pub name: String,
+}
+
+impl From<&CardVm> for MapItemVm {
+    fn from(c: &CardVm) -> Self {
+        Self {
+            id: c.id,
+            lat: c.lat,
+            lon: c.lon,
+            name: c.name.clone(),
+        }
+    }
+}
+
 /// Shared results payload used by both the full page and the HTMX fragment.
 #[derive(Debug, Clone)]
 pub struct ResultsData {
@@ -301,10 +326,12 @@ pub async fn build_results(
         items.push(CardVm::from_summary(t, s, freshness, photo_url));
     }
 
+    // Trimmed to what search.js reads (WP14) — see `MapItemVm`.
+    let map_items: Vec<MapItemVm> = items.iter().map(MapItemVm::from).collect();
     let map_json = escape_script_json(
         serde_json::json!({
             "origin": hit.map(|h| serde_json::json!({"lat": h.point.lat(), "lon": h.point.lon(), "label": h.label})),
-            "items": items,
+            "items": map_items,
         })
         .to_string(),
     );
@@ -1586,6 +1613,28 @@ mod tests {
         )
         .await;
         assert!(results.cursor_url.is_none());
+    }
+
+    /// WP14: the search map's JSON island must carry only what `search.js`
+    /// reads for a marker — not the full `CardVm` (labels, image paths,
+    /// security chips, …).
+    #[test]
+    fn map_item_json_contains_only_the_allowed_keys() {
+        let item = MapItemVm {
+            id: 42,
+            lat: -25.43,
+            lon: -49.27,
+            name: "Paraciclo Rua XV".to_string(),
+        };
+        let value = serde_json::to_value(&item).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .expect("MapItemVm serializes to a JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["id", "lat", "lon", "name"]);
     }
 
     #[test]

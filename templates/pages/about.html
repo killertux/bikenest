@@ -14,7 +14,13 @@
       </a>
     </div>
     <div class="overflow-hidden rounded-2xl border border-border shadow-card">
-      <img src="/static/img/square-bike-rows.jpg" alt="Row of bicycles parked under trees in a sunny public square" class="aspect-[4/3] w-full object-cover" />
+      <img
+        src="{{ layout.asset("img/square-bike-rows-795.jpg") }}"
+        srcset="{{ layout.asset("img/square-bike-rows-640.jpg") }} 640w, {{ layout.asset("img/square-bike-rows-795.jpg") }} 795w"
+        sizes="(min-width: 1024px) 50vw, 100vw"
+        loading="lazy"
+        alt="Row of bicycles parked under trees in a sunny public square" class="aspect-[4/3] w-full object-cover"
+      />
     </div>
   </div>
 </section>

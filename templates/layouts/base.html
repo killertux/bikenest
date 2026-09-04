@@ -25,11 +25,10 @@
   {% if !layout.canonical.is_empty() %}
   <meta property="og:url" content="{{ layout.canonical }}">
   {% endif %}
-  <link rel="stylesheet" href="/static/css/app.css">
-  <!-- MapLibre base styles (map clipping, canvas layout, control/attribution
-       positioning). Must load before map.css so the page's map overrides win. -->
-  <link rel="stylesheet" href="/static/vendor/maplibre-gl.css">
-  <link rel="stylesheet" href="/static/css/map.css">
+  <link rel="stylesheet" href="{{ layout.asset("css/app.css") }}">
+  <!-- The map library's CSS/JS load only on pages that actually render a map
+       — search.html, parking_details.html, moderation_proposals.html — via
+       their own head/scripts blocks (WP14), not unconditionally here. -->
   {% block head %}{% endblock %}
 </head>
 {# htmx 4 has `config.implicitInheritance = false`, so a plain `hx-boost` on
@@ -209,13 +208,13 @@
        across the whole-body swaps `hx-boost:inherited` now performs. htmx 4
        gates registration only on `config.extensions` (default ""), so no
        `hx-ext` attribute is needed: the extension is global once loaded. -->
-  <script src="/static/vendor/htmx.js"></script>
-  <script src="/static/vendor/hx-alpine-compat.js"></script>
+  <script src="{{ layout.asset("vendor/htmx.js") }}"></script>
+  <script src="{{ layout.asset("vendor/hx-alpine-compat.js") }}"></script>
   <!-- app.js registers the Alpine CSP-build components; it must load (and register
        the alpine:init listener) before the deferred Alpine script starts. -->
-  <script src="/static/js/app.js"></script>
-  <script defer src="/static/vendor/alpine.min.js"></script>
-  <script src="/static/js/auth.js"></script>
+  <script src="{{ layout.asset("js/app.js") }}"></script>
+  <script defer src="{{ layout.asset("vendor/alpine.min.js") }}"></script>
+  <script src="{{ layout.asset("js/auth.js") }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

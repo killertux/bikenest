@@ -4,9 +4,12 @@
 <!-- ======== Hero: photo + gradient, headline, search card (P1) ======== -->
 <section class="relative isolate overflow-hidden">
   <img
-    src="/static/img/hero-bike-parking.jpg"
+    src="{{ layout.asset("img/hero-bike-parking-2000.jpg") }}"
+    srcset="{{ layout.asset("img/hero-bike-parking-640.jpg") }} 640w, {{ layout.asset("img/hero-bike-parking-1024.jpg") }} 1024w, {{ layout.asset("img/hero-bike-parking-2000.jpg") }} 2000w"
+    sizes="100vw"
     alt="Rows of bicycles parked in a multi-tier parking facility"
     width="2000" height="1125"
+    fetchpriority="high"
     class="absolute inset-0 h-full w-full object-cover"
   />
   <div class="absolute inset-0 bg-gradient-to-b from-[oklch(18%_0.015_240_/_0.72)] via-[oklch(18%_0.015_240_/_0.56)] to-[oklch(18%_0.015_240_/_0.84)]" aria-hidden="true"></div>
@@ -148,7 +151,13 @@
 <section class="border-t border-border">
   <div class="mx-auto grid max-w-shell items-center gap-10 px-4 py-20 lg:grid-cols-2 lg:py-28">
     <div class="overflow-hidden rounded-2xl border border-border shadow-card">
-      <img src="/static/img/mtb-pair-rack.jpg" alt="Two bicycles resting on a metal rack" class="aspect-[4/3] w-full object-cover" />
+      <img
+        src="{{ layout.asset("img/mtb-pair-rack-800.jpg") }}"
+        srcset="{{ layout.asset("img/mtb-pair-rack-640.jpg") }} 640w, {{ layout.asset("img/mtb-pair-rack-800.jpg") }} 800w"
+        sizes="(min-width: 1024px) 50vw, 100vw"
+        loading="lazy"
+        alt="Two bicycles resting on a metal rack" class="aspect-[4/3] w-full object-cover"
+      />
     </div>
     <div>
       <p class="mb-3 font-mono text-xs uppercase tracking-[0.14em] text-accent-strong">{{ tr.t("home.community.eyebrow") }}</p>
@@ -179,7 +188,10 @@
 <!-- ======== CTA strip (closing, P1) ======== -->
 <section class="relative isolate overflow-hidden">
   <img
-    src="/static/img/cyclist-foggy-avenue.jpg"
+    src="{{ layout.asset("img/cyclist-foggy-avenue-1600.jpg") }}"
+    srcset="{{ layout.asset("img/cyclist-foggy-avenue-640.jpg") }} 640w, {{ layout.asset("img/cyclist-foggy-avenue-1024.jpg") }} 1024w, {{ layout.asset("img/cyclist-foggy-avenue-1600.jpg") }} 1600w"
+    sizes="100vw"
+    loading="lazy"
     alt="Cyclist riding down a tree-lined avenue in the morning mist"
     width="1600" height="1069"
     class="absolute inset-0 h-full w-full object-cover"

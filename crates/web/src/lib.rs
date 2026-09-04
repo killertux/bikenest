@@ -1,5 +1,6 @@
 //! BikeNest web crate: axum routing, handlers, Askama templates.
 
+pub mod assets;
 pub mod auth;
 pub mod client_ip;
 pub mod htmx;
@@ -124,6 +125,32 @@ impl PageLayout {
     pub fn csrf(mut self, csrf: String) -> Self {
         self.csrf = csrf;
         self
+    }
+
+    /// Resolves `path` (relative to `static_root`, forward-slash separated —
+    /// e.g. `"css/app.css"`, `"vendor/maplibre-gl.js"`) to its content-hashed
+    /// `/static/h/<hash>/<path>` URL (WP14). Falls back to the plain
+    /// `/static/<path>` when the asset manifest hasn't been built yet or the
+    /// path isn't in it, so a template call here never produces a broken
+    /// link — just one without the long-lived cache header. Askama calls
+    /// this as `layout.asset("css/app.css")`.
+    pub fn asset(&self, path: &str) -> String {
+        assets::resolve(path)
+    }
+
+    /// The origin (`scheme://host[:port]`) of `map_style_url`, or empty when
+    /// no style is configured. Used for `<link rel="preconnect">` on pages
+    /// with a map — computed here so the template never parses a URL.
+    pub fn tile_origin(&self) -> String {
+        let url = &self.map_style_url;
+        let Some(scheme_end) = url.find("://") else {
+            return String::new();
+        };
+        let after_scheme = &url[scheme_end + 3..];
+        let host_end = after_scheme
+            .find(['/', '?', '#'])
+            .unwrap_or(after_scheme.len());
+        format!("{}{}", &url[..scheme_end + 3], &after_scheme[..host_end])
     }
 }
 
