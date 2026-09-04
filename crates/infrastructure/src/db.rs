@@ -101,7 +101,10 @@ impl Db {
         tokio::time::timeout(timeout, query.execute(&self.pool))
             .await
             .map_err(|_| ProbeFailure::Timeout)?
-            .map_err(|_| ProbeFailure::DbError)?;
+            .map_err(|e| {
+                crate::db_error::classify_and_log("db.ping", e);
+                ProbeFailure::DbError
+            })?;
         Ok(())
     }
 }

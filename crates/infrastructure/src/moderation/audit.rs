@@ -71,20 +71,31 @@ impl AuditLogReader for SqlxAuditLogReader {
             }
         }
 
-        let rows = query.fetch_all(self.db.pool()).await.map_err(map_err)?;
+        let rows = query
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| db_err("audit.list", e))?;
         use sqlx::Row;
         let mut items = Vec::with_capacity(rows.len());
         for row in rows {
-            let id: i64 = row
-                .try_get("id")
-                .map_err(|_| AuditError::Unexpected("missing id".into()))?;
-            let actor: Option<i64> = row.try_get("actor_user_id").map_err(map_err)?;
-            let action: String = row.try_get("action").map_err(map_err)?;
-            let target_type: String = row.try_get("target_type").map_err(map_err)?;
-            let target_id: String = row.try_get("target_id").map_err(map_err)?;
-            let result: String = row.try_get("result").map_err(map_err)?;
-            let metadata: serde_json::Value = row.try_get("metadata").map_err(map_err)?;
-            let created_at: DateTime<Utc> = row.try_get("created_at").map_err(map_err)?;
+            let id: i64 = row.try_get("id").map_err(|e| db_err("audit.list", e))?;
+            let actor: Option<i64> = row
+                .try_get("actor_user_id")
+                .map_err(|e| db_err("audit.list", e))?;
+            let action: String = row.try_get("action").map_err(|e| db_err("audit.list", e))?;
+            let target_type: String = row
+                .try_get("target_type")
+                .map_err(|e| db_err("audit.list", e))?;
+            let target_id: String = row
+                .try_get("target_id")
+                .map_err(|e| db_err("audit.list", e))?;
+            let result: String = row.try_get("result").map_err(|e| db_err("audit.list", e))?;
+            let metadata: serde_json::Value = row
+                .try_get("metadata")
+                .map_err(|e| db_err("audit.list", e))?;
+            let created_at: DateTime<Utc> = row
+                .try_get("created_at")
+                .map_err(|e| db_err("audit.list", e))?;
             items.push(AuditStoredEvent {
                 id,
                 created_at,
@@ -109,6 +120,8 @@ enum Bind {
     Time(DateTime<Utc>),
 }
 
-fn map_err(_e: sqlx::Error) -> AuditError {
-    AuditError::Unexpected("audit read failed".to_string())
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"audit.list"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> AuditError {
+    crate::db_error::classify_and_log(context, e).into()
 }

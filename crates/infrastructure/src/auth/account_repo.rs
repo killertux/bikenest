@@ -22,7 +22,7 @@ impl SqlxAccountRepository {
         let roles = self
             .roles_bysql(UserId(row.id))
             .await
-            .map_err(|_| AuthError::Internal)?;
+            .map_err(|e| db_err("account.load_user", e))?;
         let mut user = User {
             id: UserId(row.id),
             email,
@@ -72,7 +72,7 @@ impl AccountRepository for SqlxAccountRepository {
         .bind(email.as_str().to_lowercase())
         .fetch_optional(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("account.find_by_email", e))?;
         match row {
             Some(row) => Ok(Some(self.load_user(row).await?)),
             None => Ok(None),
@@ -90,7 +90,7 @@ impl AccountRepository for SqlxAccountRepository {
         .bind(id.0)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("account.find_by_id", e))?;
         match row {
             Some(row) => Ok(Some(self.load_user(row).await?)),
             None => Ok(None),
@@ -103,7 +103,7 @@ impl AccountRepository for SqlxAccountRepository {
             .pool()
             .begin()
             .await
-            .map_err(|_| AuthError::Internal)?;
+            .map_err(|e| db_err("account.create", e))?;
         let (id,): (i64,) = sqlx::query_as(
             r#"
             INSERT INTO users (email, display_name, account_state, updated_at)
@@ -116,7 +116,7 @@ impl AccountRepository for SqlxAccountRepository {
         .bind(new.state.as_code())
         .fetch_one(&mut *tx)
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("account.create", e))?;
 
         if !new.password_hash.is_empty() {
             sqlx::query(
@@ -131,16 +131,16 @@ impl AccountRepository for SqlxAccountRepository {
             .bind(new.password_hash)
             .execute(&mut *tx)
             .await
-            .map_err(|_| AuthError::Internal)?;
+            .map_err(|e| db_err("account.create", e))?;
         }
 
         sqlx::query("INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, 'USER', NULL)")
             .bind(id)
             .execute(&mut *tx)
             .await
-            .map_err(|_| AuthError::Internal)?;
+            .map_err(|e| db_err("account.create", e))?;
 
-        tx.commit().await.map_err(|_| AuthError::Internal)?;
+        tx.commit().await.map_err(|e| db_err("account.create", e))?;
         Ok(UserId(id))
     }
 
@@ -150,7 +150,7 @@ impl AccountRepository for SqlxAccountRepository {
             .bind(state.as_code())
             .execute(self.db.pool())
             .await
-            .map_err(|_| AuthError::Internal)?;
+            .map_err(|e| db_err("account.set_state", e))?;
         Ok(())
     }
 
@@ -160,7 +160,7 @@ impl AccountRepository for SqlxAccountRepository {
             .bind(at)
             .execute(self.db.pool())
             .await
-            .map_err(|_| AuthError::Internal)?;
+            .map_err(|e| db_err("account.mark_email_verified", e))?;
         Ok(())
     }
 
@@ -170,13 +170,13 @@ impl AccountRepository for SqlxAccountRepository {
             .pool()
             .begin()
             .await
-            .map_err(|_| AuthError::Internal)?;
+            .map_err(|e| db_err("account.update_canonical_email", e))?;
         sqlx::query("UPDATE users SET email = $2, updated_at = now() WHERE id = $1")
             .bind(id.0)
             .bind(email.as_str())
             .execute(&mut *tx)
             .await
-            .map_err(|_| AuthError::Internal)?;
+            .map_err(|e| db_err("account.update_canonical_email", e))?;
         // Keep the password identity's subject in sync (§2 one login-lookup key).
         sqlx::query(
             "UPDATE authentication_identities SET provider_subject = $2
@@ -186,8 +186,10 @@ impl AccountRepository for SqlxAccountRepository {
         .bind(email.as_str())
         .execute(&mut *tx)
         .await
-        .map_err(|_| AuthError::Internal)?;
-        tx.commit().await.map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("account.update_canonical_email", e))?;
+        tx.commit()
+            .await
+            .map_err(|e| db_err("account.update_canonical_email", e))?;
         Ok(())
     }
 
@@ -202,7 +204,7 @@ impl AccountRepository for SqlxAccountRepository {
             .pool()
             .begin()
             .await
-            .map_err(|_| AuthError::Internal)?;
+            .map_err(|e| db_err("account.confirm_email", e))?;
         // email_verified_at + advance to Active + (if different) switch the
         // canonical email, all in one transaction (§2/§20).
         sqlx::query(
@@ -214,7 +216,7 @@ impl AccountRepository for SqlxAccountRepository {
         .bind(at)
         .execute(&mut *tx)
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("account.confirm_email", e))?;
         // Keep the password identity's subject in sync with the canonical email.
         sqlx::query(
             "UPDATE authentication_identities SET provider_subject = $2
@@ -224,8 +226,10 @@ impl AccountRepository for SqlxAccountRepository {
         .bind(email.as_str())
         .execute(&mut *tx)
         .await
-        .map_err(|_| AuthError::Internal)?;
-        tx.commit().await.map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("account.confirm_email", e))?;
+        tx.commit()
+            .await
+            .map_err(|e| db_err("account.confirm_email", e))?;
         Ok(())
     }
 
@@ -238,7 +242,7 @@ impl AccountRepository for SqlxAccountRepository {
         .bind(hash)
         .execute(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("account.set_password", e))?;
         Ok(())
     }
 
@@ -263,7 +267,7 @@ impl AccountRepository for SqlxAccountRepository {
         .bind(hash)
         .execute(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("account.link_identity", e))?;
         Ok(())
     }
 
@@ -291,7 +295,7 @@ impl AccountRepository for SqlxAccountRepository {
         .bind(subject)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("account.find_identity", e))?;
         match row {
             Some(r) => {
                 let provider =
@@ -309,7 +313,9 @@ impl AccountRepository for SqlxAccountRepository {
     }
 
     async fn roles(&self, id: UserId) -> Result<Vec<Role>, AuthError> {
-        self.roles_bysql(id).await.map_err(|_| AuthError::Internal)
+        self.roles_bysql(id)
+            .await
+            .map_err(|e| db_err("account.roles", e))
     }
 
     async fn grant_role(&self, id: UserId, role: Role, by: UserId) -> Result<(), AuthError> {
@@ -322,7 +328,7 @@ impl AccountRepository for SqlxAccountRepository {
         .bind(by.0)
         .execute(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("account.grant_role", e))?;
         Ok(())
     }
 
@@ -332,7 +338,7 @@ impl AccountRepository for SqlxAccountRepository {
             .bind(role.as_code())
             .execute(self.db.pool())
             .await
-            .map_err(|_| AuthError::Internal)?;
+            .map_err(|e| db_err("account.revoke_role", e))?;
         Ok(res.rows_affected() > 0)
     }
 
@@ -346,11 +352,17 @@ impl AccountRepository for SqlxAccountRepository {
         )
         .fetch_all(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("account.list_users", e))?;
         let mut users = Vec::with_capacity(rows.len());
         for row in rows {
             users.push(self.load_user(row).await?);
         }
         Ok(users)
     }
+}
+
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// [`AuthError`]. `context` names the operation, e.g. `"account.create"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> AuthError {
+    crate::db_error::classify_and_log(context, e).into()
 }

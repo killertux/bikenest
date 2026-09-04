@@ -27,14 +27,14 @@ impl FavoriteRepository for SqlxFavoriteRepository {
         .bind(location_id)
         .fetch_one(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("favorite.toggle", e))?;
         if exists.0 {
             sqlx::query("DELETE FROM favorite WHERE user_id = $1 AND location_id = $2")
                 .bind(user.0)
                 .bind(location_id)
                 .execute(self.db.pool())
                 .await
-                .map_err(map_err)?;
+                .map_err(|e| db_err("favorite.toggle", e))?;
             Ok(false)
         } else {
             sqlx::query(
@@ -44,7 +44,7 @@ impl FavoriteRepository for SqlxFavoriteRepository {
             .bind(location_id)
             .execute(self.db.pool())
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("favorite.toggle", e))?;
             Ok(true)
         }
     }
@@ -61,7 +61,7 @@ impl FavoriteRepository for SqlxFavoriteRepository {
         .bind(location_id)
         .fetch_one(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("favorite.is_favorited", e))?;
         Ok(row.0)
     }
 
@@ -81,11 +81,13 @@ impl FavoriteRepository for SqlxFavoriteRepository {
         .bind(user.0)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("favorite.list", e))?;
         Ok(rows.into_iter().map(|r| r.location_id).collect())
     }
 }
 
-fn map_err(_e: sqlx::Error) -> ContributionError {
-    ContributionError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"favorite.toggle"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> ContributionError {
+    crate::db_error::classify_and_log(context, e).into()
 }

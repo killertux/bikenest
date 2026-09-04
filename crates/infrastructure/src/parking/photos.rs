@@ -1,7 +1,7 @@
 //! SQL-backed reader for a location's approved photos (P3 gallery / P2 card).
 
 use crate::Db;
-use crate::parking::search::map_db_err;
+use crate::parking::search::reader_err;
 use async_trait::async_trait;
 use bikenest_application::{ParkingPhotoReader, ReaderError, StoredPhoto};
 
@@ -37,7 +37,7 @@ impl ParkingPhotoReader for SqlxParkingPhotoReader {
         .bind(location_id)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_db_err)?;
+        .map_err(|e| reader_err("parking_photos.photos", e))?;
 
         Ok(rows
             .into_iter()

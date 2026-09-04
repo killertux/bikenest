@@ -1084,6 +1084,8 @@ fn moderation_error_message(tr: Translator, e: &ModerationError) -> (StatusCode,
         InvalidReason => (StatusCode::BAD_REQUEST, "report.error.invalid_reason"),
         InvalidField(_) => (StatusCode::BAD_REQUEST, "moderation.invalid"),
         RateLimited => (StatusCode::TOO_MANY_REQUESTS, "report.error.rate_limited"),
+        Conflict => (StatusCode::CONFLICT, "error.conflict"),
+        Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "error.unavailable"),
         Internal => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "moderation.error.internal",
@@ -1820,6 +1822,8 @@ fn photo_error(tr: Translator, e: &PhotoError) -> (StatusCode, String) {
         Unauthorized => (StatusCode::FORBIDDEN, "moderation.unauthorized"),
         InvalidField(_) => (StatusCode::BAD_REQUEST, "photo.error.invalid"),
         Storage(_) => (StatusCode::INTERNAL_SERVER_ERROR, "photo.error.internal"),
+        Conflict => (StatusCode::CONFLICT, "error.conflict"),
+        Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "error.unavailable"),
         Internal => (StatusCode::INTERNAL_SERVER_ERROR, "photo.error.internal"),
     };
     (status, tr.t(key).to_string())
@@ -1913,6 +1917,8 @@ fn auth_error_message(tr: Translator, err: &AuthError) -> String {
             tr.t("auth.error.invalid_token").to_string()
         }
         AuthError::RefuseAdminSelfRevoke => tr.t("auth.error.last_admin").to_string(),
+        AuthError::Conflict => tr.t("error.conflict").to_string(),
+        AuthError::Unavailable => tr.t("error.unavailable").to_string(),
         _ => tr.t("auth.error.generic").to_string(),
     }
 }
@@ -3023,7 +3029,7 @@ async fn account_delete_post(
     } else {
         Some(form.password.as_str())
     };
-    let delete_err = |tr: Translator, key: &str| {
+    let delete_err_status = |tr: Translator, key: &str, status: StatusCode| {
         render(
             AccountDeletePage {
                 layout: PageLayout::with_csrf(
@@ -3035,9 +3041,10 @@ async fn account_delete_post(
                 tr,
                 error: Some(tr.t(key).to_string()),
             },
-            StatusCode::OK,
+            status,
         )
     };
+    let delete_err = |tr: Translator, key: &str| delete_err_status(tr, key, StatusCode::OK);
     match state
         .privacy
         .request_deletion(user, password, &form.email)
@@ -3052,6 +3059,12 @@ async fn account_delete_post(
         }
         Err(PrivacyError::LastAdmin) => delete_err(tr, "delete.last_admin_error"),
         Err(PrivacyError::ReauthRequired) => delete_err(tr, "delete.reauth_error"),
+        Err(PrivacyError::Conflict) => {
+            delete_err_status(tr, "error.conflict", StatusCode::CONFLICT)
+        }
+        Err(PrivacyError::Unavailable) => {
+            delete_err_status(tr, "error.unavailable", StatusCode::SERVICE_UNAVAILABLE)
+        }
         Err(_) => delete_err(tr, "delete.reauth_error"),
     }
 }
@@ -3599,7 +3612,7 @@ fn render_form_error(
         Some(contribution_error_message(tr, e)),
         Vec::new(),
         None,
-        StatusCode::BAD_REQUEST,
+        contribution_error_status(e, StatusCode::BAD_REQUEST),
     )
 }
 
@@ -3614,7 +3627,20 @@ fn contribution_error_message(tr: Translator, e: &ContributionError) -> String {
         ContributionError::InvalidField(_) => tr.t("contribution.error.invalid").to_string(),
         ContributionError::Unauthorized => tr.t("contribution.error.unauthorized").to_string(),
         ContributionError::Timezone => tr.t("contribution.error.timezone").to_string(),
+        ContributionError::Conflict => tr.t("error.conflict").to_string(),
+        ContributionError::Unavailable => tr.t("error.unavailable").to_string(),
         ContributionError::Internal => tr.t("contribution.error.internal").to_string(),
+    }
+}
+
+/// Status for a re-rendered contribution form. The two variants the SQL error
+/// mapper introduces get their own codes; every other variant keeps whatever
+/// the calling flow already chose (a form re-render is a 400 or a 200).
+fn contribution_error_status(e: &ContributionError, default: StatusCode) -> StatusCode {
+    match e {
+        ContributionError::Conflict => StatusCode::CONFLICT,
+        ContributionError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        _ => default,
     }
 }
 
@@ -3746,7 +3772,15 @@ fn contribution_edit_error(
     form: &EditParkingForm,
     e: &ContributionError,
 ) -> Response {
-    contribution_edit_notice(map, tr, auth, id, form, contribution_error_message(tr, e))
+    contribution_edit_notice_status(
+        map,
+        tr,
+        auth,
+        id,
+        form,
+        contribution_error_message(tr, e),
+        contribution_error_status(e, StatusCode::OK),
+    )
 }
 
 fn contribution_edit_notice(
@@ -3756,6 +3790,18 @@ fn contribution_edit_notice(
     id: i64,
     form: &EditParkingForm,
     notice: String,
+) -> Response {
+    contribution_edit_notice_status(map, tr, auth, id, form, notice, StatusCode::OK)
+}
+
+fn contribution_edit_notice_status(
+    map: &MapConfig,
+    tr: Translator,
+    auth: Auth,
+    id: i64,
+    form: &EditParkingForm,
+    notice: String,
+    status: StatusCode,
 ) -> Response {
     render(
         ParkingEditPage {
@@ -3783,7 +3829,7 @@ fn contribution_edit_notice(
             error: None,
             notice: Some(notice),
         },
-        StatusCode::OK,
+        status,
     )
 }
 
@@ -4014,6 +4060,22 @@ async fn review_post(
             },
             tr.t("contribution.error.rate_limited").to_string(),
         ),
+        // A duplicate review or a lost race is the user's to resolve (409);
+        // an unreachable database is ours (503). Everything else stays generic.
+        Err(e @ (ContributionError::Conflict | ContributionError::Unavailable)) => {
+            render_review_error_status(
+                &state.map,
+                tr,
+                auth,
+                id,
+                ReviewForm {
+                    rating: rating_u8,
+                    body,
+                },
+                contribution_error_message(tr, &e),
+                contribution_error_status(&e, StatusCode::OK),
+            )
+        }
         Err(_) => render_review_error(
             &state.map,
             tr,
@@ -4036,6 +4098,18 @@ fn render_review_error(
     form: ReviewForm,
     message: String,
 ) -> Response {
+    render_review_error_status(map, tr, auth, id, form, message, StatusCode::OK)
+}
+
+fn render_review_error_status(
+    map: &MapConfig,
+    tr: Translator,
+    auth: Auth,
+    id: i64,
+    form: ReviewForm,
+    message: String,
+    status: StatusCode,
+) -> Response {
     render(
         ReviewFormPage {
             layout: PageLayout::with_csrf(
@@ -4050,7 +4124,7 @@ fn render_review_error(
             body: form.body,
             error: Some(message),
         },
-        StatusCode::OK,
+        status,
     )
 }
 
@@ -4120,17 +4194,12 @@ async fn parking_verify_post(
         Ok(()) => render(
             crate::VerificationResultVm {
                 tr,
+                state: "success",
                 label: tr.t("verification.saved").to_string(),
             },
             StatusCode::OK,
         ),
-        Err(_) => render(
-            crate::VerificationResultVm {
-                tr,
-                label: tr.t("contribution.error.generic").to_string(),
-            },
-            StatusCode::BAD_REQUEST,
-        ),
+        Err(e) => verification_error(tr, &e),
     }
 }
 
@@ -4138,10 +4207,37 @@ fn verify_bad_request(tr: Translator) -> Response {
     render(
         crate::VerificationResultVm {
             tr,
+            state: "error",
             label: tr.t("contribution.error.invalid").to_string(),
         },
         StatusCode::BAD_REQUEST,
     )
+}
+
+/// Error state of the verification fragment. A lost race (409) and an
+/// unreachable database (503) say so; every other variant keeps the generic
+/// message and the 400 these endpoints have always returned.
+fn verification_error(tr: Translator, e: &ContributionError) -> Response {
+    render(
+        crate::VerificationResultVm {
+            tr,
+            state: "error",
+            label: contribution_fragment_message(tr, e),
+        },
+        contribution_error_status(e, StatusCode::BAD_REQUEST),
+    )
+}
+
+/// Message for the small htmx fragments the P3 detail page swaps in. Only the
+/// two variants the SQL error mapper introduces get their own copy; anything
+/// else stays deliberately vague.
+fn contribution_fragment_message(tr: Translator, e: &ContributionError) -> String {
+    match e {
+        ContributionError::Conflict | ContributionError::Unavailable => {
+            contribution_error_message(tr, e)
+        }
+        _ => tr.t("contribution.error.generic").to_string(),
+    }
 }
 
 async fn parking_parked_here_post(
@@ -4163,17 +4259,12 @@ async fn parking_parked_here_post(
         Ok(()) => render(
             crate::VerificationResultVm {
                 tr,
+                state: "success",
                 label: tr.t("parked.saved").to_string(),
             },
             StatusCode::OK,
         ),
-        Err(_) => render(
-            crate::VerificationResultVm {
-                tr,
-                label: tr.t("contribution.error.generic").to_string(),
-            },
-            StatusCode::BAD_REQUEST,
-        ),
+        Err(e) => verification_error(tr, &e),
     }
 }
 
@@ -4198,7 +4289,16 @@ async fn parking_favorite_post(
             },
             StatusCode::OK,
         ),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal").into_response(),
+        // The success response is the button itself, so the error swap needs a
+        // fragment of its own. 409/503 for the mapper's variants; everything
+        // else keeps the 500 it returned before, now with translated copy.
+        Err(e) => render(
+            crate::FragmentErrorVm {
+                tr,
+                message: contribution_fragment_message(tr, &e),
+            },
+            contribution_error_status(&e, StatusCode::INTERNAL_SERVER_ERROR),
+        ),
     }
 }
 
@@ -4298,4 +4398,129 @@ async fn account_contributions(
         },
         StatusCode::OK,
     )
+}
+
+// ---------------------------------------------------------------------------
+// Error-mapping unit tests
+// ---------------------------------------------------------------------------
+//
+// The handlers that surface these are covered end to end in
+// `tests/http_test.rs`; provoking a real database conflict through HTTP is
+// inherently racy, so the mapping itself is pinned here instead.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn en() -> Translator {
+        Translator::new(Locale::En)
+    }
+
+    #[test]
+    fn moderation_conflict_is_409_and_unavailable_is_503() {
+        let (status, message) = moderation_error_message(en(), &ModerationError::Conflict);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(message, en().t("error.conflict"));
+
+        let (status, message) = moderation_error_message(en(), &ModerationError::Unavailable);
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(message, en().t("error.unavailable"));
+    }
+
+    #[test]
+    fn photo_conflict_is_409_and_unavailable_is_503() {
+        let (status, message) = photo_error(en(), &PhotoError::Conflict);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(message, en().t("error.conflict"));
+
+        let (status, message) = photo_error(en(), &PhotoError::Unavailable);
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(message, en().t("error.unavailable"));
+    }
+
+    #[test]
+    fn contribution_conflict_is_409_and_unavailable_is_503() {
+        assert_eq!(
+            contribution_error_status(&ContributionError::Conflict, StatusCode::BAD_REQUEST),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            contribution_error_status(&ContributionError::Unavailable, StatusCode::OK),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        // Every other variant keeps the status its own flow chose.
+        assert_eq!(
+            contribution_error_status(&ContributionError::NotFound, StatusCode::BAD_REQUEST),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            contribution_error_message(en(), &ContributionError::Conflict),
+            en().t("error.conflict")
+        );
+        assert_eq!(
+            contribution_error_message(en(), &ContributionError::Unavailable),
+            en().t("error.unavailable")
+        );
+    }
+
+    /// The three htmx endpoints on the P3 detail page (verify, parked-here,
+    /// favorite) used to collapse every error into a generic 400 or a bare
+    /// "Internal" 500.
+    #[test]
+    fn detail_page_fragments_surface_conflict_409_and_unavailable_503() {
+        // Verify / parked-here: 400 is the fallback for every other variant.
+        assert_eq!(
+            contribution_error_status(&ContributionError::Conflict, StatusCode::BAD_REQUEST),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            contribution_error_status(&ContributionError::Unavailable, StatusCode::BAD_REQUEST),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        // Favorite: 500 is the fallback, and it is no longer a bare string.
+        assert_eq!(
+            contribution_error_status(
+                &ContributionError::Conflict,
+                StatusCode::INTERNAL_SERVER_ERROR
+            ),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            contribution_error_status(
+                &ContributionError::Unavailable,
+                StatusCode::INTERNAL_SERVER_ERROR
+            ),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            contribution_error_status(&ContributionError::Internal, StatusCode::BAD_REQUEST),
+            StatusCode::BAD_REQUEST
+        );
+
+        // The fragments carry the translated copy, not a bare English string.
+        assert_eq!(
+            contribution_fragment_message(en(), &ContributionError::Conflict),
+            en().t("error.conflict")
+        );
+        assert_eq!(
+            contribution_fragment_message(en(), &ContributionError::Unavailable),
+            en().t("error.unavailable")
+        );
+        assert_eq!(
+            contribution_fragment_message(en(), &ContributionError::Internal),
+            en().t("contribution.error.generic")
+        );
+    }
+
+    #[test]
+    fn auth_conflict_and_unavailable_get_their_own_copy() {
+        assert_eq!(
+            auth_error_message(en(), &AuthError::Conflict),
+            en().t("error.conflict")
+        );
+        assert_eq!(
+            auth_error_message(en(), &AuthError::Unavailable),
+            en().t("error.unavailable")
+        );
+    }
 }

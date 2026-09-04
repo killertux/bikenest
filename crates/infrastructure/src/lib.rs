@@ -4,6 +4,7 @@ pub mod auth;
 pub mod community;
 pub mod config;
 pub mod db;
+pub mod db_error;
 pub mod devdata;
 pub mod email;
 pub mod geocoding;
@@ -31,6 +32,7 @@ pub use config::{
     RateLimiterConfig, S3Config, SecurityConfig,
 };
 pub use db::Db;
+pub use db_error::{DbFailure, classify, classify_and_log, classify_code};
 pub use email::{
     CapturedEmail, FakeEmailProvider, ResendEmailProvider, SmtpEmailProvider,
     from_config as email_from_config,

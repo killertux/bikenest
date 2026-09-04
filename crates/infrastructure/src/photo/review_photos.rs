@@ -2,7 +2,7 @@
 //! review photos render on the review card; hidden/rejected/pending are excluded.
 
 use crate::Db;
-use crate::parking::search::map_db_err;
+use crate::parking::search::reader_err;
 use async_trait::async_trait;
 use bikenest_application::{ReaderError, ReviewPhotosReader, StoredPhoto};
 
@@ -36,7 +36,7 @@ impl ReviewPhotosReader for SqlxReviewPhotosReader {
         .bind(review_id)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_db_err)?;
+        .map_err(|e| reader_err("review_photos.photos", e))?;
 
         Ok(rows
             .into_iter()

@@ -78,7 +78,7 @@ impl PhotoRepository for SqlxPhotoRepository {
             .bind(p.uploader_id.0)
             .fetch_one(self.db.pool())
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("photo.insert_pending", e))?;
             row.id
         } else {
             // `review_photo` has no content_type/alt columns (review photos have
@@ -91,7 +91,7 @@ impl PhotoRepository for SqlxPhotoRepository {
             .bind(p.uploader_id.0)
             .fetch_one(self.db.pool())
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("photo.insert_pending", e))?;
             row.id
         };
         Ok(id)
@@ -105,7 +105,7 @@ impl PhotoRepository for SqlxPhotoRepository {
         .bind(target.parent_id())
         .fetch_one(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("photo.max_position", e))?;
         Ok(row.0.unwrap_or(0))
     }
 
@@ -130,7 +130,7 @@ impl PhotoRepository for SqlxPhotoRepository {
         .bind(processed_at)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("photo.mark_processed", e))?;
         Ok(())
     }
 
@@ -139,7 +139,7 @@ impl PhotoRepository for SqlxPhotoRepository {
             .bind(id)
             .execute(self.db.pool())
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("photo.delete", e))?;
         Ok(())
     }
 
@@ -160,7 +160,7 @@ impl PhotoRepository for SqlxPhotoRepository {
         .bind(position)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("photo.approve", e))?;
         if rows.rows_affected() != 1 {
             return Err(PhotoError::NotPending);
         }
@@ -184,7 +184,7 @@ impl PhotoRepository for SqlxPhotoRepository {
         .bind(reason)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("photo.reject", e))?;
         let Some(row) = row else {
             return Err(PhotoError::NotPending);
         };
@@ -214,7 +214,7 @@ impl PhotoRepository for SqlxPhotoRepository {
         )
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("photo.list_pending", e))?;
 
         Ok(rows
             .into_iter()
@@ -246,7 +246,7 @@ impl PhotoRepository for SqlxPhotoRepository {
         .bind(id)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("photo.get_for_moderation", e))?;
 
         Ok(row.map(|r| PhotoForModeration {
             id: r.id,
@@ -260,6 +260,8 @@ impl PhotoRepository for SqlxPhotoRepository {
     }
 }
 
-fn map_err(_e: sqlx::Error) -> PhotoError {
-    PhotoError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"photo.insert"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> PhotoError {
+    crate::db_error::classify_and_log(context, e).into()
 }

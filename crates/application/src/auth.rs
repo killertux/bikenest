@@ -44,6 +44,13 @@ pub enum AuthError {
     Unauthorized,
     #[error("you cannot remove your own last admin role")]
     RefuseAdminSelfRevoke,
+    /// Storage refused a duplicate, or a concurrent writer won the race
+    /// (unique violation, serialization failure, deadlock).
+    #[error("that change conflicts with an existing record")]
+    Conflict,
+    /// Storage is unreachable or overloaded; the same request may work shortly.
+    #[error("service temporarily unavailable")]
+    Unavailable,
     #[error("internal error")]
     Internal,
 }

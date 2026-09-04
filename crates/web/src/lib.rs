@@ -666,12 +666,23 @@ pub struct FavoriteButtonVm {
     pub csrf: String,
 }
 
-/// HTMX fragment: a short verification confirmation.
+/// HTMX fragment: a short verification confirmation, or its error state.
 #[derive(Template)]
 #[template(path = "partials/verification_result.html")]
 pub struct VerificationResultVm {
     pub tr: Translator,
+    /// `"success"` or `"error"` — picks the confirmation or the alert styling.
+    pub state: &'static str,
     pub label: String,
+}
+
+/// HTMX fragment: a bare translated error, for endpoints whose success
+/// response is a control rather than a toast (the favorite button).
+#[derive(Template)]
+#[template(path = "partials/fragment_error.html")]
+pub struct FragmentErrorVm {
+    pub tr: Translator,
+    pub message: String,
 }
 
 /// M2 photo moderation queue page (PLAN M4).

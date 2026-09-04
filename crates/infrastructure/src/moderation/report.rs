@@ -76,7 +76,7 @@ impl ReportRepository for SqlxReportRepository {
         .bind(r.description.as_str())
         .fetch_one(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("report.create", e))?;
         Ok(row.id)
     }
 
@@ -94,7 +94,7 @@ impl ReportRepository for SqlxReportRepository {
             .bind(s.as_code())
             .fetch_all(self.db.pool())
             .await
-            .map_err(map_err)?,
+            .map_err(|e| db_err("report.list", e))?,
             None => sqlx::query_as::<_, ReportRow>(
                 r#"
                     SELECT id, reporter_id, target_type, target_id, reason, description, state,
@@ -105,7 +105,7 @@ impl ReportRepository for SqlxReportRepository {
             )
             .fetch_all(self.db.pool())
             .await
-            .map_err(map_err)?,
+            .map_err(|e| db_err("report.list", e))?,
         };
         rows.into_iter().map(ReportRow::into_report).collect()
     }
@@ -122,7 +122,7 @@ impl ReportRepository for SqlxReportRepository {
         .bind(id)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("report.get", e))?;
         match row {
             Some(r) => Ok(Some(r.into_report()?)),
             None => Ok(None),
@@ -141,7 +141,7 @@ impl ReportRepository for SqlxReportRepository {
         .bind(moderator.0)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("report.claim", e))?;
         if res.rows_affected() != 1 {
             return Err(ModerationError::InvalidState);
         }
@@ -168,7 +168,7 @@ impl ReportRepository for SqlxReportRepository {
         .bind(note)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("report.resolve", e))?;
         if res.rows_affected() != 1 {
             return Err(ModerationError::InvalidState);
         }
@@ -176,6 +176,8 @@ impl ReportRepository for SqlxReportRepository {
     }
 }
 
-fn map_err(_e: sqlx::Error) -> ModerationError {
-    ModerationError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"report.create"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> ModerationError {
+    crate::db_error::classify_and_log(context, e).into()
 }

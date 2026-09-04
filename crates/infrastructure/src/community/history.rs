@@ -40,7 +40,7 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
         .bind(user.0)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("history.history", e))?;
         for r in added {
             items.push(ContributionItem {
                 kind: "added".to_string(),
@@ -62,7 +62,7 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
         .bind(user.0)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("history.history", e))?;
         for r in edited {
             items.push(ContributionItem {
                 kind: "edited".to_string(),
@@ -84,7 +84,7 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
         .bind(user.0)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("history.history", e))?;
         for r in proposed {
             items.push(ContributionItem {
                 kind: "proposed".to_string(),
@@ -106,7 +106,7 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
         .bind(user.0)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("history.history", e))?;
         for r in reviewed {
             items.push(ContributionItem {
                 kind: "reviewed".to_string(),
@@ -128,7 +128,7 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
         .bind(user.0)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("history.history", e))?;
         for r in verified {
             items.push(ContributionItem {
                 kind: "verified".to_string(),
@@ -150,7 +150,7 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
         .bind(user.0)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("history.history", e))?;
         for r in favorited {
             items.push(ContributionItem {
                 kind: "favorited".to_string(),
@@ -165,6 +165,8 @@ impl ContributionHistoryReader for SqlxContributionHistoryReader {
     }
 }
 
-fn map_err(_e: sqlx::Error) -> ContributionError {
-    ContributionError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"history.reviews_by_user"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> ContributionError {
+    crate::db_error::classify_and_log(context, e).into()
 }

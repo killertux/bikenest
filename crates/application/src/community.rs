@@ -42,6 +42,13 @@ pub enum ContributionError {
     Unauthorized,
     #[error("timezone could not be resolved")]
     Timezone,
+    /// Storage refused a duplicate, or a concurrent writer won the race
+    /// (unique violation, serialization failure, deadlock).
+    #[error("that change conflicts with an existing record")]
+    Conflict,
+    /// Storage is unreachable or overloaded; the same request may work shortly.
+    #[error("service temporarily unavailable")]
+    Unavailable,
     /// Anything unexpected / storage-side. Never leaks details.
     #[error("internal error")]
     Internal,

@@ -51,6 +51,13 @@ pub enum PhotoError {
     InvalidField(String),
     #[error("storage error")]
     Storage(#[source] StorageError),
+    /// Storage refused a duplicate, or a concurrent writer won the race
+    /// (unique violation, serialization failure, deadlock).
+    #[error("that change conflicts with an existing record")]
+    Conflict,
+    /// Storage is unreachable or overloaded; the same request may work shortly.
+    #[error("service temporarily unavailable")]
+    Unavailable,
     #[error("internal error")]
     Internal,
 }

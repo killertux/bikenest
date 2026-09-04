@@ -82,7 +82,7 @@ impl VerificationRepository for SqlxVerificationRepository {
         .bind(expires_at)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("verification.record", e))?;
         Ok(())
     }
 
@@ -107,7 +107,7 @@ impl VerificationRepository for SqlxVerificationRepository {
         .bind(location_id)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("verification.latest_existence_per_user", e))?;
 
         let mut signals = Vec::with_capacity(rows.len());
         for r in rows {
@@ -144,7 +144,7 @@ impl VerificationRepository for SqlxVerificationRepository {
         .bind(location_id)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("verification.attribute_summary", e))?;
 
         Ok(rows
             .into_iter()
@@ -168,7 +168,7 @@ impl VerificationRepository for SqlxVerificationRepository {
         .bind(location_id)
         .fetch_one(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("verification.parked_here_count", e))?;
         Ok(row.0)
     }
 
@@ -182,11 +182,13 @@ impl VerificationRepository for SqlxVerificationRepository {
             .bind(location_id)
             .execute(self.db.pool())
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("verification.mark_verified_at", e))?;
         Ok(())
     }
 }
 
-fn map_err(_e: sqlx::Error) -> ContributionError {
-    ContributionError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"verification.record"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> ContributionError {
+    crate::db_error::classify_and_log(context, e).into()
 }

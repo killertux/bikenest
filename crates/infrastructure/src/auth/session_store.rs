@@ -66,7 +66,7 @@ impl SessionStore for SqlxSessionStore {
         .bind(expires_at)
         .execute(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("session.create", e))?;
         Ok(())
     }
 
@@ -116,7 +116,7 @@ impl SessionStore for SqlxSessionStore {
             .bind(now)
             .fetch_optional(self.db.pool())
             .await
-            .map_err(|_| AuthError::Internal)?;
+            .map_err(|e| db_err("session.resolve", e))?;
         let Some(row) = row else {
             return Ok(None);
         };
@@ -148,7 +148,7 @@ impl SessionStore for SqlxSessionStore {
         .bind(token_hash)
         .execute(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("session.revoke", e))?;
         Ok(())
     }
 
@@ -166,7 +166,7 @@ impl SessionStore for SqlxSessionStore {
         .bind(keep_hash)
         .execute(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("session.revoke_all_for_user_except", e))?;
         Ok(())
     }
 
@@ -178,7 +178,13 @@ impl SessionStore for SqlxSessionStore {
         .bind(user_id.0)
         .execute(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("session.revoke_all_for_user", e))?;
         Ok(())
     }
+}
+
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// [`AuthError`]. `context` names the operation, e.g. `"session.create"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> AuthError {
+    crate::db_error::classify_and_log(context, e).into()
 }

@@ -251,7 +251,7 @@ impl SqlxParkingSearchReader {
             "#).bind(request.origin.lat()).bind(request.origin.lon()).bind(f64::from(request.radius_m)).bind(cost).bind(types as Option<Vec<String>>).bind(request.filters.open_now).bind(security_all as Option<Vec<String>>).bind(sort).bind(cursor.map(|c| c.v)).bind(cursor.map(|c| c.id)).bind(limit as i64).bind(now)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_db_err)?;
+        .map_err(|e| reader_err("search.search_at", e))?;
 
         let total = rows.first().and_then(|r| r.total).unwrap_or(0);
         let items: Vec<ParkingSummary> =
@@ -264,11 +264,8 @@ impl SqlxParkingSearchReader {
     }
 }
 
-pub(crate) fn map_db_err(e: sqlx::Error) -> ReaderError {
-    match e {
-        sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => {
-            ReaderError::Unavailable
-        }
-        _ => ReaderError::Unexpected(e.to_string()),
-    }
+/// Classify + log the sqlx error, then map it onto [`ReaderError`]. Shared by
+/// every read-only repository. `context` names the operation, e.g. `"search.search"`.
+pub(crate) fn reader_err(context: &'static str, e: sqlx::Error) -> ReaderError {
+    crate::db_error::classify_and_log(context, e).into()
 }

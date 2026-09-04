@@ -532,6 +532,14 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         ),
         "error.home" => ("Back to home", "Voltar ao início"),
         "error.search" => ("Search parking", "Buscar vagas"),
+        "error.conflict" => (
+            "Someone changed this at the same time — please reload and try again.",
+            "Alguém alterou isto ao mesmo tempo — recarregue e tente de novo.",
+        ),
+        "error.unavailable" => (
+            "The service is temporarily unavailable. Please try again in a moment.",
+            "O serviço está temporariamente indisponível. Tente novamente em instantes.",
+        ),
 
         // --- auth: register / login (A1/A2) -------------------------------
         "auth.register_title" => ("Create your account", "Crie sua conta"),

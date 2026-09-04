@@ -77,7 +77,7 @@ impl ModerationRepository for SqlxModerationRepository {
             .bind(target_id)
             .fetch_optional(self.db.pool())
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("moderation.target_exists", e))?;
         Ok(row.is_some())
     }
 
@@ -90,7 +90,7 @@ impl ModerationRepository for SqlxModerationRepository {
         .bind(id)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("moderation.hide_review", e))?;
         if res.rows_affected() != 1 {
             return Err(ModerationError::InvalidState);
         }
@@ -106,7 +106,7 @@ impl ModerationRepository for SqlxModerationRepository {
         .bind(id)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("moderation.restore_review", e))?;
         if res.rows_affected() != 1 {
             return Err(ModerationError::InvalidState);
         }
@@ -129,7 +129,7 @@ impl ModerationRepository for SqlxModerationRepository {
         .bind(moderator.0)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("moderation.hide_photo", e))?;
         if res.rows_affected() != 1 {
             return Err(ModerationError::InvalidState);
         }
@@ -152,7 +152,7 @@ impl ModerationRepository for SqlxModerationRepository {
         .bind(moderator.0)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("moderation.restore_photo", e))?;
         if res.rows_affected() != 1 {
             return Err(ModerationError::InvalidState);
         }
@@ -167,7 +167,12 @@ impl ModerationRepository for SqlxModerationRepository {
         moderator: UserId,
     ) -> Result<(), ModerationError> {
         let from_codes: Vec<String> = from.iter().map(|s| s.as_code().to_string()).collect();
-        let mut tx = self.db.pool().begin().await.map_err(map_err)?;
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| db_err("moderation.set_parking_state", e))?;
 
         let row = sqlx::query_as::<_, LocationRow>(
             r#"
@@ -184,7 +189,7 @@ impl ModerationRepository for SqlxModerationRepository {
         .bind(&from_codes)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("moderation.set_parking_state", e))?;
         let Some(row) = row else {
             return Err(ModerationError::InvalidState);
         };
@@ -199,7 +204,9 @@ impl ModerationRepository for SqlxModerationRepository {
             snapshot,
         )
         .await?;
-        tx.commit().await.map_err(map_err)?;
+        tx.commit()
+            .await
+            .map_err(|e| db_err("moderation.set_parking_state", e))?;
         Ok(())
     }
 
@@ -216,7 +223,7 @@ impl ModerationRepository for SqlxModerationRepository {
         )
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("moderation.list_pending_proposals", e))?;
         rows.into_iter().map(map_proposal).collect()
     }
 
@@ -233,7 +240,7 @@ impl ModerationRepository for SqlxModerationRepository {
         .bind(id)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("moderation.get_proposal", e))?;
         match row {
             Some(r) => Ok(Some(map_proposal(r)?)),
             None => Ok(None),
@@ -246,7 +253,12 @@ impl ModerationRepository for SqlxModerationRepository {
         moderator: UserId,
         applied: ProposalApplication,
     ) -> Result<(), ModerationError> {
-        let mut tx = self.db.pool().begin().await.map_err(map_err)?;
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| db_err("moderation.approve_proposal", e))?;
 
         let prop = sqlx::query_as::<_, ProposalLockRow>(
             "SELECT location_id, status FROM parking_proposal WHERE id = $1 FOR UPDATE",
@@ -254,7 +266,7 @@ impl ModerationRepository for SqlxModerationRepository {
         .bind(id)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("moderation.approve_proposal", e))?;
         let Some(prop) = prop else {
             return Err(ModerationError::NotFound);
         };
@@ -282,7 +294,7 @@ impl ModerationRepository for SqlxModerationRepository {
                 .bind(location_id)
                 .fetch_optional(&mut *tx)
                 .await
-                .map_err(map_err)?
+                .map_err(|e| db_err("moderation.approve_proposal", e))?
             }
             ProposalApplication::ChangeExistence { exists } => {
                 let state = if *exists { "ACTIVE" } else { "REMOVED" };
@@ -300,7 +312,7 @@ impl ModerationRepository for SqlxModerationRepository {
                 .bind(state)
                 .fetch_optional(&mut *tx)
                 .await
-                .map_err(map_err)?
+                .map_err(|e| db_err("moderation.approve_proposal", e))?
             }
         };
         let Some(row) = row else {
@@ -327,16 +339,18 @@ impl ModerationRepository for SqlxModerationRepository {
             .bind(moderator.0)
             .execute(&mut *tx)
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("moderation.approve_proposal", e))?;
         // Supersede older PENDING proposals on the same location (§37).
         sqlx::query("UPDATE parking_proposal SET status = 'SUPERSEDED' WHERE location_id = $1 AND status = 'PENDING' AND id <> $2")
             .bind(location_id)
             .bind(id)
             .execute(&mut *tx)
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("moderation.approve_proposal", e))?;
 
-        tx.commit().await.map_err(map_err)?;
+        tx.commit()
+            .await
+            .map_err(|e| db_err("moderation.approve_proposal", e))?;
         Ok(())
     }
 
@@ -355,7 +369,7 @@ impl ModerationRepository for SqlxModerationRepository {
         .bind(moderator.0)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("moderation.reject_proposal", e))?;
         if res.rows_affected() != 1 {
             return Err(ModerationError::InvalidState);
         }
@@ -403,7 +417,7 @@ async fn insert_revision(
     .bind(snapshot)
     .execute(&mut **tx)
     .await
-    .map_err(map_err)?;
+    .map_err(|e| db_err("moderation.insert_revision", e))?;
     Ok(())
 }
 
@@ -451,7 +465,7 @@ async fn read_hours_json(
     let rows = sqlx::query_as::<_, HourRow>("SELECT day_of_week, opens_at, closes_at, all_day FROM opening_hours WHERE location_id = $1 ORDER BY day_of_week, opens_at").bind(location_id)
     .fetch_all(&mut **tx)
     .await
-    .map_err(map_err)?;
+    .map_err(|e| db_err("moderation.read_hours_json", e))?;
     let rows_json: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
@@ -481,7 +495,7 @@ async fn read_security_json(
     .bind(location_id)
     .fetch_all(&mut **tx)
     .await
-    .map_err(map_err)?;
+    .map_err(|e| db_err("moderation.read_security_json", e))?;
     let sec_json: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| serde_json::json!([r.feature_code, r.state]))
@@ -508,6 +522,8 @@ fn cost_json(
     }
 }
 
-fn map_err(_e: sqlx::Error) -> ModerationError {
-    ModerationError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"moderation.hide_review"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> ModerationError {
+    crate::db_error::classify_and_log(context, e).into()
 }

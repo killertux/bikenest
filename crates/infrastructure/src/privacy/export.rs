@@ -173,7 +173,7 @@ impl ExportRepository for SqlxExportRepository {
             .bind(user_id.0)
             .fetch_optional(pool)
             .await
-            .map_err(map_err)?
+            .map_err(|e| db_err("export.assemble_payload", e))?
             .ok_or(PrivacyError::NotFound)?;
             let roles: Vec<String> = sqlx::query_as::<_, RoleRow>(
                 "SELECT role FROM user_roles WHERE user_id = $1 ORDER BY role",
@@ -181,7 +181,7 @@ impl ExportRepository for SqlxExportRepository {
             .bind(user_id.0)
             .fetch_all(pool)
             .await
-            .map_err(map_err)?
+            .map_err(|e| db_err("export.assemble_payload", e))?
             .into_iter()
             .map(|r| r.role)
             .collect();
@@ -208,7 +208,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(user_id.0)
         .fetch_all(pool)
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("export.assemble_payload", e))?
         .into_iter()
         .map(|r| ExportProvider {
             provider: r.provider,
@@ -220,7 +220,7 @@ impl ExportRepository for SqlxExportRepository {
         let sessions = sqlx::query_as::<_, SessionRow>("SELECT created_at, last_seen_at, expires_at FROM sessions WHERE user_id = $1 ORDER BY created_at").bind(user_id.0)
         .fetch_all(pool)
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("export.assemble_payload", e))?
         .into_iter()
         .map(|r| ExportSession {
             created_at: r.created_at,
@@ -235,7 +235,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(user_id.0)
         .fetch_all(pool)
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("export.assemble_payload", e))?
         .into_iter()
         .map(|r| ExportFavorite {
             location_id: r.location_id,
@@ -253,13 +253,13 @@ impl ExportRepository for SqlxExportRepository {
             .bind(user_id.0)
             .fetch_all(pool)
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("export.assemble_payload", e))?;
             let mut out = Vec::with_capacity(rows.len());
             for r in rows {
                 let revisions = sqlx::query_as::<_, RevisionRow>("SELECT rating, body, edited_at FROM review_revision WHERE review_id = $1 ORDER BY edited_at").bind(r.id)
                 .fetch_all(pool)
                 .await
-                .map_err(map_err)?
+                .map_err(|e| db_err("export.assemble_payload", e))?
                 .into_iter()
                 .map(|rev| ExportReviewRevision {
                     rating: rev.rating,
@@ -290,7 +290,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(user_id.0)
         .fetch_all(pool)
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("export.assemble_payload", e))?
         .into_iter()
         .map(|r| ExportVerification {
             location_id: r.location_id,
@@ -310,7 +310,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(user_id.0)
         .fetch_all(pool)
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("export.assemble_payload", e))?
         .into_iter()
         .map(|r| ExportProposal {
             location_id: r.location_id,
@@ -331,7 +331,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(user_id.0)
         .fetch_all(pool)
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("export.assemble_payload", e))?
         .into_iter()
         .map(|r| ExportReport {
             target_type: r.target_type,
@@ -350,7 +350,7 @@ impl ExportRepository for SqlxExportRepository {
             "#).bind(user_id.0)
         .fetch_all(pool)
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("export.assemble_payload", e))?
         {
             photos.push(ExportPhoto {
                 kind: "parking".to_string(),
@@ -372,7 +372,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(user_id.0)
         .fetch_all(pool)
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("export.assemble_payload", e))?
         {
             photos.push(ExportPhoto {
                 kind: "review".to_string(),
@@ -420,7 +420,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(e.expires_at)
         .fetch_one(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("export.create", e))?;
         Ok(row.id)
     }
 
@@ -434,7 +434,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(user_id.0)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("export.list_for_user", e))?;
         rows.into_iter().map(ExportRow::into_export).collect()
     }
 
@@ -448,7 +448,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(id)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("export.get", e))?;
         match row {
             Some(r) => Ok(Some(r.into_export()?)),
             None => Ok(None),
@@ -468,7 +468,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(id)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("export.consume_download", e))?
         .ok_or(PrivacyError::NotFound)?;
 
         // Validate token + state + expiry against the authoritative row.
@@ -484,7 +484,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(id)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("export.consume_download", e))?
         .ok_or(PrivacyError::NotFound)?;
 
         if !constant_time_hex_eq(&check.token_hash, &token_hash) {
@@ -509,7 +509,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(now)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("export.consume_download", e))?;
         if res.rows_affected() != 1 {
             // Race: another request consumed it first.
             return Err(PrivacyError::AlreadyDownloaded);
@@ -525,7 +525,7 @@ impl ExportRepository for SqlxExportRepository {
         .bind(now)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("export.purge_expired", e))?;
         Ok(res.rows_affected())
     }
 }
@@ -544,6 +544,8 @@ impl ExportRow {
     }
 }
 
-fn map_err(_e: sqlx::Error) -> PrivacyError {
-    PrivacyError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"export.create"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> PrivacyError {
+    crate::db_error::classify_and_log(context, e).into()
 }

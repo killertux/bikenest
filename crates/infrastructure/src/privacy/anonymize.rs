@@ -34,7 +34,7 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
         .bind(user_id.0)
         .fetch_one(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("anonymize.is_last_admin", e))?;
         Ok(res)
     }
 
@@ -43,7 +43,12 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
         user_id: UserId,
         now: DateTime<Utc>,
     ) -> Result<AnonymizationReport, PrivacyError> {
-        let mut tx = self.db.pool().begin().await.map_err(map_err)?;
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| db_err("anonymize.anonymize", e))?;
         let scrub_email = anonymized_email(user_id);
 
         // 1) Scrub the users row (PII gone; the shell stays for FK stability).
@@ -60,45 +65,45 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
         .bind(now)
         .execute(&mut *tx)
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("anonymize.anonymize", e))?;
 
         let identities = sqlx::query("DELETE FROM authentication_identities WHERE user_id = $1")
             .bind(user_id.0)
             .execute(&mut *tx)
             .await
-            .map_err(map_err)?
+            .map_err(|e| db_err("anonymize.anonymize", e))?
             .rows_affected();
         let roles = sqlx::query("DELETE FROM user_roles WHERE user_id = $1")
             .bind(user_id.0)
             .execute(&mut *tx)
             .await
-            .map_err(map_err)?
+            .map_err(|e| db_err("anonymize.anonymize", e))?
             .rows_affected();
         let sessions = sqlx::query("DELETE FROM sessions WHERE user_id = $1")
             .bind(user_id.0)
             .execute(&mut *tx)
             .await
-            .map_err(map_err)?
+            .map_err(|e| db_err("anonymize.anonymize", e))?
             .rows_affected();
         let email_verification_tokens =
             sqlx::query("DELETE FROM email_verification_tokens WHERE user_id = $1")
                 .bind(user_id.0)
                 .execute(&mut *tx)
                 .await
-                .map_err(map_err)?
+                .map_err(|e| db_err("anonymize.anonymize", e))?
                 .rows_affected();
         let password_reset_tokens =
             sqlx::query("DELETE FROM password_reset_tokens WHERE user_id = $1")
                 .bind(user_id.0)
                 .execute(&mut *tx)
                 .await
-                .map_err(map_err)?
+                .map_err(|e| db_err("anonymize.anonymize", e))?
                 .rows_affected();
         let favorites = sqlx::query("DELETE FROM favorite WHERE user_id = $1")
             .bind(user_id.0)
             .execute(&mut *tx)
             .await
-            .map_err(map_err)?
+            .map_err(|e| db_err("anonymize.anonymize", e))?
             .rows_affected();
         // Parked-here is personal activity → deleted.
         let parked_here =
@@ -106,19 +111,19 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
                 .bind(user_id.0)
                 .execute(&mut *tx)
                 .await
-                .map_err(map_err)?
+                .map_err(|e| db_err("anonymize.anonymize", e))?
                 .rows_affected();
         let exports = sqlx::query("DELETE FROM personal_data_export WHERE user_id = $1")
             .bind(user_id.0)
             .execute(&mut *tx)
             .await
-            .map_err(map_err)?
+            .map_err(|e| db_err("anonymize.anonymize", e))?
             .rows_affected();
         let consent_records = sqlx::query("DELETE FROM consent_record WHERE user_id = $1")
             .bind(user_id.0)
             .execute(&mut *tx)
             .await
-            .map_err(map_err)?
+            .map_err(|e| db_err("anonymize.anonymize", e))?
             .rows_affected();
 
         // 2) Community content is retained but unattributed.
@@ -127,7 +132,7 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
                 .bind(user_id.0)
                 .execute(&mut *tx)
                 .await
-                .map_err(map_err)?
+                .map_err(|e| db_err("anonymize.anonymize", e))?
                 .rows_affected();
         let verifications_anonymized = sqlx::query(
             "UPDATE verification SET user_id = NULL WHERE user_id = $1 AND kind <> 'parked_here'",
@@ -135,10 +140,10 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
         .bind(user_id.0)
         .execute(&mut *tx)
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("anonymize.anonymize", e))?
         .rows_affected();
         let proposals_anonymized = sqlx::query("UPDATE parking_proposal SET proposer_id = NULL, resolved_by = NULL WHERE proposer_id = $1 OR resolved_by = $1").bind(user_id.0)
-        .execute(&mut *tx).await.map_err(map_err)?.rows_affected();
+        .execute(&mut *tx).await.map_err(|e| db_err("anonymize.anonymize", e))?.rows_affected();
         let reports_anonymized = sqlx::query(
             r#"
             UPDATE report SET reporter_id = NULL, claimed_by = NULL, resolved_by = NULL
@@ -148,47 +153,49 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
         .bind(user_id.0)
         .execute(&mut *tx)
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("anonymize.anonymize", e))?
         .rows_affected();
         let locations_anonymized =
             sqlx::query("UPDATE parking_location SET creator_id = NULL WHERE creator_id = $1")
                 .bind(user_id.0)
                 .execute(&mut *tx)
                 .await
-                .map_err(map_err)?
+                .map_err(|e| db_err("anonymize.anonymize", e))?
                 .rows_affected();
         let revisions_anonymized =
             sqlx::query("UPDATE parking_revision SET editor_id = NULL WHERE editor_id = $1")
                 .bind(user_id.0)
                 .execute(&mut *tx)
                 .await
-                .map_err(map_err)?
+                .map_err(|e| db_err("anonymize.anonymize", e))?
                 .rows_affected();
         let parking_photos_anonymized =
             sqlx::query("UPDATE parking_photo SET uploader_id = NULL WHERE uploader_id = $1")
                 .bind(user_id.0)
                 .execute(&mut *tx)
                 .await
-                .map_err(map_err)?
+                .map_err(|e| db_err("anonymize.anonymize", e))?
                 .rows_affected();
         let review_photos_anonymized =
             sqlx::query("UPDATE review_photo SET uploader_id = NULL WHERE uploader_id = $1")
                 .bind(user_id.0)
                 .execute(&mut *tx)
                 .await
-                .map_err(map_err)?
+                .map_err(|e| db_err("anonymize.anonymize", e))?
                 .rows_affected();
         let audit_events_anonymized =
             sqlx::query("UPDATE audit_events SET actor_user_id = NULL WHERE actor_user_id = $1")
                 .bind(user_id.0)
                 .execute(&mut *tx)
                 .await
-                .map_err(map_err)?
+                .map_err(|e| db_err("anonymize.anonymize", e))?
                 .rows_affected();
         let privacy_requests_anonymized = sqlx::query("UPDATE privacy_request SET user_id = NULL, fulfilled_by = NULL WHERE user_id = $1 OR fulfilled_by = $1").bind(user_id.0)
-        .execute(&mut *tx).await.map_err(map_err)?.rows_affected();
+        .execute(&mut *tx).await.map_err(|e| db_err("anonymize.anonymize", e))?.rows_affected();
 
-        tx.commit().await.map_err(map_err)?;
+        tx.commit()
+            .await
+            .map_err(|e| db_err("anonymize.anonymize", e))?;
 
         Ok(AnonymizationReport {
             identities,
@@ -214,6 +221,8 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
     }
 }
 
-fn map_err(_e: sqlx::Error) -> PrivacyError {
-    PrivacyError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"anonymize.anonymize"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> PrivacyError {
+    crate::db_error::classify_and_log(context, e).into()
 }

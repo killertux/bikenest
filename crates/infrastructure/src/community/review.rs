@@ -28,7 +28,12 @@ impl ReviewRepository for SqlxReviewRepository {
         rating: StarRating,
         body: &ReviewBody,
     ) -> Result<(), ContributionError> {
-        let mut tx = self.db.pool().begin().await.map_err(map_err)?;
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| db_err("review.upsert_review", e))?;
 
         let existing: Option<(i64, i16, String)> = sqlx::query_as(
             "SELECT id, rating, body FROM review WHERE location_id = $1 AND author_id = $2",
@@ -37,7 +42,7 @@ impl ReviewRepository for SqlxReviewRepository {
         .bind(author.0)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("review.upsert_review", e))?;
 
         if let Some((review_id, old_rating, old_body)) = existing {
             // Preserve the prior version before overwriting (§38 history).
@@ -49,7 +54,7 @@ impl ReviewRepository for SqlxReviewRepository {
             .bind(old_body)
             .execute(&mut *tx)
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("review.upsert_review", e))?;
             sqlx::query(
                 "UPDATE review SET rating = $1, body = $2, updated_at = now() WHERE id = $3",
             )
@@ -58,7 +63,7 @@ impl ReviewRepository for SqlxReviewRepository {
             .bind(review_id)
             .execute(&mut *tx)
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("review.upsert_review", e))?;
         } else {
             let row: (i64,) = sqlx::query_as(
                 r#"
@@ -73,7 +78,7 @@ impl ReviewRepository for SqlxReviewRepository {
             .bind(body.as_str())
             .fetch_one(&mut *tx)
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("review.upsert_review", e))?;
             let new_id = row.0;
             sqlx::query(
                 "INSERT INTO review_revision (review_id, rating, body) VALUES ($1, $2, $3)",
@@ -83,7 +88,7 @@ impl ReviewRepository for SqlxReviewRepository {
             .bind(body.as_str())
             .execute(&mut *tx)
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("review.upsert_review", e))?;
         }
 
         // Recompute the denormalized aggregate in the same transaction (no drift).
@@ -104,9 +109,11 @@ impl ReviewRepository for SqlxReviewRepository {
         .bind(location_id)
         .execute(&mut *tx)
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("review.upsert_review", e))?;
 
-        tx.commit().await.map_err(map_err)?;
+        tx.commit()
+            .await
+            .map_err(|e| db_err("review.upsert_review", e))?;
         Ok(())
     }
 
@@ -126,7 +133,7 @@ impl ReviewRepository for SqlxReviewRepository {
         .bind(author.0)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("review.find_own", e))?;
         row.map(review_from_row).transpose()
     }
 
@@ -142,7 +149,7 @@ impl ReviewRepository for SqlxReviewRepository {
         .bind(location_id)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("review.list_active", e))?;
         rows.into_iter().map(review_from_row).collect()
     }
 }
@@ -172,6 +179,8 @@ fn review_from_row(r: ReviewRow) -> Result<Review, ContributionError> {
     })
 }
 
-fn map_err(_e: sqlx::Error) -> ContributionError {
-    ContributionError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"review.upsert_review"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> ContributionError {
+    crate::db_error::classify_and_log(context, e).into()
 }

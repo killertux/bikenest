@@ -74,7 +74,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             .pool()
             .begin()
             .await
-            .map_err(map_db_err_to_contribution)?;
+            .map_err(|e| db_err("contribution.create", e))?;
 
         let (cost_kind, price_cents, price_currency, price_unit) = cost_parts(&new.cost);
 
@@ -108,7 +108,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         .bind(now)
         .fetch_one(&mut *tx)
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.create", e))?;
         let id = row.id;
 
         write_hours(&mut tx, id, &new.hours).await?;
@@ -137,7 +137,9 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         )
         .await?;
 
-        tx.commit().await.map_err(map_db_err_to_contribution)?;
+        tx.commit()
+            .await
+            .map_err(|e| db_err("contribution.create", e))?;
         Ok(id)
     }
 
@@ -166,7 +168,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             .pool()
             .begin()
             .await
-            .map_err(map_db_err_to_contribution)?;
+            .map_err(|e| db_err("contribution.apply_edit", e))?;
 
         let (cost_kind, price_cents, price_currency, price_unit) = cost_parts(&edit.cost);
 
@@ -196,7 +198,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         .bind(expected_version)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.apply_edit", e))?;
 
         let Some(row) = row else {
             // 0 rows → concurrent update; surface the conflict (§100).
@@ -236,7 +238,9 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         )
         .await?;
 
-        tx.commit().await.map_err(map_db_err_to_contribution)?;
+        tx.commit()
+            .await
+            .map_err(|e| db_err("contribution.apply_edit", e))?;
         Ok(new_version)
     }
 
@@ -256,7 +260,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         .bind(&p.proposed)
         .fetch_one(self.db.pool())
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.create_proposal", e))?;
         Ok(row.id)
     }
 
@@ -279,7 +283,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         .bind(id)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.revision_history", e))?;
 
         rows.into_iter()
             .map(|r| {
@@ -315,7 +319,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             "#).bind(point.lat()).bind(point.lon()).bind(f64::from(DUPLICATE_RADIUS_M))
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.duplicate_candidates", e))?;
 
         let mut candidates: Vec<DuplicateCandidate> = rows
             .into_iter()
@@ -344,18 +348,15 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn map_db_err_to_contribution(e: sqlx::Error) -> ContributionError {
-    match e {
-        sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => {
-            ContributionError::Internal
-        }
-        _ => ContributionError::Internal,
-    }
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"contribution.create"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> ContributionError {
+    crate::db_error::classify_and_log(context, e).into()
 }
 
 fn map_reader_err_to_contribution(e: bikenest_application::ReaderError) -> ContributionError {
     match e {
-        bikenest_application::ReaderError::Unavailable => ContributionError::Internal,
+        bikenest_application::ReaderError::Unavailable => ContributionError::Unavailable,
         bikenest_application::ReaderError::Unexpected(_) => ContributionError::Internal,
     }
 }
@@ -383,7 +384,7 @@ async fn write_hours(
         .bind(id)
         .execute(&mut **tx)
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.write_hours", e))?;
     if let OpeningHours::Weekly(rows) = hours {
         for (day, range) in rows {
             let opens = if range.all_day {
@@ -406,7 +407,7 @@ async fn write_hours(
             .bind(range.all_day)
             .execute(&mut **tx)
             .await
-            .map_err(map_db_err_to_contribution)?;
+            .map_err(|e| db_err("contribution.write_hours", e))?;
         }
     }
     Ok(())
@@ -421,7 +422,7 @@ async fn write_security(
         .bind(id)
         .execute(&mut **tx)
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.write_security", e))?;
     for code in bikenest_domain::SECURITY_FEATURE_CODES {
         let state = security
             .iter()
@@ -436,7 +437,7 @@ async fn write_security(
         .bind(state_smallint(state))
         .execute(&mut **tx)
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.write_security", e))?;
     }
     Ok(())
 }
@@ -473,7 +474,7 @@ async fn insert_revision(
     .bind(snapshot)
     .execute(&mut **tx)
     .await
-    .map_err(map_db_err_to_contribution)?;
+    .map_err(|e| db_err("contribution.insert_revision", e))?;
     Ok(())
 }
 

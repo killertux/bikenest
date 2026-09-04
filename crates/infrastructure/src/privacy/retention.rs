@@ -40,8 +40,10 @@ impl SqlxRetentionRepository {
     }
 }
 
-fn map_err(_e: sqlx::Error) -> PrivacyError {
-    PrivacyError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"retention.sweep"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> PrivacyError {
+    crate::db_error::classify_and_log(context, e).into()
 }
 
 // The object's file mtime (SystemTime) is older than `now - ttl`.
@@ -64,7 +66,7 @@ impl RetentionRepository for SqlxRetentionRepository {
             .bind(now)
             .execute(self.db.pool())
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("retention.purge_expired_password_reset_tokens", e))?;
         Ok(res.rows_affected())
     }
 
@@ -76,7 +78,7 @@ impl RetentionRepository for SqlxRetentionRepository {
             .bind(now)
             .execute(self.db.pool())
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("retention.purge_expired_email_verification_tokens", e))?;
         Ok(res.rows_affected())
     }
 
@@ -87,7 +89,7 @@ impl RetentionRepository for SqlxRetentionRepository {
             .bind(idle_cutoff)
             .execute(self.db.pool())
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("retention.purge_expired_sessions", e))?;
         Ok(res.rows_affected())
     }
 
@@ -95,7 +97,7 @@ impl RetentionRepository for SqlxRetentionRepository {
         let res = sqlx::query("DELETE FROM verification WHERE kind = 'parked_here' AND expires_at IS NOT NULL AND expires_at < $1").bind(now)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("retention.purge_expired_parked_here", e))?;
         Ok(res.rows_affected())
     }
 
@@ -104,7 +106,7 @@ impl RetentionRepository for SqlxRetentionRepository {
             .bind(now)
             .execute(self.db.pool())
             .await
-            .map_err(map_err)?;
+            .map_err(|e| db_err("retention.purge_expired_exports", e))?;
         Ok(res.rows_affected())
     }
 
@@ -175,7 +177,7 @@ impl RetentionRepository for SqlxRetentionRepository {
             "#).bind(cutoff)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("retention.anonymize_inactive_accounts", e))?
         .into_iter()
         .map(|r| r.id)
         .collect();
@@ -195,7 +197,7 @@ impl RetentionRepository for SqlxRetentionRepository {
                 .bind(cutoff)
                 .execute(self.db.pool())
                 .await
-                .map_err(map_err)?;
+                .map_err(|e| db_err("retention.purge_deleted_accounts", e))?;
         Ok(res.rows_affected())
     }
 }
@@ -210,7 +212,7 @@ impl SqlxRetentionRepository {
         )
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?
+        .map_err(|e| db_err("retention.referenced_keys", e))?
         {
             keys.insert(row);
         }
@@ -219,7 +221,7 @@ impl SqlxRetentionRepository {
         )
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?.into_iter().flatten()
+        .map_err(|e| db_err("retention.referenced_keys", e))?.into_iter().flatten()
         {
             keys.insert(k);
         }

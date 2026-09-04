@@ -32,7 +32,7 @@ impl AuditLog for SqlxAuditLog {
         .bind(event.metadata)
         .execute(self.db.pool())
         .await
-        .map_err(|e| AuditError::Unexpected(e.to_string()))?;
+        .map_err(|e| crate::db_error::classify_and_log("audit.record", e))?;
         Ok(())
     }
 }
