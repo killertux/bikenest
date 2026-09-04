@@ -59,12 +59,63 @@
           <a href="/lang/pt-br" lang="pt-BR" {% if tr.is_pt() %}aria-current="true" class="rounded-md bg-fg px-2 py-1 font-medium text-bg"{% else %}class="rounded-md px-2 py-1 text-muted hover:text-fg"{% endif %} aria-label="{{ tr.t("lang.pt_aria") }}">PT</a>
           <a href="/lang/en" lang="en" {% if tr.is_en() %}aria-current="true" class="rounded-md bg-fg px-2 py-1 font-medium text-bg"{% else %}class="rounded-md px-2 py-1 text-muted hover:text-fg"{% endif %} aria-label="{{ tr.t("lang.en_aria") }}">EN</a>
         </div>
-        {% if layout.csrf != "" %}
-          <a href="/account" class="rounded-lg px-3 py-2 text-sm font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]">{{ tr.t("account.nav") }}</a>
-          <form action="/logout" method="post" class="inline">
-            <input type="hidden" name="csrf" value="{{ layout.csrf }}">
-            <button type="submit" class="rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted hover:text-fg">{{ tr.t("auth.logout") }}</button>
-          </form>
+        {% if layout.is_authenticated %}
+          {% if layout.can_contribute %}
+            <a href="/parking/new" class="rounded-lg bg-accent-strong px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("nav.add_spot") }}</a>
+          {% else %}
+            <a href="/account" class="text-xs text-muted hover:text-fg">{{ tr.t("nav.verify_to_contribute") }}</a>
+          {% endif %}
+          <div class="relative" x-data="accountMenu" @click.outside="close" @keydown.escape.window="close">
+            <button
+              type="button" @click="toggle" :aria-expanded="open"
+              aria-haspopup="true" aria-controls="account-menu"
+              class="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]"
+            >
+              {{ tr.t("account.nav") }}
+              <svg aria-hidden="true" class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+            </button>
+            <div
+              id="account-menu" role="menu" aria-label="{{ tr.t("nav.account_menu_aria") }}"
+              x-show="open" x-cloak
+              class="absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-border bg-surface p-1.5 shadow-pop"
+            >
+              <a role="menuitem" href="/account" class="block rounded-lg px-3 py-2 text-sm text-fg hover:bg-bg">{{ tr.t("account.nav") }}</a>
+              <a role="menuitem" href="/account/favorites" class="block rounded-lg px-3 py-2 text-sm text-fg hover:bg-bg">{{ tr.t("nav.favorites") }}</a>
+              <a role="menuitem" href="/account/contributions" class="block rounded-lg px-3 py-2 text-sm text-fg hover:bg-bg">{{ tr.t("nav.contributions") }}</a>
+              {% if layout.is_moderator %}
+              <a role="menuitem" href="/moderation" class="block rounded-lg px-3 py-2 text-sm text-fg hover:bg-bg">{{ tr.t("nav.moderation") }}</a>
+              {% endif %}
+              {% if layout.is_admin %}
+              <a role="menuitem" href="/admin/users" class="block rounded-lg px-3 py-2 text-sm text-fg hover:bg-bg">{{ tr.t("nav.admin") }}</a>
+              <a role="menuitem" href="/admin/audit" class="block rounded-lg px-3 py-2 text-sm text-fg hover:bg-bg">{{ tr.t("nav.audit") }}</a>
+              {% endif %}
+              <form action="/logout" method="post" class="mt-1 border-t border-border pt-1">
+                <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+                <button type="submit" role="menuitem" class="block w-full rounded-lg px-3 py-2 text-left text-sm text-muted hover:bg-bg hover:text-fg">{{ tr.t("auth.logout") }}</button>
+              </form>
+            </div>
+            {# No-JS fallback: the dropdown above stays hidden (x-cloak) when
+               Alpine never runs, so the same links render inline here — a
+               `<noscript>` block is only shown by the browser when scripting
+               is disabled, so there is no duplicate-and-visible menu when JS
+               is on. #}
+            <noscript>
+              <div class="flex flex-wrap items-center gap-3 text-sm">
+                <a href="/account" class="font-medium text-fg hover:underline">{{ tr.t("account.nav") }}</a>
+                <a href="/account/favorites" class="text-fg hover:underline">{{ tr.t("nav.favorites") }}</a>
+                <a href="/account/contributions" class="text-fg hover:underline">{{ tr.t("nav.contributions") }}</a>
+                {% if layout.is_moderator %}<a href="/moderation" class="text-fg hover:underline">{{ tr.t("nav.moderation") }}</a>{% endif %}
+                {% if layout.is_admin %}
+                <a href="/admin/users" class="text-fg hover:underline">{{ tr.t("nav.admin") }}</a>
+                <a href="/admin/audit" class="text-fg hover:underline">{{ tr.t("nav.audit") }}</a>
+                {% endif %}
+                <form action="/logout" method="post" class="inline">
+                  <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+                  <button type="submit" class="rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted hover:text-fg">{{ tr.t("auth.logout") }}</button>
+                </form>
+              </div>
+            </noscript>
+          </div>
         {% else %}
           <a href="/login" class="rounded-lg px-3 py-2 text-sm font-medium text-fg hover:bg-[oklch(20%_0.02_240_/_0.05)]">{{ tr.t("auth.login") }}</a>
           <a href="/register" class="rounded-lg bg-accent-strong px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("auth.signup") }}</a>
@@ -83,6 +134,34 @@
         <a href="/" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("nav.home") }}</a>
         <a href="/search" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("nav.spots") }}</a>
         <a href="/about" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("nav.community_how") }}</a>
+        {% if layout.is_authenticated %}
+          <div class="mt-2 flex flex-col gap-1 border-t border-border pt-2">
+            {% if layout.can_contribute %}
+              <a href="/parking/new" class="rounded-lg px-3 py-2 font-medium text-accent-strong hover:bg-bg">{{ tr.t("nav.add_spot") }}</a>
+            {% else %}
+              <a href="/account" class="rounded-lg px-3 py-2 text-muted hover:bg-bg">{{ tr.t("nav.verify_to_contribute") }}</a>
+            {% endif %}
+            <a href="/account" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("account.nav") }}</a>
+            <a href="/account/favorites" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("nav.favorites") }}</a>
+            <a href="/account/contributions" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("nav.contributions") }}</a>
+            {% if layout.is_moderator %}
+            <a href="/moderation" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("nav.moderation") }}</a>
+            {% endif %}
+            {% if layout.is_admin %}
+            <a href="/admin/users" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("nav.admin") }}</a>
+            <a href="/admin/audit" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("nav.audit") }}</a>
+            {% endif %}
+            <form action="/logout" method="post" class="mt-1">
+              <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+              <button type="submit" class="w-full rounded-lg px-3 py-2 text-left text-muted hover:bg-bg hover:text-fg">{{ tr.t("auth.logout") }}</button>
+            </form>
+          </div>
+        {% else %}
+          <div class="mt-2 flex items-center gap-2 border-t border-border pt-3">
+            <a href="/login" class="rounded-lg px-3 py-2 font-medium text-fg hover:bg-bg">{{ tr.t("auth.login") }}</a>
+            <a href="/register" class="rounded-lg bg-accent-strong px-3 py-2 font-medium text-white">{{ tr.t("auth.signup") }}</a>
+          </div>
+        {% endif %}
         <div class="mt-2 flex items-center gap-2 border-t border-border px-3 pt-3 font-mono text-xs">
           <a href="/lang/pt-br" lang="pt-BR" {% if tr.is_pt() %}class="rounded-md bg-fg px-2 py-1 text-bg"{% else %}class="rounded-md px-2 py-1 text-muted"{% endif %}>PT</a>
           <a href="/lang/en" lang="en" {% if tr.is_en() %}class="rounded-md bg-fg px-2 py-1 text-bg"{% else %}class="rounded-md px-2 py-1 text-muted"{% endif %}>EN</a>

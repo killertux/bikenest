@@ -57,6 +57,16 @@
         {% if results.error.is_some() %}{% else %}{{ results.total_label }}{% endif %}
       </p>
       <div class="flex items-center gap-2.5">
+        {% if can_contribute %}
+          <a href="/parking/new" class="inline-flex items-center gap-1.5 rounded-lg bg-accent-strong px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-dark">
+            <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="M12 5v14" /></svg>
+            {{ tr.t("nav.add_spot") }}
+          </a>
+        {% else if is_authenticated %}
+          <a href="/account" class="text-xs text-muted hover:text-fg">{{ tr.t("nav.verify_to_contribute") }}</a>
+        {% else %}
+          <a href="/register" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg hover:border-fg">{{ tr.t("nav.signup_to_add") }}</a>
+        {% endif %}
         <button @click="toggleMap" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg lg:hidden">
           <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.5 9.9 3.8 4 6v15l5.9-2.2 4.2 1.7 5.9-2.3V3.7Z" /><path d="M9.9 3.8v15" /><path d="M14.1 5.5v15" /></svg>
           <span x-text="mapOpen ? '{{ tr.t("search.map.hide") }}' : '{{ tr.t("search.map.show") }}'">{{ tr.t("search.map.show") }}</span>

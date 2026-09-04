@@ -29,6 +29,21 @@
     </div>
 
     <div class="rounded-2xl border border-border bg-surface p-6">
+      <h2 class="font-display text-lg font-semibold">{{ tr.t("account.activity_title") }}</h2>
+      <ul class="mt-4 space-y-2 text-sm">
+        <li><a href="/account/favorites" class="font-medium text-accent-strong hover:underline">{{ tr.t("nav.favorites") }}</a></li>
+        <li><a href="/account/contributions" class="font-medium text-accent-strong hover:underline">{{ tr.t("nav.contributions") }}</a></li>
+        {% if layout.is_moderator %}
+        <li><a href="/moderation" class="font-medium text-accent-strong hover:underline">{{ tr.t("nav.moderation") }}</a></li>
+        {% endif %}
+        {% if layout.is_admin %}
+        <li><a href="/admin/users" class="font-medium text-accent-strong hover:underline">{{ tr.t("nav.admin") }}</a></li>
+        <li><a href="/admin/audit" class="font-medium text-accent-strong hover:underline">{{ tr.t("nav.audit") }}</a></li>
+        {% endif %}
+      </ul>
+    </div>
+
+    <div class="rounded-2xl border border-border bg-surface p-6">
       <h2 class="font-display text-lg font-semibold">{{ tr.t("account.settings") }}</h2>
       <ul class="mt-4 space-y-2 text-sm">
         <li><a href="/account/password" class="font-medium text-accent-strong hover:underline">{{ tr.t("account.change_password") }}</a></li>

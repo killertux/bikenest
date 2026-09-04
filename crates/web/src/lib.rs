@@ -11,6 +11,7 @@ pub mod security;
 pub mod view;
 
 use askama::Template;
+use auth::Auth;
 use bikenest_application::ParkingDetailsView;
 use bikenest_infrastructure::MapConfig;
 use i18n::Translator;
@@ -34,12 +35,24 @@ pub struct PageLayout {
     /// Public Mapbox access token for the style/tiles; empty for a non-Mapbox
     /// style (e.g. demo tiles) so the token never lands on the page.
     pub map_access_token: String,
+    /// Whether this request carries a resolved session (signed in). Drives the
+    /// header: an account menu vs. Entrar/Criar conta. An anonymous page that
+    /// still mints a double-submit CSRF token (login/register/reset/verify)
+    /// keeps this `false` even though `csrf` is non-empty — see [`Self::new`].
+    pub is_authenticated: bool,
+    /// Session user has MODERATOR or ADMIN (shows the Moderação link).
+    pub is_moderator: bool,
+    /// Session user has ADMIN (shows Administração / Auditoria).
+    pub is_admin: bool,
+    /// Session user is signed in AND email-verified — the "Adicionar vaga" /
+    /// contribution-entry-point gate.
+    pub can_contribute: bool,
 }
 
 impl PageLayout {
-    /// A public page layout (no CSRF token). The map style/token come from the
-    /// configuration parsed at startup and held in `AppState`, never from the
-    /// process environment at render time.
+    /// An anonymous page layout: no session identity, no CSRF token. The map
+    /// style/token come from the configuration parsed at startup and held in
+    /// `AppState`, never from the process environment at render time.
     pub fn new(map: &MapConfig, title: String, current: &str) -> Self {
         Self {
             title,
@@ -50,12 +63,43 @@ impl PageLayout {
             og_type: "website",
             map_style_url: map.style_url.clone(),
             map_access_token: map.access_token.clone(),
+            is_authenticated: false,
+            is_moderator: false,
+            is_admin: false,
+            can_contribute: false,
         }
     }
 
-    /// A layout carrying the session's CSRF token (for authenticated forms).
+    /// An anonymous layout carrying a double-submit CSRF token (login,
+    /// register, password reset, verify-email pages). Identity flags stay
+    /// anonymous — only [`Self::for_request`] fills them from a session.
     pub fn with_csrf(map: &MapConfig, title: String, current: &str, csrf: String) -> Self {
         Self::new(map, title, current).csrf(csrf)
+    }
+
+    /// The layout for a request whose [`Auth`] has been resolved (signed in or
+    /// not): fills the CSRF token and the four identity flags straight from
+    /// the session. This is the constructor every page that has an `Auth`
+    /// extractor in scope should use — `new`/`with_csrf` remain for the
+    /// anonymous auth pages (login/register/reset/verify), which must render
+    /// `is_authenticated = false` even while carrying a double-submit token.
+    pub fn for_request(title: String, current: &str, auth: &Auth, map: &MapConfig) -> Self {
+        let is_moderator = auth.user.as_ref().is_some_and(|u| {
+            u.has_role(bikenest_domain::Role::Moderator)
+                || u.has_role(bikenest_domain::Role::Admin)
+        });
+        let is_admin = auth
+            .user
+            .as_ref()
+            .is_some_and(|u| u.has_role(bikenest_domain::Role::Admin));
+        let can_contribute = auth.user.as_ref().is_some_and(|u| u.is_verified);
+        Self {
+            is_authenticated: auth.authenticated(),
+            is_moderator,
+            is_admin,
+            can_contribute,
+            ..Self::new(map, title, current).csrf(auth.csrf_value())
+        }
     }
 
     /// Set (or overwrite) the canonical URL (SEO §109).
@@ -100,9 +144,17 @@ pub struct ErrorPage {
 /// Both keep `status` — htmx 4 swaps 4xx/5xx bodies (only `config.noSwap`
 /// (204/304) is skipped), so an error body must be swap-safe, not a bare
 /// string that lands inside a button.
+///
+/// `auth` renders the right header identity on the styled page (an error page
+/// is still a whole document with the usual nav). Every real request has one
+/// (the auth middleware wraps the whole router, `not_found`'s fallback and
+/// `styled_errors`'s last line of defence both extract it) — callers with no
+/// resolved session pass `&Auth::default()`, which renders the anonymous
+/// header, exactly like any other unauthenticated page.
 pub fn error_response(
     headers: &axum::http::HeaderMap,
     map: &MapConfig,
+    auth: &Auth,
     tr: Translator,
     status: axum::http::StatusCode,
     message: String,
@@ -125,7 +177,7 @@ pub fn error_response(
             _ => "error.title",
         };
         ErrorPage {
-            layout: PageLayout::new(map, format!("{} — BikeNest", tr.t(title_key)), ""),
+            layout: PageLayout::for_request(format!("{} — BikeNest", tr.t(title_key)), "", auth, map),
             tr,
             status: status.as_u16(),
             message: message.clone(),
@@ -168,6 +220,12 @@ pub struct SearchPageVm {
     /// of the destination heading / result count that the standalone HTMX
     /// fragment (`SearchResultsVm`, `oob: true`) uses to update them in place.
     pub oob: bool,
+    /// Mirrors `layout.is_authenticated`/`layout.can_contribute`: the "Add a
+    /// spot" CTA lives inside `partials/search_results.html`'s empty state too,
+    /// which is also rendered standalone (as [`SearchResultsVm`]) without a
+    /// `layout` field — so the flags need a home both templates share.
+    pub is_authenticated: bool,
+    pub can_contribute: bool,
 }
 
 impl SearchPageVm {
@@ -209,6 +267,10 @@ pub struct SearchResultsVm {
     /// `#results` in `search.html`, so this fragment updates them via
     /// `hx-swap-oob` alongside the swapped results list.
     pub oob: bool,
+    /// See `SearchPageVm::is_authenticated` — this fragment has no `layout`
+    /// field, so the empty-state "Add a spot" CTA reads these directly.
+    pub is_authenticated: bool,
+    pub can_contribute: bool,
 }
 
 /// P3 — parking details.
@@ -279,7 +341,7 @@ impl DetailsPage {
         tr: Translator,
         v: ParkingDetailsView,
         gallery: Vec<PhotoVm>,
-        csrf: String,
+        auth: &Auth,
     ) -> Self {
         use bikenest_domain::OpenStatus;
         let now = chrono::Utc::now();
@@ -292,7 +354,7 @@ impl DetailsPage {
         };
         let open_label = view::open_label(tr, v.is_open_now);
         Self {
-            layout: PageLayout::new(map, format!("{} — BikeNest", loc.name()), "").csrf(csrf),
+            layout: PageLayout::for_request(format!("{} — BikeNest", loc.name()), "", auth, map),
             tr,
             id: loc.id(),
             name: loc.name().to_string(),
@@ -364,22 +426,18 @@ impl DetailsPage {
 
     /// Build the P3 page with the M3 community view (reviews, confidence,
     /// verification panel, favorite, recommendation explanation) overlaid on
-    /// the base detail view. `viewer_verified` / `viewer_authenticated` gate the
-    /// contributor actions; anonymous viewers get a public-only page.
-    #[allow(clippy::too_many_arguments)]
+    /// the base detail view. `auth`'s verified/authenticated/moderator status
+    /// gates the contributor actions; anonymous viewers get a public-only page.
     pub async fn build_community(
         map: &MapConfig,
         tr: Translator,
         v: bikenest_application::ParkingDetailsView,
         gallery: Vec<PhotoVm>,
-        csrf: String,
+        auth: &Auth,
         community: Option<bikenest_application::CommunityParkingDetails>,
-        viewer_verified: bool,
-        viewer_authenticated: bool,
-        viewer_is_moderator: bool,
         storage: &dyn bikenest_application::ObjectStorage,
     ) -> Self {
-        let mut page = Self::build(map, tr, v, gallery, csrf);
+        let mut page = Self::build(map, tr, v, gallery, auth);
         let Some(c) = community else { return page };
         let mut reviews = Vec::with_capacity(c.reviews.len());
         for r in &c.reviews {
@@ -416,12 +474,15 @@ impl DetailsPage {
             .collect();
         page.parked_here_count = c.parked_here_count;
         page.is_favorited = c.is_favorited;
-        page.can_contribute = viewer_verified;
-        page.is_authenticated = viewer_authenticated;
+        page.can_contribute = auth.user.as_ref().is_some_and(|u| u.is_verified);
+        page.is_authenticated = auth.authenticated();
         page.has_own_review = c.own_review.is_some();
         page.own_rating = c.own_review.map(|r| r.rating.value()).unwrap_or(0);
         page.reasons = c.reasons.iter().map(|r| view::reason_vm(tr, r)).collect();
-        page.is_moderator = viewer_is_moderator;
+        page.is_moderator = auth.user.as_ref().is_some_and(|u| {
+            u.has_role(bikenest_domain::Role::Moderator)
+                || u.has_role(bikenest_domain::Role::Admin)
+        });
         page
     }
 
@@ -883,6 +944,7 @@ mod tests {
         let resp = error_response(
             &headers,
             &map(),
+            &Auth::default(),
             tr,
             StatusCode::INTERNAL_SERVER_ERROR,
             tr.t("error.500.body").to_string(),
@@ -906,6 +968,7 @@ mod tests {
         let resp = error_response(
             &HeaderMap::new(),
             &map(),
+            &Auth::default(),
             tr,
             StatusCode::INTERNAL_SERVER_ERROR,
             tr.t("error.500.body").to_string(),
@@ -927,6 +990,7 @@ mod tests {
         let resp = error_response(
             &headers,
             &map(),
+            &Auth::default(),
             tr,
             StatusCode::NOT_FOUND,
             tr.t("error.404.body").to_string(),

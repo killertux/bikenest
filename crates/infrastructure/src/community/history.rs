@@ -1,23 +1,36 @@
 //! SQL-backed contribution-history read model (C5).
 //!
 //! Aggregates a user's contributions across the creator / editor / reviewer /
-//! verifier / proposer / favoriter tables into one time-ordered feed, in a
-//! single `UNION ALL` query instead of six round trips — each branch is
-//! narrowed to `user` (index-backed: `parking_location.creator_id`,
-//! `parking_revision.editor_id`, `parking_proposal.proposer_id`,
-//! `review.author_id`, `verification.user_id`, `favorite`'s own PK), and the
-//! whole union is bounded with a keyset cursor on `(at, id)` instead of
-//! loading every row ever and sorting/truncating in Rust.
+//! verifier / proposer / favoriter / photo-uploader tables into one
+//! time-ordered feed, in a single `UNION ALL` query instead of eight round
+//! trips — each branch is narrowed to `user` (index-backed:
+//! `parking_location.creator_id`, `parking_revision.editor_id`,
+//! `parking_proposal.proposer_id`, `review.author_id`, `verification.user_id`,
+//! `favorite`'s own PK, `parking_photo.uploader_id`,
+//! `review_photo.uploader_id`), and the whole union is bounded with a keyset
+//! cursor on `(at, id)` instead of loading every row ever and
+//! sorting/truncating in Rust.
 //!
 //! `id` is a synthetic per-row cursor value, not a foreign key: each source
 //! table has its own independent primary key, so every branch encodes
-//! `pk * 10 + source_tag` (tags 1-6, one per source). Two different sources
-//! can never collide on this value — for tags `t1 ≠ t2` in `1..=6`,
+//! `pk * 10 + source_tag` (tags 1-8, one per source). Two different sources
+//! can never collide on this value — for tags `t1 ≠ t2` in `1..=8`,
 //! `pk1*10+t1 = pk2*10+t2` would require `(pk1-pk2)*10 = t2-t1`, impossible
 //! since `|t2-t1| < 10` — so `(at, id)` is a valid total order for keyset
 //! pagination even though `id` means nothing outside this query. A read
 //! model only — tests use the committed-fixture pattern (it reads through the
 //! pool, on other connections).
+//!
+//! The verification branch (tag 5) further splits `kind = 'verified'` from
+//! `kind = 'parked_here'` — the `verification` table stores both signals, and
+//! the web layer (WP12) needs to tell a real existence/attribute verification
+//! apart from a "parked here" note (which does not confirm anything about the
+//! listing). Tags 7/8 (`parking_photo`/`review_photo`, uploader's own pending
+//! upload) surface as `kind = 'photo.pending'` — the smaller of two options
+//! considered for showing a user their pending photos in C5 (the alternative,
+//! a `PhotoRepository::pending_for_user` method threaded through
+//! `PhotoService`/`AppState` plus a second web-layer read per contributions
+//! request, was more surface for the same result).
 
 use crate::Db;
 use async_trait::async_trait;
@@ -74,7 +87,8 @@ WITH events AS (
 
     UNION ALL
 
-    SELECT 'verified', 'active', pl.name, v.created_at, v.id * 10 + 5
+    SELECT CASE WHEN v.kind = 'parked_here' THEN 'parked_here' ELSE 'verified' END,
+           'active', pl.name, v.created_at, v.id * 10 + 5
     FROM verification v
     JOIN parking_location pl ON pl.id = v.location_id
     WHERE v.user_id = $1
@@ -85,6 +99,21 @@ WITH events AS (
     FROM favorite f
     JOIN parking_location pl ON pl.id = f.location_id
     WHERE f.user_id = $1
+
+    UNION ALL
+
+    SELECT 'photo.pending', 'pending', pl.name, pp.created_at, pp.id * 10 + 7
+    FROM parking_photo pp
+    JOIN parking_location pl ON pl.id = pp.location_id
+    WHERE pp.uploader_id = $1 AND pp.moderation_state = 'PENDING_REVIEW'
+
+    UNION ALL
+
+    SELECT 'photo.pending', 'pending', pl.name, rp.created_at, rp.id * 10 + 8
+    FROM review_photo rp
+    JOIN review r ON r.id = rp.review_id
+    JOIN parking_location pl ON pl.id = r.location_id
+    WHERE rp.uploader_id = $1 AND rp.moderation_state = 'PENDING_REVIEW'
 )
 SELECT kind, state, target, at, id
 FROM events

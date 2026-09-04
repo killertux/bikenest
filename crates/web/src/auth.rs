@@ -118,6 +118,7 @@ impl Auth {
         crate::error_response(
             &headers,
             &self.map,
+            self,
             self.tr,
             status,
             self.tr.t(key).to_string(),

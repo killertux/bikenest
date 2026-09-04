@@ -170,6 +170,21 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "nav.community" => ("Community", "Comunidade"),
         "nav.home" => ("Home", "Início"),
         "nav.community_how" => ("Community & how it works", "Comunidade e como funciona"),
+        "nav.favorites" => ("Favorites", "Favoritos"),
+        "nav.contributions" => ("Contributions", "Contribuições"),
+        "nav.moderation" => ("Moderation", "Moderação"),
+        "nav.admin" => ("Admin", "Administração"),
+        "nav.audit" => ("Audit", "Auditoria"),
+        "nav.add_spot" => ("Add a spot", "Adicionar vaga"),
+        "nav.verify_to_contribute" => (
+            "Verify your email to contribute",
+            "Verifique seu e-mail para contribuir",
+        ),
+        "nav.account_menu_aria" => ("Account menu", "Menu da conta"),
+        "nav.signup_to_add" => (
+            "Create an account to add a spot",
+            "Crie uma conta para adicionar uma vaga",
+        ),
         "menu.open" => ("Open menu", "Abrir menu"),
         "lang.group" => ("Language", "Idioma"),
         "lang.pt_aria" => ("Português (Brasil)", "Português (Brasil)"),
@@ -241,6 +256,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Adicionados recentemente perto da Rua XV",
         ),
         "home.featured.link" => ("See all parking", "Ver todas as vagas"),
+        "home.explore_center" => ("Explore spots downtown", "Explorar vagas no centro"),
         "home.community.eyebrow" => (
             "A map kept honest by riders",
             "Um mapa mantido honesto por quem pedala",
@@ -415,6 +431,14 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Photos help riders recognize a spot. Adding them arrives with community accounts.",
             "Fotos ajudam a reconhecer uma vaga. Enviá-las chega com as contas da comunidade.",
         ),
+        "gallery.empty_can_upload" => (
+            "Be the first to add a photo",
+            "Seja o primeiro a enviar uma foto",
+        ),
+        "details.add_nearby" => (
+            "Missing a spot around here?",
+            "Faltou alguma vaga por aqui?",
+        ),
         "details.reviews.title" => ("Reviews", "Avaliações"),
         "details.reviews.empty" => (
             "No reviews yet — reviews arrive with community accounts.",
@@ -513,8 +537,14 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "A moderação mantém a confiança",
         ),
         "about.moderation.body" => (
-            "Photos and reports are reviewed by moderators before they affect the map, and every moderation action is recorded. These tools arrive as the project grows.",
-            "Fotos e denúncias passam por moderadores antes de afetarem o mapa, e cada ação de moderação é registrada. Essas ferramentas chegam conforme o projeto cresce.",
+            "Photos and reports are reviewed by moderators before they affect the map, and every moderation action is recorded.",
+            "Fotos e denúncias passam por moderadores antes de afetarem o mapa, e cada ação de moderação é registrada.",
+        ),
+        // Replaces the old "these tools arrive as the project grows" copy: the
+        // four contribution entry points below are live, not a future promise.
+        "about.moderation.tools_live" => (
+            "These tools are live today: add, verify, review and report from any spot page.",
+            "Essas ferramentas já estão disponíveis: adicione, verifique, avalie e denuncie a partir da página de qualquer vaga.",
         ),
         "about.cta.title" => ("Ready to find parking?", "Pronto para encontrar vagas?"),
         "about.cta.button" => ("Search parking", "Buscar vagas"),
@@ -685,6 +715,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "account.email_verified" => ("Email verified", "E-mail verificado"),
         "account.verified_yes" => ("Yes", "Sim"),
         "account.verified_no" => ("No", "Não"),
+        "account.activity_title" => ("Your activity", "Sua atividade"),
         "account.settings" => ("Security", "Segurança"),
         "account.change_password" => ("Change password", "Alterar senha"),
         "account.change_email" => ("Change email", "Alterar e-mail"),
@@ -843,7 +874,9 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "contrib.kind.proposed" => ("Proposed", "Propôs"),
         "contrib.kind.reviewed" => ("Reviewed", "Avaliou"),
         "contrib.kind.verified" => ("Verified", "Verificou"),
+        "contrib.kind.parked_here" => ("Parked here", "Estacionei aqui"),
         "contrib.kind.favorited" => ("Favorited", "Favoritou"),
+        "contrib.kind.photo_pending" => ("Photo awaiting review", "Foto aguardando revisão"),
         "contrib.kind.other" => ("Contributed", "Contribuiu"),
         "contrib.state.active" => ("Active", "Ativa"),
         "contrib.state.pending" => ("Pending", "Pendente"),
@@ -1121,6 +1154,9 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "moderation.dashboard.link.reports" => ("Report queue", "Fila de denúncias"),
         "moderation.dashboard.link.proposals" => ("Proposal review", "Revisão de propostas"),
         "moderation.dashboard.link.audit" => ("Audit log", "Registro de auditoria"),
+        "moderation.tile.reports_open" => ("Open reports", "Denúncias abertas"),
+        "moderation.tile.reports_under_review" => ("Reports in review", "Denúncias em análise"),
+        "moderation.tile.photos_pending" => ("Awaiting review", "Aguardando revisão"),
         "moderation.reports.title" => ("Report queue", "Fila de denúncias"),
         "moderation.reports.subtitle" => (
             "Claims are the only open→review move; resolve or dismiss a claim.",

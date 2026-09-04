@@ -511,10 +511,9 @@ async fn home(State(state): State<AppState>, locale: Locale, auth: Auth) -> Resp
     }
 
     let page = HomePage {
-        layout: PageLayout::new(&state.map, tr.t("home.title").to_string(), "home")
+        layout: PageLayout::for_request(tr.t("home.title").to_string(), "home", &auth, &state.map)
             .canonical(format!("{}/", state.base_url.trim_end_matches('/')))
-            .description(tr.t("home.hero.subtitle").to_string())
-            .csrf(auth.csrf_value()),
+            .description(tr.t("home.hero.subtitle").to_string()),
         tr,
         featured,
     };
@@ -663,28 +662,37 @@ async fn search(
             error: Some(tr.t("search.geocode_unavailable").to_string()),
             map_json: serde_json::json!({ "origin": null, "items": [] }).to_string(),
         },
-        Err(_) => return internal_error(&headers, &state.map, tr),
+        Err(_) => return internal_error(&headers, &state.map, &auth, tr),
     };
 
+    let can_contribute = auth.user.as_ref().is_some_and(|u| u.is_verified);
     if is_htmx {
         let vm = SearchResultsVm {
             tr,
             results,
             oob: true,
+            is_authenticated: auth.authenticated(),
+            can_contribute,
         };
         vary_fragment(render(vm, StatusCode::OK))
     } else {
         let vm = SearchPageVm {
-            layout: PageLayout::new(&state.map, tr.t("search.title").to_string(), "search")
-                .canonical(format!("{}/search", state.base_url.trim_end_matches('/')))
-                .description(tr.t("search.title").to_string())
-                .csrf(auth.csrf_value()),
+            layout: PageLayout::for_request(
+                tr.t("search.title").to_string(),
+                "search",
+                &auth,
+                &state.map,
+            )
+            .canonical(format!("{}/search", state.base_url.trim_end_matches('/')))
+            .description(tr.t("search.title").to_string()),
             tr,
             results,
             form: params.0.clone(),
             security_options: view::security_options(tr, Some(&params.security)),
             type_options: view::type_options(tr, Some(&params.parking_type)),
             oob: false,
+            is_authenticated: auth.authenticated(),
+            can_contribute,
         };
         // The same URL serves the fragment and the document, chosen by the
         // HX-* headers — say so, or a cache hands one to the wrong request.
@@ -758,7 +766,7 @@ async fn parking_details(
                 .map(|u| u.has_role(Role::Moderator) || u.has_role(Role::Admin))
                 .unwrap_or(false);
             if view.location.moderation_state() != ModerationState::Active && !is_moderator {
-                return not_found_page(&headers, &state.map, tr);
+                return not_found_page(&headers, &state.map, &auth, tr);
             }
             // Approved photos (P3 gallery). A read failure degrades to no
             // gallery rather than failing the page.
@@ -797,7 +805,6 @@ async fn parking_details(
                 .community_details(view.location.clone(), viewer)
                 .await
                 .ok();
-            let verified = auth.user.as_ref().map(|u| u.is_verified).unwrap_or(false);
             // Post-action confirmation (e.g. "this change will be reviewed").
             let notice = details_notice(tr, &q);
             let page = DetailsPage::build_community(
@@ -805,19 +812,16 @@ async fn parking_details(
                 tr,
                 view,
                 gallery,
-                auth.csrf_value(),
+                &auth,
                 community,
-                verified,
-                auth.authenticated(),
-                is_moderator,
                 &*state.storage,
             )
             .await
             .notice(notice);
             render(page, StatusCode::OK)
         }
-        Ok(None) => not_found_page(&headers, &state.map, tr),
-        Err(_) => internal_error(&headers, &state.map, tr),
+        Ok(None) => not_found_page(&headers, &state.map, &auth, tr),
+        Err(_) => internal_error(&headers, &state.map, &auth, tr),
     }
 }
 
@@ -834,6 +838,16 @@ async fn parking_details(
 /// success (post/redirect/get), and the styled error page — at the same status —
 /// on failure. htmx 4 swaps 4xx/5xx bodies as well, so the failure fragment is a
 /// partial rather than a bare string.
+///
+/// The whole-document failure page renders an anonymous header: every caller
+/// here is a state-changing action endpoint that already required at least
+/// [`Auth::require_user`] to reach this point, so the failure itself is
+/// reachable only for the safe, generic errors (rate limit, conflict, a
+/// stale/invalid target) — not for "not signed in" (that 401/403s earlier,
+/// through `Auth::deny`, which does carry the real header). Threading the
+/// caller's `Auth` through every one of these small toasts (verify,
+/// parked-here, favorite, report, photo upload/moderate) for that edge case
+/// was judged not worth the extra parameter on every call site (WP12).
 fn fragment_answer(
     headers: &HeaderMap,
     map: &MapConfig,
@@ -844,7 +858,7 @@ fn fragment_answer(
     fragment: impl FnOnce() -> Response,
 ) -> Response {
     if !is_fragment_request(headers) && !status.is_success() {
-        return crate::error_response(headers, map, tr, status, message.to_string());
+        return crate::error_response(headers, map, &Auth::default(), tr, status, message.to_string());
     }
     fragment_or_redirect(headers, fragment(), redirect_to)
 }
@@ -1020,11 +1034,11 @@ async fn moderation_photos(
     };
     render(
         ModerationPhotosPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("moderation.title").to_string(),
                 "moderation",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             items,
@@ -1401,11 +1415,11 @@ async fn moderation_dashboard(
     let is_admin = user.has_role(Role::Admin);
     render(
         ModerationDashboardPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("moderation.dashboard.title").to_string(),
                 "moderation",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             pending_photos: counts.pending_photos,
@@ -1469,11 +1483,11 @@ async fn moderation_reports(
     let items = reports.into_iter().map(|r| view::report_vm(tr, &r)).collect();
     render(
         ModerationReportsPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("moderation.reports.title").to_string(),
                 "moderation",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             state_filter: q.state,
@@ -1644,11 +1658,11 @@ async fn moderation_proposals(
         .collect();
     render(
         ModerationProposalsPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("moderation.proposals.title").to_string(),
                 "moderation",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             items,
@@ -2022,11 +2036,11 @@ async fn admin_user_contributions(
         .collect();
     render(
         AdminUserContributionsPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("admin.contrib.title").to_string(),
                 "admin",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             user_id: id,
@@ -2087,11 +2101,11 @@ async fn admin_audit(
         .collect();
     render(
         AdminAuditPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("admin.audit.title").to_string(),
                 "admin",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             items,
@@ -2171,10 +2185,9 @@ fn photo_error(tr: Translator, e: &PhotoError) -> (StatusCode, String) {
 async fn about(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
     let tr = Translator::new(locale);
     let page = AboutPage {
-        layout: PageLayout::new(&state.map, tr.t("about.title").to_string(), "about")
+        layout: PageLayout::for_request(tr.t("about.title").to_string(), "about", &auth, &state.map)
             .canonical(format!("{}/about", state.base_url.trim_end_matches('/')))
-            .description(tr.t("about.title").to_string())
-            .csrf(auth.csrf_value()),
+            .description(tr.t("about.title").to_string()),
         tr,
     };
     render(page, StatusCode::OK)
@@ -2771,11 +2784,11 @@ async fn account(
     };
     render(
         AccountPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("account.title").to_string(),
                 "account",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             email: user.email.to_string(),
@@ -2803,11 +2816,11 @@ async fn account_password(State(state): State<AppState>, locale: Locale, auth: A
     }
     render(
         AccountPasswordPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("account.pw_title").to_string(),
                 "account",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             error: None,
@@ -2841,11 +2854,11 @@ async fn account_password_post(
         Ok(()) => axum::response::Redirect::to("/account?pw_changed=1").into_response(),
         Err(err) => render(
             AccountPasswordPage {
-                layout: PageLayout::with_csrf(
-                    &state.map,
+                layout: PageLayout::for_request(
                     tr.t("account.pw_title").to_string(),
                     "account",
-                    auth.csrf_value(),
+                    &auth,
+                    &state.map,
                 ),
                 tr,
                 error: Some(auth_error_message(tr, &err)),
@@ -2872,11 +2885,11 @@ async fn account_email(State(state): State<AppState>, locale: Locale, auth: Auth
     };
     render(
         AccountEmailPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("account.email_title").to_string(),
                 "account",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             email: user.email.to_string(),
@@ -2901,11 +2914,11 @@ async fn account_email_post(
     let Ok(new_email) = UserEmail::parse(&form.new_email) else {
         return render(
             AccountEmailPage {
-                layout: PageLayout::with_csrf(
-                    &state.map,
+                layout: PageLayout::for_request(
                     tr.t("account.email_title").to_string(),
                     "account",
-                    auth.csrf_value(),
+                    &auth,
+                    &state.map,
                 ),
                 tr,
                 email: user.email.to_string(),
@@ -2923,11 +2936,11 @@ async fn account_email_post(
         Ok(()) => axum::response::Redirect::to("/account?email_pending=1").into_response(),
         Err(err) => render(
             AccountEmailPage {
-                layout: PageLayout::with_csrf(
-                    &state.map,
+                layout: PageLayout::for_request(
                     tr.t("account.email_title").to_string(),
                     "account",
-                    auth.csrf_value(),
+                    &auth,
+                    &state.map,
                 ),
                 tr,
                 email: user.email.to_string(),
@@ -2970,11 +2983,11 @@ async fn admin_users(
     };
     render(
         AdminUsersPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("admin.users_title").to_string(),
                 "admin",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             users,
@@ -3091,10 +3104,17 @@ fn policy_kind_meta(tr: Translator, kind: PolicyKind) -> (&'static str, &'static
 /// Shared builder for a public versioned legal page (P4/P5/P6). The stored
 /// markdown goes through [`crate::markdown::render_policy_markdown`], which
 /// escapes raw HTML — that output is the only `|safe` value in the template.
-async fn policy_page_impl(state: &AppState, locale: Locale, kind: PolicyKind) -> Response {
+/// Takes `auth` so a signed-in visitor still sees their own header here (these
+/// pages are reachable from the footer on every page, logged in or not).
+async fn policy_page_impl(
+    state: &AppState,
+    locale: Locale,
+    auth: &Auth,
+    kind: PolicyKind,
+) -> Response {
     let tr = Translator::new(locale);
     let (kind_code, kind_label) = policy_kind_meta(tr, kind);
-    let layout = PageLayout::new(&state.map, format!("{kind_label} — BikeNest"), kind_code);
+    let layout = PageLayout::for_request(format!("{kind_label} — BikeNest"), kind_code, auth, &state.map);
     match current_policy(state, kind, locale).await {
         Some(doc) => render(
             PolicyPage {
@@ -3126,18 +3146,23 @@ async fn policy_page_impl(state: &AppState, locale: Locale, kind: PolicyKind) ->
     }
 }
 
-async fn privacy_page(locale: Locale, State(state): State<AppState>) -> Response {
-    policy_page_impl(&state, locale, PolicyKind::Privacy).await
+async fn privacy_page(locale: Locale, auth: Auth, State(state): State<AppState>) -> Response {
+    policy_page_impl(&state, locale, &auth, PolicyKind::Privacy).await
 }
-async fn terms_page(locale: Locale, State(state): State<AppState>) -> Response {
-    policy_page_impl(&state, locale, PolicyKind::Terms).await
+async fn terms_page(locale: Locale, auth: Auth, State(state): State<AppState>) -> Response {
+    policy_page_impl(&state, locale, &auth, PolicyKind::Terms).await
 }
-async fn cookies_page(locale: Locale, State(state): State<AppState>) -> Response {
-    policy_page_impl(&state, locale, PolicyKind::Cookies).await
+async fn cookies_page(locale: Locale, auth: Auth, State(state): State<AppState>) -> Response {
+    policy_page_impl(&state, locale, &auth, PolicyKind::Cookies).await
 }
 
 /// Shared builder for a policy version-history page (§70).
-async fn policy_versions_impl(state: &AppState, locale: Locale, kind: PolicyKind) -> Response {
+async fn policy_versions_impl(
+    state: &AppState,
+    locale: Locale,
+    auth: &Auth,
+    kind: PolicyKind,
+) -> Response {
     let tr = Translator::new(locale);
     let (kind_code, kind_label) = policy_kind_meta(tr, kind);
     let docs = policy_history(state, kind, locale).await;
@@ -3147,10 +3172,11 @@ async fn policy_versions_impl(state: &AppState, locale: Locale, kind: PolicyKind
         .collect();
     render(
         PolicyVersionsPage {
-            layout: PageLayout::new(
-                &state.map,
+            layout: PageLayout::for_request(
                 format!("{} — BikeNest", tr.t("policy.versions_title")),
                 kind_code,
+                auth,
+                &state.map,
             ),
             tr,
             kind_code,
@@ -3161,14 +3187,14 @@ async fn policy_versions_impl(state: &AppState, locale: Locale, kind: PolicyKind
     )
 }
 
-async fn privacy_versions(locale: Locale, State(state): State<AppState>) -> Response {
-    policy_versions_impl(&state, locale, PolicyKind::Privacy).await
+async fn privacy_versions(locale: Locale, auth: Auth, State(state): State<AppState>) -> Response {
+    policy_versions_impl(&state, locale, &auth, PolicyKind::Privacy).await
 }
-async fn terms_versions(locale: Locale, State(state): State<AppState>) -> Response {
-    policy_versions_impl(&state, locale, PolicyKind::Terms).await
+async fn terms_versions(locale: Locale, auth: Auth, State(state): State<AppState>) -> Response {
+    policy_versions_impl(&state, locale, &auth, PolicyKind::Terms).await
 }
-async fn cookies_versions(locale: Locale, State(state): State<AppState>) -> Response {
-    policy_versions_impl(&state, locale, PolicyKind::Cookies).await
+async fn cookies_versions(locale: Locale, auth: Auth, State(state): State<AppState>) -> Response {
+    policy_versions_impl(&state, locale, &auth, PolicyKind::Cookies).await
 }
 
 /// C6 — privacy & data hub.
@@ -3182,11 +3208,11 @@ async fn account_privacy(State(state): State<AppState>, locale: Locale, auth: Au
     let notice = None;
     render(
         AccountPrivacyPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("privacy.hub_title").to_string(),
                 "account",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             request_types: view::privacy_request_kind_options(tr),
@@ -3286,11 +3312,11 @@ async fn account_export(
     };
     render(
         AccountExportPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("export.title").to_string(),
                 "account",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             items,
@@ -3364,11 +3390,11 @@ async fn account_delete(State(state): State<AppState>, locale: Locale, auth: Aut
     }
     render(
         AccountDeletePage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("delete.title").to_string(),
                 "account",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             error: None,
@@ -3397,11 +3423,11 @@ async fn account_delete_post(
     let delete_err_status = |tr: Translator, key: &str, status: StatusCode| {
         render(
             AccountDeletePage {
-                layout: PageLayout::with_csrf(
-                    &state.map,
+                layout: PageLayout::for_request(
                     tr.t("delete.title").to_string(),
                     "account",
-                    auth.csrf_value(),
+                    &auth,
+                    &state.map,
                 ),
                 tr,
                 error: Some(tr.t(key).to_string()),
@@ -3455,11 +3481,11 @@ async fn admin_privacy_requests(
         .collect();
     render(
         AdminPrivacyRequestsPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("admin.privacy_requests.title").to_string(),
                 "moderation",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             items,
@@ -3512,32 +3538,42 @@ fn render_anon<T: Template>(page: T, token: &str) -> Response {
 fn error_page(
     headers: &HeaderMap,
     map: &MapConfig,
+    auth: &Auth,
     tr: Translator,
     status: StatusCode,
     body_key: &str,
 ) -> Response {
-    crate::error_response(headers, map, tr, status, tr.t(body_key).to_string())
+    crate::error_response(headers, map, auth, tr, status, tr.t(body_key).to_string())
 }
 
-fn internal_error(headers: &HeaderMap, map: &MapConfig, tr: Translator) -> Response {
+fn internal_error(headers: &HeaderMap, map: &MapConfig, auth: &Auth, tr: Translator) -> Response {
     error_page(
         headers,
         map,
+        auth,
         tr,
         StatusCode::INTERNAL_SERVER_ERROR,
         "error.500.body",
     )
 }
 
-fn not_found_page(headers: &HeaderMap, map: &MapConfig, tr: Translator) -> Response {
-    error_page(headers, map, tr, StatusCode::NOT_FOUND, "error.404.body")
+fn not_found_page(headers: &HeaderMap, map: &MapConfig, auth: &Auth, tr: Translator) -> Response {
+    error_page(headers, map, auth, tr, StatusCode::NOT_FOUND, "error.404.body")
 }
 
 /// Router fallback (E1). A 404 is reachable by every kind of request — a typed
 /// URL, a boosted link, a stale htmx fragment poll — so it answers each in its
-/// own shape rather than always emitting a whole document.
-async fn not_found(State(state): State<AppState>, locale: Locale, headers: HeaderMap) -> Response {
-    not_found_page(&headers, &state.map, Translator::new(locale))
+/// own shape rather than always emitting a whole document. `auth` renders the
+/// right header (a signed-in user's stray/mistyped link still shows Sair, not
+/// Entrar) — an unmatched route runs through the same auth middleware as
+/// every other route, so the session is always resolved here too.
+async fn not_found(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    headers: HeaderMap,
+) -> Response {
+    not_found_page(&headers, &state.map, &auth, Translator::new(locale))
 }
 
 /// Paths whose plain-text bodies are the contract, not a leaked failure: the
@@ -3589,6 +3625,11 @@ async fn styled_errors(
 ) -> Response {
     let path = req.uri().path().to_string();
     let headers = req.headers().clone();
+    // `auth_middleware` runs outside this layer and already stashed the
+    // resolved session as a request extension — grab it before `next.run`
+    // consumes `req`, so a failure this last line of defence re-renders still
+    // gets the signed-in header rather than falling back to anonymous.
+    let auth = req.extensions().get::<Auth>().cloned().unwrap_or_default();
     let res = next.run(req).await;
 
     if res.status().is_success() || res.status().is_redirection() {
@@ -3611,6 +3652,7 @@ async fn styled_errors(
     let mut styled = crate::error_response(
         &headers,
         &state.map,
+        &auth,
         tr,
         status,
         status_message(tr, status),
@@ -3823,17 +3865,12 @@ fn security_yes_codes_string(loc: &ParkingLocation) -> String {
 /// Build a `ParkingEditPage` with all reversible fields pre-filled from `loc`.
 /// The page chrome shared by every render of the "edit parking" form.
 fn edit_parking_layout(map: &MapConfig, tr: Translator, auth: &Auth) -> PageLayout {
-    PageLayout::with_csrf(
-        map,
-        tr.t("edit.title").to_string(),
-        "edit",
-        auth.csrf_value(),
-    )
+    PageLayout::for_request(tr.t("edit.title").to_string(), "edit", auth, map)
 }
 
 /// The page chrome shared by every render of the "add parking" form.
 fn new_parking_layout(map: &MapConfig, tr: Translator, auth: &Auth) -> PageLayout {
-    PageLayout::with_csrf(map, tr.t("new.title").to_string(), "new", auth.csrf_value())
+    PageLayout::for_request(tr.t("new.title").to_string(), "new", auth, map)
 }
 
 fn parking_edit_page_vm(
@@ -3909,11 +3946,11 @@ async fn parking_new_page(State(state): State<AppState>, locale: Locale, auth: A
     }
     render(
         ParkingNewPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("new.title").to_string(),
                 "new",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             name: String::new(),
@@ -4128,13 +4165,13 @@ async fn parking_edit_page(
         return resp;
     }
     let Some(view) = state.details.execute(id).await.ok().flatten() else {
-        return not_found_page(&headers, &state.map, tr);
+        return not_found_page(&headers, &state.map, &auth, tr);
     };
     // A location moderation took down accepts no contributions, so the form
     // (and the sensitive-change proposals it hosts) is gone for everyone —
     // moderators included, since the write path refuses them too.
     if view.location.moderation_state() != ModerationState::Active {
-        return not_found_page(&headers, &state.map, tr);
+        return not_found_page(&headers, &state.map, &auth, tr);
     }
     let loc = &view.location;
     // Pre-fill every reversible field so editing one doesn't silently reset
@@ -4173,7 +4210,7 @@ async fn parking_edit_post(
     // can detect a version conflict against the latest values).
     let current = match state.details.execute(id).await {
         Ok(Some(v)) => v.location,
-        _ => return not_found_page(&headers, &state.map, tr),
+        _ => return not_found_page(&headers, &state.map, &auth, tr),
     };
     let current_hours = current.hours().clone();
     let edit = match edit_from_form(&form, &current_hours) {
@@ -4189,7 +4226,7 @@ async fn parking_edit_post(
         Err(ContributionError::VersionConflict) => {
             // §100: reload the latest values and tell the user.
             let Some(view) = state.details.execute(id).await.ok().flatten() else {
-                return not_found_page(&headers, &state.map, tr);
+                return not_found_page(&headers, &state.map, &auth, tr);
             };
             let loc = view.location;
             render(
@@ -4214,7 +4251,7 @@ async fn parking_edit_post(
             tr.t("contribution.error.rate_limited").to_string(),
         ),
         // Same answer as the GET above: there is nothing here to edit.
-        Err(ContributionError::LocationNotActive) => not_found_page(&headers, &state.map, tr),
+        Err(ContributionError::LocationNotActive) => not_found_page(&headers, &state.map, &auth, tr),
         Err(e) => contribution_edit_error(&state.map, tr, auth, id, &form, &e),
     }
 }
@@ -4260,11 +4297,11 @@ fn contribution_edit_notice_status(
 ) -> Response {
     render(
         ParkingEditPage {
-            layout: PageLayout::with_csrf(
-                map,
+            layout: PageLayout::for_request(
                 tr.t("edit.title").to_string(),
                 "edit",
-                auth.csrf_value(),
+                &auth,
+                map,
             ),
             tr,
             id,
@@ -4345,7 +4382,7 @@ async fn parking_proposal_post(
         // The proposal forms live on the edit page, which 404s for a
         // taken-down location; a direct POST gets the same answer rather than
         // a redirect to a page that would itself 404.
-        Err(ContributionError::LocationNotActive) => not_found_page(&headers, &state.map, tr),
+        Err(ContributionError::LocationNotActive) => not_found_page(&headers, &state.map, &auth, tr),
         Err(_) => {
             axum::response::Redirect::to(&format!("/parking/{id}?proposal_error=1")).into_response()
         }
@@ -4381,11 +4418,11 @@ async fn review_page(
     };
     render(
         ReviewFormPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("review.title").to_string(),
                 "review",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             id,
@@ -4580,11 +4617,11 @@ fn render_review_error_status(
 ) -> Response {
     render(
         ReviewFormPage {
-            layout: PageLayout::with_csrf(
-                map,
+            layout: PageLayout::for_request(
                 tr.t("review.title").to_string(),
                 "review",
-                auth.csrf_value(),
+                &auth,
+                map,
             ),
             tr,
             id,
@@ -4893,11 +4930,11 @@ async fn account_favorites(
     }
     render(
         FavoritesPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("favorites.title").to_string(),
                 "account",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             items,
@@ -4951,11 +4988,11 @@ async fn account_contributions(
         .collect();
     render(
         ContributionsPage {
-            layout: PageLayout::with_csrf(
-                &state.map,
+            layout: PageLayout::for_request(
                 tr.t("contrib.title").to_string(),
                 "account",
-                auth.csrf_value(),
+                &auth,
+                &state.map,
             ),
             tr,
             items,

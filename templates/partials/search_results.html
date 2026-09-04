@@ -25,6 +25,11 @@
       <p class="mx-auto mt-2 max-w-sm text-[15px] text-muted">{{ tr.t("search.empty.body") }}</p>
       <div class="mt-6 flex flex-wrap items-center justify-center gap-3">
         <a href="/search" class="rounded-xl border border-border bg-surface px-5 py-2.5 text-sm font-medium text-fg transition-colors hover:border-fg">{{ tr.t("search.filters.clear") }}</a>
+        {% if can_contribute %}
+          <a href="/parking/new" class="rounded-xl bg-accent-strong px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("nav.add_spot") }}</a>
+        {% else if !is_authenticated %}
+          <a href="/register" class="rounded-xl bg-accent-strong px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("nav.signup_to_add") }}</a>
+        {% endif %}
       </div>
     </div>
   {% else %}

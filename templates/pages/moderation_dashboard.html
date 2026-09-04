@@ -8,15 +8,15 @@
     <a href="/moderation/photos" class="group rounded-2xl border border-border p-5 transition-colors hover:border-accent">
       <p class="text-sm text-muted">{{ tr.t("moderation.dashboard.photos") }}</p>
       <p class="mt-2 font-display text-3xl font-bold text-fg">{{ pending_photos }}</p>
-      <p class="mt-1 text-xs text-accent-strong group-hover:underline">{{ tr.t("moderation.dashboard.open") }}</p>
+      <p class="mt-1 text-xs text-accent-strong group-hover:underline">{{ tr.t("moderation.tile.photos_pending") }}</p>
     </a>
     <a href="/moderation/reports?state=OPEN" class="group rounded-2xl border border-border p-5 transition-colors hover:border-accent">
-      <p class="text-sm text-muted">{{ tr.t("moderation.dashboard.reports") }}</p>
+      <p class="text-sm text-muted">{{ tr.t("moderation.tile.reports_open") }}</p>
       <p class="mt-2 font-display text-3xl font-bold text-fg">{{ open_reports }}</p>
       <p class="mt-1 text-xs text-accent-strong group-hover:underline">{{ tr.t("moderation.dashboard.open") }}</p>
     </a>
     <a href="/moderation/reports?state=UNDER_REVIEW" class="group rounded-2xl border border-border p-5 transition-colors hover:border-accent">
-      <p class="text-sm text-muted">{{ tr.t("moderation.dashboard.reports") }}</p>
+      <p class="text-sm text-muted">{{ tr.t("moderation.tile.reports_under_review") }}</p>
       <p class="mt-2 font-display text-3xl font-bold text-fg">{{ under_review_reports }}</p>
       <p class="mt-1 text-xs text-accent-strong group-hover:underline">{{ tr.t("moderation.dashboard.in_review") }}</p>
     </a>

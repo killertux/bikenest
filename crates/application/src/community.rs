@@ -224,7 +224,8 @@ pub struct FavoriteItem {
 /// One row of the C5 contribution-history feed.
 #[derive(Debug, Clone)]
 pub struct ContributionItem {
-    /// "added" | "edited" | "proposed" | "reviewed" | "verified" | "favorited"
+    /// "added" | "edited" | "proposed" | "reviewed" | "verified" |
+    /// "parked_here" | "favorited" | "photo.pending"
     pub kind: String,
     /// The affected location name (or id when a name is unavailable).
     pub target: String,
@@ -232,7 +233,7 @@ pub struct ContributionItem {
     pub state: String,
     pub at: DateTime<Utc>,
     /// Opaque keyset-cursor value for this row (paired with `at`). Not a
-    /// foreign key into any one table — the feed unions six heterogeneous
+    /// foreign key into any one table — the feed unions eight heterogeneous
     /// sources, so this is a per-source id encoded to sort consistently.
     pub id: i64,
 }
@@ -396,7 +397,7 @@ pub trait ContributionHistoryReader: Send + Sync {
     /// Keyset-paginated, newest first (`at DESC`, ties broken by `id`).
     /// `after` is the `(at, id)` of the last item on the previous page; `id`
     /// is an opaque per-source cursor value, not a foreign key into any one
-    /// table (the feed unions six heterogeneous sources).
+    /// table (the feed unions eight heterogeneous sources).
     async fn history(
         &self,
         user: UserId,

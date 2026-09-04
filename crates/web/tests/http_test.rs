@@ -3396,6 +3396,27 @@ fn no_error_colour_classes_remain_in_templates() {
     );
 }
 
+/// WP12: the header used to decide "signed in" from `layout.csrf != ""`, which
+/// also lit up for the anonymous auth pages (login/register/reset/verify) that
+/// mint a double-submit CSRF token without a session. It must branch on the
+/// real session flag instead.
+#[test]
+fn base_layout_does_not_branch_on_csrf_presence() {
+    let path = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../templates/layouts/base.html"
+    ));
+    let contents = std::fs::read_to_string(path).expect("read base.html");
+    assert!(
+        !contents.contains("layout.csrf != \"\""),
+        "base.html must not branch the header on csrf presence"
+    );
+    assert!(
+        contents.contains("layout.is_authenticated"),
+        "base.html header should branch on layout.is_authenticated"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Configuration hygiene (pure filesystem scan, no DB)
 // ---------------------------------------------------------------------------
@@ -4698,4 +4719,286 @@ async fn the_anonymous_htmx_401_carries_exactly_one_vary(_tx: &mut TestTx) {
     let body = String::from_utf8_lossy(&body).to_string();
     assert!(body.contains(r#"role="alert""#), "fragment_error: {body}");
     assert!(!body.contains("<html"), "must not be a document: {body}");
+}
+
+// ---------------------------------------------------------------------------
+// WP12: navigation and identity in the layout
+// ---------------------------------------------------------------------------
+
+#[db_test]
+async fn anonymous_login_page_header_has_no_signed_in_links(_tx: &mut TestTx) {
+    let (status, body) = get("/login").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.contains("action=\"/logout\""),
+        "anonymous header must not show a logout form: {body}"
+    );
+    assert!(
+        !body.contains("href=\"/account\""),
+        "anonymous header must not link /account: {body}"
+    );
+    assert!(
+        body.contains("href=\"/login\""),
+        "Entrar/Log in link present: {body}"
+    );
+    assert!(
+        body.contains("href=\"/register\""),
+        "Criar conta/Sign up link present: {body}"
+    );
+}
+
+#[db_test]
+async fn signed_in_user_sees_account_links_on_policy_and_error_pages(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let (app, email) = auth_app().await;
+    let cookie = verified_cookie(&app, &email, "wp12-header-privacy@example.com").await;
+    for uri in ["/privacy", "/terms", "/this-route-does-not-exist-wp12"] {
+        let (status, body) = get_c(&app, uri, Some(&cookie)).await;
+        assert!(
+            status == StatusCode::OK || status == StatusCode::NOT_FOUND,
+            "{uri}: unexpected status {status}"
+        );
+        assert!(
+            body.contains("action=\"/logout\""),
+            "{uri}: logout form present: {body}"
+        );
+        assert!(
+            body.contains("href=\"/account/favorites\""),
+            "{uri}: favorites link present: {body}"
+        );
+        assert!(
+            body.contains("href=\"/account/contributions\""),
+            "{uri}: contributions link present: {body}"
+        );
+        assert!(
+            !body.contains("href=\"/moderation\""),
+            "{uri}: plain user has no moderation link: {body}"
+        );
+        assert!(
+            !body.contains("href=\"/admin/users\""),
+            "{uri}: plain user has no admin link: {body}"
+        );
+    }
+    let _ = tx;
+    cleanup_user_contributions("wp12-header-privacy@example.com").await;
+}
+
+#[db_test]
+async fn header_shows_moderation_and_admin_links_by_role(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let (app, email) = auth_app().await;
+
+    let moderator = moderator_cookie(&app, &email, "wp12-header-mod@example.com").await;
+    let (_, body) = get_c(&app, "/", Some(&moderator)).await;
+    assert!(
+        body.contains("href=\"/moderation\""),
+        "moderator sees the moderation link: {body}"
+    );
+    assert!(
+        !body.contains("href=\"/admin/users\""),
+        "a moderator (not admin) has no admin link: {body}"
+    );
+
+    let admin = admin_cookie(&app, &email, "wp12-header-admin@example.com").await;
+    let (_, body) = get_c(&app, "/", Some(&admin)).await;
+    assert!(
+        body.contains("href=\"/admin/users\""),
+        "admin sees the admin link: {body}"
+    );
+    assert!(
+        body.contains("href=\"/admin/audit\""),
+        "admin sees the audit link: {body}"
+    );
+
+    let plain = verified_cookie(&app, &email, "wp12-header-plain@example.com").await;
+    let (_, body) = get_c(&app, "/", Some(&plain)).await;
+    assert!(
+        !body.contains("href=\"/moderation\""),
+        "plain user has no moderation link: {body}"
+    );
+    assert!(
+        !body.contains("href=\"/admin/users\""),
+        "plain user has no admin link: {body}"
+    );
+
+    let _ = tx;
+    cleanup_user_contributions("wp12-header-mod@example.com").await;
+    cleanup_user_contributions("wp12-header-admin@example.com").await;
+    cleanup_user_contributions("wp12-header-plain@example.com").await;
+}
+
+#[db_test]
+async fn add_spot_entry_points_are_gated_by_verification_status(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    const MARK: &str = "wp12-add-spot-cta";
+    const Q: &str = "/search?q=Rua%20XV%20de%20Novembro";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let loc = ParkingBuilder::new()
+        .with_name("Add Spot CTA Fixture")
+        .with_fixture_tag(MARK)
+        .create(tx.executor())
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+    let loc_id = loc.id();
+
+    let (app, email) = auth_app().await;
+
+    // Verified user: the real entry point on every page named in the plan.
+    let verified = verified_cookie(&app, &email, "wp12-add-spot-verified@example.com").await;
+    for uri in [Q.to_string(), "/about".to_string(), format!("/parking/{loc_id}")] {
+        let (s, body) = get_c(&app, &uri, Some(&verified)).await;
+        assert_eq!(s, StatusCode::OK, "{uri}");
+        assert!(
+            body.contains("href=\"/parking/new\""),
+            "{uri}: add-a-spot entry point present: {body}"
+        );
+    }
+
+    // Anonymous: signup-to-add CTA, not the real entry point.
+    let (s, body) = get_c(&app, Q, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        body.contains("href=\"/register\""),
+        "anonymous CTA links to /register: {body}"
+    );
+    assert!(
+        body.contains("Create an account to add a spot"),
+        "signup-to-add copy present: {body}"
+    );
+
+    // Signed in but unverified: verify-to-contribute nudge, not the real entry point.
+    let unverified = unverified_cookie(&app, "wp12-add-spot-unverified@example.com").await;
+    let (s, body) = get_c(&app, Q, Some(&unverified)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        body.contains("Verify your email to contribute"),
+        "verify-to-contribute copy present: {body}"
+    );
+
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    cleanup_user_contributions("wp12-add-spot-verified@example.com").await;
+    cleanup_user_contributions("wp12-add-spot-unverified@example.com").await;
+}
+
+#[db_test]
+async fn about_page_links_entry_points_and_uses_present_tense_copy(
+    _tx: &mut TestTx,
+) {
+    let (status, body) = get("/about").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("href=\"/parking/new\""),
+        "add-a-spot card links to /parking/new: {body}"
+    );
+    assert!(
+        body.matches("href=\"/search\"").count() >= 3,
+        "verify/review/report cards link to /search: {body}"
+    );
+    assert!(
+        body.contains("These tools are live today"),
+        "present-tense copy present: {body}"
+    );
+    assert!(
+        !body.contains("arrive as the project grows"),
+        "old future-tense copy must be gone: {body}"
+    );
+
+    // pt-BR (default locale): the old "chegam conforme" copy must be gone too.
+    let app = test_app().await;
+    let res = app
+        .oneshot(Request::builder().uri("/about").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8_lossy(&body).to_string();
+    assert!(
+        !body.contains("chegam conforme"),
+        "old pt-BR copy must be gone: {body}"
+    );
+    assert!(
+        body.contains("já estão disponíveis"),
+        "new pt-BR copy present: {body}"
+    );
+}
+
+#[db_test]
+async fn moderation_dashboard_tiles_have_distinct_titles(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let (app, email) = auth_app().await;
+    let admin = admin_cookie(&app, &email, "wp12-mod-tiles@example.com").await;
+    let (s, body) = get_c(&app, "/moderation", Some(&admin)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(body.contains("Open reports"), "{body}");
+    assert!(body.contains("Reports in review"), "{body}");
+    assert!(body.contains("Awaiting review"), "{body}");
+    let _ = tx;
+    cleanup_user_contributions("wp12-mod-tiles@example.com").await;
+}
+
+#[db_test]
+async fn contributions_history_labels_parked_here_distinct_from_verified(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    const MARK: &str = "wp12-parked-here";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let loc = ParkingBuilder::new()
+        .with_name("Parked Here Fixture")
+        .with_fixture_tag(MARK)
+        .create(tx.executor())
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+    let loc_id = loc.id();
+
+    let (app, email) = auth_app().await;
+    let cookie = verified_cookie(&app, &email, "wp12-parked-here@example.com").await;
+
+    let (s, page) = get_c(&app, &format!("/parking/{loc_id}"), Some(&cookie)).await;
+    assert_eq!(s, StatusCode::OK);
+    let csrf = extract_csrf(&page);
+    let (s, _, _) = post_form_hx(
+        &app,
+        &format!("/parking/{loc_id}/parked-here"),
+        &[("csrf", &csrf)],
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "parked-here signal recorded");
+
+    let (s, body) = get_c(&app, "/account/contributions", Some(&cookie)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        body.contains("Parked here · Parked Here Fixture"),
+        "row has its own label, not \"Verified\": {body}"
+    );
+    assert!(
+        !body.contains("Verified · Parked Here Fixture"),
+        "must not read as a real verification: {body}"
+    );
+
+    let _ = tx;
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    cleanup_user_contributions("wp12-parked-here@example.com").await;
 }

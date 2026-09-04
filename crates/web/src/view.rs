@@ -559,6 +559,11 @@ pub fn reason_vm(t: Translator, r: &bikenest_application::Reason) -> ReasonVm {
 /// One rendered row of the C5 contribution history feed.
 #[derive(Debug, Clone)]
 pub struct ContributionVm {
+    /// Stable code for the row's icon: "added" | "edited" | "proposed" |
+    /// "reviewed" | "verified" | "parked_here" | "favorited" | "photo_pending"
+    /// | "other". Kept separate from `kind_label` (which is localized) so the
+    /// template can pick an icon without matching on translated text.
+    pub kind_code: &'static str,
     pub kind_label: &'static str,
     pub target: String,
     pub state_label: &'static str,
@@ -1021,14 +1026,20 @@ pub fn contribution_vm(
     t: Translator,
     i: &bikenest_application::ContributionItem,
 ) -> ContributionVm {
-    let kind = match i.kind.as_str() {
-        "added" => t.t("contrib.kind.added"),
-        "edited" => t.t("contrib.kind.edited"),
-        "proposed" => t.t("contrib.kind.proposed"),
-        "reviewed" => t.t("contrib.kind.reviewed"),
-        "verified" => t.t("contrib.kind.verified"),
-        "favorited" => t.t("contrib.kind.favorited"),
-        _ => t.t("contrib.kind.other"),
+    // "parked_here" and "photo.pending" are their own kinds — a parked-here
+    // signal is not a verification, and a pending photo isn't approved yet,
+    // so neither should read as "Verificou" (a real existence/attribute
+    // verification).
+    let (kind_code, kind): (&'static str, &'static str) = match i.kind.as_str() {
+        "added" => ("added", t.t("contrib.kind.added")),
+        "edited" => ("edited", t.t("contrib.kind.edited")),
+        "proposed" => ("proposed", t.t("contrib.kind.proposed")),
+        "reviewed" => ("reviewed", t.t("contrib.kind.reviewed")),
+        "verified" => ("verified", t.t("contrib.kind.verified")),
+        "parked_here" => ("parked_here", t.t("contrib.kind.parked_here")),
+        "favorited" => ("favorited", t.t("contrib.kind.favorited")),
+        "photo.pending" => ("photo_pending", t.t("contrib.kind.photo_pending")),
+        _ => ("other", t.t("contrib.kind.other")),
     };
     let state = match i.state.as_str() {
         "active" => t.t("contrib.state.active"),
@@ -1037,6 +1048,7 @@ pub fn contribution_vm(
         _ => t.t("contrib.state.other"),
     };
     ContributionVm {
+        kind_code,
         kind_label: kind,
         target: i.target.clone(),
         state_label: state,

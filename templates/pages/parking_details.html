@@ -67,8 +67,12 @@
       <section class="mt-8">
         {% if gallery.is_empty() %}
           <div class="rounded-2xl border border-dashed border-border bg-surface px-6 py-12 text-center">
-            <p class="font-display text-base font-semibold">{{ tr.t("details.gallery.empty") }}</p>
-            <p class="mx-auto mt-1.5 max-w-sm text-sm text-muted">{{ tr.t("details.gallery.empty_hint") }}</p>
+            {% if can_contribute %}
+              <p class="font-display text-base font-semibold">{{ tr.t("gallery.empty_can_upload") }}</p>
+            {% else %}
+              <p class="font-display text-base font-semibold">{{ tr.t("details.gallery.empty") }}</p>
+              <p class="mx-auto mt-1.5 max-w-sm text-sm text-muted">{{ tr.t("details.gallery.empty_hint") }}</p>
+            {% endif %}
           </div>
         {% else %}
           <div class="grid gap-3 sm:grid-cols-4">
@@ -246,6 +250,19 @@
           <a href="{{ google_url }}" target="_blank" rel="noopener" class="rounded-lg bg-accent px-4 py-2 text-center font-medium text-white hover:bg-accent-dark">{{ tr.t("details.navigate.google") }}</a>
           <a href="{{ osm_url }}" target="_blank" rel="noopener" class="rounded-lg border border-border px-4 py-2 text-center hover:border-accent">{{ tr.t("details.navigate.osm") }}</a>
         </div>
+      </div>
+
+      <!-- Add a nearby spot (WP12): the map above only ever shows this one
+           listing, so this is the entry point to add whatever it doesn't cover. -->
+      <div class="rounded-2xl border border-dashed border-border bg-surface p-4 text-sm">
+        <p class="text-muted">{{ tr.t("details.add_nearby") }}</p>
+        {% if can_contribute %}
+          <a href="/parking/new" class="mt-2 inline-flex items-center gap-2 rounded-lg bg-accent-strong px-3 py-2 text-sm font-medium text-white hover:bg-accent-dark">{{ tr.t("nav.add_spot") }}</a>
+        {% else if is_authenticated %}
+          <a href="/account" class="mt-2 inline-block text-xs text-muted hover:text-fg">{{ tr.t("nav.verify_to_contribute") }}</a>
+        {% else %}
+          <a href="/register" class="mt-2 inline-flex items-center gap-2 rounded-lg bg-accent-strong px-3 py-2 text-sm font-medium text-white hover:bg-accent-dark">{{ tr.t("nav.signup_to_add") }}</a>
+        {% endif %}
       </div>
 
       <!-- Confidence (M3 §106) -->

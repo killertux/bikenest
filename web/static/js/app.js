@@ -21,6 +21,15 @@ document.addEventListener('alpine:init', function () {
     };
   });
 
+  /* ---- base.html: signed-in account menu (desktop header) ---------------------- */
+  Alpine.data('accountMenu', function () {
+    return {
+      open: false,
+      toggle: function () { this.open = !this.open; },
+      close: function () { this.open = false; },
+    };
+  });
+
   /* ---- home.html: hero "use my location" --------------------------------------- */
   Alpine.data('homeHero', function () {
     return {
