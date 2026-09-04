@@ -3277,3 +3277,130 @@ fn web_crate_never_reads_the_process_environment() {
         offenders.join("\n")
     );
 }
+
+// ---------------------------------------------------------------------------
+// WP7: `X-Forwarded-For` is not a rate-limit identity unless a proxy is trusted
+// ---------------------------------------------------------------------------
+
+/// POST a form with an explicit `X-Forwarded-For`, carrying the anonymous
+/// double-submit CSRF pair `post_form` would normally add.
+async fn post_form_xff(
+    app: &axum::Router,
+    uri: &str,
+    fields: &[(&str, &str)],
+    xff: &str,
+) -> (StatusCode, String) {
+    let mut all: Vec<(String, String)> = fields
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let mut cookie = None;
+    if let Some(src) = anon_source_for(uri)
+        && let Some((line, token)) = anon_csrf(app, src).await
+    {
+        cookie = Some(line);
+        all.push(("csrf".to_string(), token));
+    }
+    let body = all
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, urlencode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let mut b = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("Accept-Language", "en")
+        .header("x-forwarded-for", xff);
+    if let Some(c) = cookie {
+        b = b.header("cookie", c);
+    }
+    let res = app
+        .clone()
+        .oneshot(b.body(Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&body).to_string())
+}
+
+/// `test_config()` leaves `TRUSTED_PROXY_HOPS` at 0, so `X-Forwarded-For` is
+/// ignored entirely and a caller cannot mint a fresh rate-limit bucket per
+/// request by changing the header. Registration is limited to 3 per hour per
+/// address; the emails below are invalid on purpose, so the limiter is the only
+/// thing being exercised (no accounts are created) — the limit check runs
+/// before the address is parsed.
+#[db_test]
+async fn a_spoofed_forwarded_for_cannot_dodge_the_rate_limit(_tx: &mut TestTx) {
+    let (app, _email) = auth_app().await;
+    const RATE_LIMITED: &str = "Too many attempts. Try again later.";
+    const INVALID: &str = "That email is not valid.";
+
+    for i in 0..3 {
+        let (status, body) = post_form_xff(
+            &app,
+            "/register",
+            &[("email", "not-an-email"), ("password", "password123")],
+            &format!("203.0.113.{i}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "attempt {i} renders the form again");
+        assert!(
+            body.contains(INVALID) && !body.contains(RATE_LIMITED),
+            "attempt {i} must be rejected on the address, not the limiter"
+        );
+    }
+
+    // A fourth attempt from yet another forged address lands in the same bucket.
+    let (_, body) = post_form_xff(
+        &app,
+        "/register",
+        &[("email", "not-an-email"), ("password", "password123")],
+        "198.51.100.77",
+    )
+    .await;
+    assert!(
+        body.contains(RATE_LIMITED),
+        "a new X-Forwarded-For must not reset the per-address limit"
+    );
+}
+
+/// The mirror of the test above: with `TRUSTED_PROXY_HOPS=1` the header *is*
+/// the identity (a real proxy appends it), so four requests forwarded from four
+/// different addresses are four buckets and none is limited. Together the two
+/// tests show the extractor actually reads the configured hop count rather than
+/// returning one constant.
+#[db_test]
+async fn a_trusted_proxys_forwarded_for_does_key_the_bucket(_tx: &mut TestTx) {
+    let db = Db::from_pool(pool().await);
+    let config = bikenest_infrastructure::Config {
+        trusted_proxy_hops: 1,
+        ..test_config()
+    };
+    let app = app_router_with(
+        std::sync::Arc::new(config),
+        db,
+        RouterDeps {
+            email: Box::new(FakeEmailProvider::with_root(None)),
+            oauth: None,
+            hasher: TestPasswordHasher,
+            rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
+            storage: std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
+        },
+    );
+
+    for i in 0..4 {
+        let (_, body) = post_form_xff(
+            &app,
+            "/register",
+            &[("email", "not-an-email"), ("password", "password123")],
+            &format!("203.0.113.{i}"),
+        )
+        .await;
+        assert!(
+            !body.contains("Too many attempts. Try again later."),
+            "attempt {i} came from a distinct forwarded address, so it has its own bucket"
+        );
+    }
+}

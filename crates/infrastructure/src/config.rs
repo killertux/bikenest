@@ -242,6 +242,44 @@ impl PolicySeedConfig {
     }
 }
 
+/// PostgreSQL pool sizing plus the per-connection guard rails every pooled
+/// session gets. The two timeouts are set with `SET` on each new connection, so
+/// a runaway query or a transaction left open by a crashed client releases the
+/// connection instead of pinning it forever.
+///
+/// Migrations deliberately run with `statement_timeout = 0` (see
+/// [`Db::migrate`](crate::Db::migrate)): a cold database can spend minutes
+/// building an index, and that is not the case the timeout defends against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DbConfig {
+    /// Pool ceiling (`DB_MAX_CONNECTIONS`).
+    pub max_connections: u32,
+    /// How long a caller waits for a free connection before erroring.
+    pub acquire_timeout: Duration,
+    /// `statement_timeout` per connection (`DB_STATEMENT_TIMEOUT_MS`).
+    pub statement_timeout: Duration,
+    /// `idle_in_transaction_session_timeout` (`DB_IDLE_IN_TX_TIMEOUT_MS`).
+    pub idle_in_tx_timeout: Duration,
+    /// Recycle a connection after this long, so a rolling database upgrade or a
+    /// moved primary is picked up without a restart.
+    pub max_lifetime: Duration,
+    /// Close connections idle for longer than this.
+    pub idle_timeout: Duration,
+}
+
+impl Default for DbConfig {
+    fn default() -> Self {
+        Self {
+            max_connections: 10,
+            acquire_timeout: Duration::from_secs(5),
+            statement_timeout: Duration::from_secs(5),
+            idle_in_tx_timeout: Duration::from_secs(10),
+            max_lifetime: Duration::from_secs(30 * 60),
+            idle_timeout: Duration::from_secs(10 * 60),
+        }
+    }
+}
+
 /// Photo upload/derivative limits, env-driven with the domain constants as
 /// defaults so operators can tune them without a rebuild.
 pub type PhotoConfig = bikenest_domain::PhotoLimits;
@@ -294,8 +332,16 @@ pub struct Config {
     pub app_env: AppEnv,
     /// PostgreSQL connection string.
     pub database_url: String,
+    /// Pool sizing + per-connection statement/idle timeouts.
+    pub db: DbConfig,
     /// Socket address to bind, e.g. `0.0.0.0:8080`.
     pub bind_addr: String,
+    /// How many reverse proxies sit in front of the app and may be trusted to
+    /// have appended an `X-Forwarded-For` entry. `0` (the default) means no
+    /// proxy: the TCP peer address is the only client identity, and forwarded
+    /// headers are ignored — otherwise any client could pick its own
+    /// rate-limit bucket by sending one.
+    pub trusted_proxy_hops: u8,
     /// Public origin the app builds absolute links from (verification emails,
     /// canonical URLs, sitemap). No trailing slash is assumed.
     pub base_url: String,
@@ -375,9 +421,11 @@ impl Config {
         Ok(Self {
             app_env,
             database_url: env.require("DATABASE_URL")?,
+            db: db_config(&env),
             bind_addr: env
                 .string("BIND_ADDR")
                 .unwrap_or_else(|| "0.0.0.0:8080".to_string()),
+            trusted_proxy_hops: env.u8("TRUSTED_PROXY_HOPS").unwrap_or(0),
             base_url: env
                 .string("BASE_URL")
                 .or_else(|| dev.then(|| DEV_BASE_URL.to_string()))
@@ -560,7 +608,9 @@ impl Config {
         Self {
             app_env: AppEnv::Development,
             database_url: database_url.into(),
+            db: DbConfig::default(),
             bind_addr: "127.0.0.1:0".to_string(),
+            trusted_proxy_hops: 0,
             base_url: DEV_BASE_URL.to_string(),
             tls_on: false,
             probe_timeout: Duration::from_secs(2),
@@ -896,6 +946,24 @@ fn job_config(env: &EnvSource<'_>) -> JobConfig {
     }
 }
 
+/// Pool sizing + the per-connection guard rails. Only the three knobs an
+/// operator realistically tunes are env-driven; lifetimes are fixed.
+fn db_config(env: &EnvSource<'_>) -> DbConfig {
+    let d = DbConfig::default();
+    DbConfig {
+        max_connections: env.u32("DB_MAX_CONNECTIONS").unwrap_or(d.max_connections),
+        statement_timeout: env
+            .u64("DB_STATEMENT_TIMEOUT_MS")
+            .map(Duration::from_millis)
+            .unwrap_or(d.statement_timeout),
+        idle_in_tx_timeout: env
+            .u64("DB_IDLE_IN_TX_TIMEOUT_MS")
+            .map(Duration::from_millis)
+            .unwrap_or(d.idle_in_tx_timeout),
+        ..d
+    }
+}
+
 /// Retention TTLs. Values are seconds; each defaults to the
 /// `RetentionPolicy::default()` value when unset.
 fn retention_config(env: &EnvSource<'_>) -> RetentionPolicy {
@@ -1217,6 +1285,38 @@ mod tests {
         assert_eq!(m.report_description_max_len, 1000);
         assert_eq!(m.report_create_user_limit, 10);
         assert_eq!(m.report_create_ip_limit, 20);
+    }
+
+    #[test]
+    fn db_defaults_and_overrides() {
+        assert_eq!(config(&[DB]).db, DbConfig::default());
+        let cfg = config(&[
+            DB,
+            ("DB_MAX_CONNECTIONS", "40"),
+            ("DB_STATEMENT_TIMEOUT_MS", "1500"),
+            ("DB_IDLE_IN_TX_TIMEOUT_MS", "20000"),
+        ]);
+        assert_eq!(cfg.db.max_connections, 40);
+        assert_eq!(cfg.db.statement_timeout, Duration::from_millis(1500));
+        assert_eq!(cfg.db.idle_in_tx_timeout, Duration::from_secs(20));
+        // Lifetimes are not env-driven; they stay on the defaults.
+        assert_eq!(cfg.db.max_lifetime, DbConfig::default().max_lifetime);
+        assert_eq!(cfg.db.idle_timeout, DbConfig::default().idle_timeout);
+    }
+
+    #[test]
+    fn trusted_proxy_hops_defaults_to_zero_and_parses() {
+        assert_eq!(config(&[DB]).trusted_proxy_hops, 0);
+        assert_eq!(
+            config(&[DB, ("TRUSTED_PROXY_HOPS", "2")]).trusted_proxy_hops,
+            2
+        );
+        // Garbage falls back to the safe default (peer address only) rather
+        // than trusting an unknown number of hops.
+        assert_eq!(
+            config(&[DB, ("TRUSTED_PROXY_HOPS", "lots")]).trusted_proxy_hops,
+            0
+        );
     }
 
     #[test]

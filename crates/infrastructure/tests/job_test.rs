@@ -8,10 +8,11 @@
 //! `claim` calls; the one real `claim` test asserts only the `SKIP LOCKED`
 //! disjointness property, which holds regardless of concurrent claims.
 
-use bikenest_infrastructure::{Db, SqlxJobRepository};
+use bikenest_infrastructure::{Db, JobConfig, JobRegistry, SqlxJobRepository, Worker};
 use bikenest_test_support::{db_test, pool};
 use chrono::{Duration, Utc};
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 async fn db() -> Db {
     Db::from_pool(pool().await)
@@ -142,11 +143,13 @@ async fn retry_then_dead_letter(_tx: &mut bikenest_test_support::TestTx) {
         .await
         .unwrap()
         .unwrap();
-    sqlx::query("UPDATE background_job SET state='running', claimed_by='w', attempts=1 WHERE id=$1")
-        .bind(id)
-        .execute(&pool().await)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE background_job SET state='running', claimed_by='w', attempts=1 WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&pool().await)
+    .await
+    .unwrap();
 
     // Attempt 1 < max(2) → retry (state pending, future run_at, last_error set).
     let run_at = now + Duration::seconds(60);
@@ -161,11 +164,13 @@ async fn retry_then_dead_letter(_tx: &mut bikenest_test_support::TestTx) {
     assert_eq!(last_error.as_deref(), Some("boom"));
 
     // Attempt 2 == max(2) → dead-letter (state failed, finished_at set).
-    sqlx::query("UPDATE background_job SET state='running', claimed_by='w', attempts=2 WHERE id=$1")
-        .bind(id)
-        .execute(&pool().await)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE background_job SET state='running', claimed_by='w', attempts=2 WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&pool().await)
+    .await
+    .unwrap();
     r.fail(id, "w", "boom-again").await.unwrap();
     let (state, finished): (String, Option<chrono::DateTime<Utc>>) =
         sqlx::query_as("SELECT state, finished_at FROM background_job WHERE id=$1")
@@ -416,4 +421,54 @@ async fn finish_success_is_a_noop_for_the_wrong_claimant(_tx: &mut bikenest_test
     assert_eq!(claimed_by.as_deref(), Some("worker-b"));
 
     clear_kind("jobtest.zombie").await;
+}
+
+/// Graceful shutdown (WP7): cancelling the token while the worker sits in its
+/// idle poll must return from `run` well inside one poll interval — not after
+/// it — and must leave nothing claimed.
+///
+/// `batch_size` 0 makes `claim` a `LIMIT 0` query, so the worker only ever
+/// idle-polls and cannot disturb rows other tests own.
+#[db_test]
+async fn cancelling_the_token_stops_an_idle_worker(_tx: &mut bikenest_test_support::TestTx) {
+    let config = JobConfig {
+        enabled: true,
+        // Far longer than the test may take: if cancellation did not interrupt
+        // the sleep, the timeout below would fire instead.
+        poll_interval: std::time::Duration::from_secs(60),
+        batch_size: 0,
+        ..JobConfig::default()
+    };
+    let worker = Worker::new(
+        repo().await,
+        std::sync::Arc::new(JobRegistry::new(Vec::new(), Vec::new())),
+        config,
+    );
+    let worker_id = worker.id().to_string();
+
+    let token = CancellationToken::new();
+    let handle = tokio::spawn(worker.run(token.clone()));
+    // Let the loop reach its idle sleep before signalling.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let started = std::time::Instant::now();
+    token.cancel();
+    tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+        .await
+        .expect("run must return promptly after cancellation, not after the poll interval")
+        .expect("worker task must not panic");
+    assert!(
+        started.elapsed() < config.poll_interval,
+        "returned only after the full poll interval: {:?}",
+        started.elapsed()
+    );
+
+    let running: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM background_job WHERE state = 'running' AND claimed_by = $1",
+    )
+    .bind(&worker_id)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    assert_eq!(running, 0, "a stopped worker must leave no job running");
 }

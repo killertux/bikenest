@@ -1,6 +1,7 @@
 //! BikeNest web crate: axum routing, handlers, Askama templates.
 
 pub mod auth;
+pub mod client_ip;
 pub mod http;
 pub mod i18n;
 pub mod markdown;

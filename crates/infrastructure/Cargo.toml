@@ -31,7 +31,9 @@ sha2 = "0.11.0"
 sqlx = { workspace = true, features = ["json"] }
 thiserror = { workspace = true }
 # `fs` on top of the workspace feature set: the dev e-mail outbox writes files.
-tokio = { workspace = true, features = ["fs"] }
+# `sync` for the image-processing semaphore, `time` for the worker poll sleep.
+tokio = { workspace = true, features = ["fs", "sync", "time"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

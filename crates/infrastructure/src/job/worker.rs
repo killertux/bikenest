@@ -8,7 +8,16 @@ use bikenest_application::JobError;
 use chrono::Utc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
+
+/// Sleep for `poll`, or return early the moment shutdown is signalled.
+async fn sleep_or_cancel(poll: std::time::Duration, shutdown: &CancellationToken) {
+    tokio::select! {
+        _ = tokio::time::sleep(poll) => {}
+        _ = shutdown.cancelled() => {}
+    }
+}
 
 /// Polls the job queue, claims due jobs, runs their handler, and records the
 /// outcome (success / retry / dead-letter). Spawned on the tokio runtime at
@@ -38,29 +47,43 @@ impl Worker {
         }
     }
 
-    /// Runs forever: bootstrap recurring jobs, then poll→claim→process.
-    /// Consumes `self` so the loop can be moved into a spawned tokio task.
-    pub async fn run(self) {
+    /// This worker's claim identity, as written to `background_job.claimed_by`.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Bootstrap recurring jobs, then poll→claim→process until `shutdown` is
+    /// cancelled. Consumes `self` so the loop can be moved into a spawned
+    /// tokio task.
+    ///
+    /// Cancellation is checked between polls *and* interrupts the idle sleep,
+    /// so an idle worker returns within one poll interval at worst. A job
+    /// already in flight is always run to completion and its outcome recorded —
+    /// abandoning it would leave the row `running` until its lease expired.
+    pub async fn run(self, shutdown: CancellationToken) {
         self.bootstrap().await;
         let poll = std::time::Duration::from_millis(self.config.poll_interval.as_millis() as u64);
-        loop {
+        while !shutdown.is_cancelled() {
             match self
                 .repo
                 .claim(self.config.batch_size, &self.id, self.config.lease_ttl)
                 .await
             {
-                Ok(jobs) if jobs.is_empty() => tokio::time::sleep(poll).await,
+                Ok(jobs) if jobs.is_empty() => sleep_or_cancel(poll, &shutdown).await,
                 Ok(jobs) => {
                     for job in jobs {
+                        // Finish the batch we already claimed: these rows are
+                        // marked `running` and would otherwise wait out a lease.
                         self.process(job).await;
                     }
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "job claim failed; backing off");
-                    tokio::time::sleep(poll).await;
+                    sleep_or_cancel(poll, &shutdown).await;
                 }
             }
         }
+        tracing::info!(worker = %self.id, "background worker stopped");
     }
 
     /// Ensure the always-on recurring rows exist (idempotent via `idempotency_key`).

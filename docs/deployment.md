@@ -32,7 +32,11 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | Variable | Notes |
 |---|---|
 | `DATABASE_URL` | Postgres DSN. Example `postgres://user:pass@db:5432/bikenest` |
+| `DB_MAX_CONNECTIONS` | pool ceiling per instance (default `10`). Size it as the database's `max_connections` divided by the replica count, minus headroom for migrations/psql |
+| `DB_STATEMENT_TIMEOUT_MS` | `statement_timeout` on every pooled connection (default `5000`). Migrations are exempt (§4); a long maintenance run through the app — e.g. `retention` on a large database — may need a higher value |
+| `DB_IDLE_IN_TX_TIMEOUT_MS` | `idle_in_transaction_session_timeout` (default `10000`), so a transaction abandoned by a crashed client releases its connection |
 | `BIND_ADDR` | default `0.0.0.0:8080` |
+| `TRUSTED_PROXY_HOPS` | how many reverse proxies in front of the app may be trusted to have appended to `X-Forwarded-For`; `0` (default) uses the TCP peer address only. See §3 |
 | `BASE_URL` | the public origin, e.g. `https://bikenest.example.com` — builds links + canonical URLs. **Must be reachable** |
 | `MEDIA_ROOT` | legacy local media directory (default `/app/media`) — only used by the retention orphan-media sweep; with direct S3 presign the objects live in the bucket |
 | `S3_ENDPOINT` | **Object storage** (Ledger #7): the S3-compatible endpoint. Unset defaults to `http://localhost:9000` (MinIO) in development only; set it empty for the standard AWS endpoint. **Required in production** |
@@ -107,6 +111,48 @@ Health/readiness endpoints:
 - `GET /readyz` → readiness (DB reachable + migrations applied). Wire to the LB's
   readiness gate so `readyz` fails during a migration before rollout completes.
 
+### Client address behind the proxy (`TRUSTED_PROXY_HOPS`)
+
+Every per-address rate limit (login, registration, password reset, photo upload,
+reports) is keyed on the client address the app resolves. `X-Forwarded-For` is a
+plain request header — anyone can send one, and anyone can send a *different* one
+per request — so the app ignores it unless you say how many proxies are in front
+of it:
+
+- `TRUSTED_PROXY_HOPS=0` (default): the TCP peer address, and nothing else.
+  Correct when the app is directly exposed. **Behind a proxy this keys every
+  client on the proxy's address**, so one shared bucket for everyone — set the
+  real value.
+- `TRUSTED_PROXY_HOPS=N`: each of the N proxies appends the address it saw, so
+  the entry N places from the **right** is the address the outermost trusted
+  proxy received the request from. One load balancer → `1`; a CDN in front of a
+  load balancer → `2`.
+
+Set it to the *exact* number: too high lets clients forge their own address by
+prepending entries, too low keys everyone on a proxy. A chain shorter than N
+entries, or an entry that is not a bare IP address, falls back to the peer
+address. `X-Real-IP` is never read (it is not standardised and carries no hop
+count). The app also needs the peer address itself, which it gets from the TCP
+connection — no configuration needed.
+
+### Shutdown (SIGTERM) and PID 1
+
+`SIGTERM` (what `docker stop` / Kubernetes send) starts a graceful shutdown: the
+HTTP server stops accepting, in-flight requests drain, then the background job
+worker is given up to 30 s to finish whatever job it is running before the
+process exits. Killing the process mid-job would leave a `background_job` row in
+`state='running'` until its lease expired.
+
+The container image runs the server under [tini] as PID 1
+(`ENTRYPOINT ["/usr/bin/tini", "--", "bikenest-web"]`) so signals are forwarded
+and zombies reaped. If you run the binary some other way, make sure it receives
+`SIGTERM` directly (`docker run --init`, or `init: true` in compose, gives the
+same guarantee) and allow at least 35 s of termination grace
+(`--stop-timeout` / `terminationGracePeriodSeconds`) so the worker's 30 s budget
+is usable.
+
+[tini]: https://github.com/krallin/tini
+
 ## 4. Migrations
 
 The server runs `sqlx::migrate!` **on startup** (the default subcommand `serve`).
@@ -121,6 +167,11 @@ Migrations are **forward-only** (`sqlx` records applied versions). This means:
 
 > If a release must be undone and the schema is incompatible, restore the
 > pre-release data backup and re-run the old image — see `docs/backups.md`.
+
+Migrations run on a dedicated connection with `statement_timeout` disabled and
+closed afterwards, so `DB_STATEMENT_TIMEOUT_MS` (§2) never aborts an index build
+on a cold database, and the relaxed setting never leaks back into request
+handling.
 
 ## 5. Providers
 

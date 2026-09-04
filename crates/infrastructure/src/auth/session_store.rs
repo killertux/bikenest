@@ -1,6 +1,11 @@
-//! SQL-backed server-side session store (§18). The cookie carries the raw id;
+//! SQL-backed server-side session store. The cookie carries the raw id;
 //! the DB stores its SHA-256 hash. `resolve` applies idle (30-day) + absolute
-//! (90-day) expiry and refreshes `last_seen_at`.
+//! (90-day) expiry and slides `last_seen_at` forward.
+//!
+//! `resolve` runs on every authenticated request, so it is a single statement
+//! and its `last_seen_at` write is throttled to at most once per
+//! [`LAST_SEEN_REFRESH`]: the stored value may lag reality by that much, which
+//! against a 30-day idle window is immaterial.
 
 use crate::Db;
 use crate::auth::hash::sha256_hex;
@@ -11,6 +16,12 @@ use chrono::{DateTime, Duration, Utc};
 
 const INACTIVE_IDLE: Duration = Duration::days(30);
 const ABSOLUTE_CAP: Duration = Duration::days(90);
+/// How stale `last_seen_at` may get before `resolve` writes it again. Idle
+/// expiry is 30 days, so a five-minute staleness moves the practical idle
+/// deadline by at most five minutes while removing one `UPDATE` per
+/// authenticated request (the auth middleware resolves the session on every
+/// request, GETs included).
+const LAST_SEEN_REFRESH: &str = "5 minutes";
 
 pub struct SqlxSessionStore {
     db: Db,
@@ -24,7 +35,6 @@ impl SqlxSessionStore {
 
 #[derive(sqlx::FromRow)]
 struct SessionRow {
-    token_hash: String,
     user_id: i64,
     csrf_token: String,
     created_at: DateTime<Utc>,
@@ -66,17 +76,47 @@ impl SessionStore for SqlxSessionStore {
         now: DateTime<Utc>,
     ) -> Result<Option<Session>, AuthError> {
         let token_hash = sha256_hex(raw.as_bytes());
-        let row = sqlx::query_as::<_, SessionRow>(
+        // One round trip: read the session and, in the same statement, slide
+        // `last_seen_at` forward — but only when it is already stale by more
+        // than LAST_SEEN_REFRESH. The auth middleware resolves the session on
+        // every authenticated request, so an unconditional UPDATE turned every
+        // page view (and every asset request behind auth) into a row write.
+        //
+        // The CTEs share one snapshot, so `s` still returns the *pre-update*
+        // `last_seen_at`; the returned session is exactly the row as read. A
+        // data-modifying CTE always runs to completion, whether or not the
+        // outer query reads it.
+        let sql = format!(
             r#"
-            SELECT token_hash, user_id, csrf_token, created_at, last_seen_at, expires_at, revoked_at
-            FROM sessions
-            WHERE token_hash = $1
+            WITH s AS (
+                SELECT user_id, csrf_token, created_at,
+                       last_seen_at, expires_at, revoked_at
+                FROM sessions
+                WHERE token_hash = $1
+            ),
+            u AS (
+                UPDATE sessions
+                   SET last_seen_at = $2
+                 WHERE token_hash = $1
+                   AND revoked_at IS NULL
+                   AND expires_at >= $2
+                   AND last_seen_at >  $2 - interval '{idle} days'
+                   AND last_seen_at <  $2 - interval '{refresh}'
+                RETURNING 1
+            )
+            SELECT user_id, csrf_token, created_at,
+                   last_seen_at, expires_at, revoked_at
+            FROM s
             "#,
-        )
-        .bind(token_hash)
-        .fetch_optional(self.db.pool())
-        .await
-        .map_err(|_| AuthError::Internal)?;
+            idle = INACTIVE_IDLE.num_days(),
+            refresh = LAST_SEEN_REFRESH,
+        );
+        let row = sqlx::query_as::<_, SessionRow>(&sql)
+            .bind(token_hash)
+            .bind(now)
+            .fetch_optional(self.db.pool())
+            .await
+            .map_err(|_| AuthError::Internal)?;
         let Some(row) = row else {
             return Ok(None);
         };
@@ -89,13 +129,6 @@ impl SessionStore for SqlxSessionStore {
         if now - row.last_seen_at > INACTIVE_IDLE {
             return Ok(None);
         }
-        // Sliding idle: refresh `last_seen_at`.
-        sqlx::query("UPDATE sessions SET last_seen_at = $2 WHERE token_hash = $1")
-            .bind(&row.token_hash)
-            .bind(now)
-            .execute(self.db.pool())
-            .await
-            .map_err(|_| AuthError::Internal)?;
         let csrf_token = CsrfToken::from_base64url(&row.csrf_token).ok_or(AuthError::Internal)?;
         Ok(Some(Session {
             user_id: UserId(row.user_id),

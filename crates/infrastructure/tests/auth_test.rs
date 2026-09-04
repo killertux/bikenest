@@ -288,3 +288,73 @@ async fn audit_insert_round_trip(_tx: &mut bikenest_test_support::TestTx) {
 
     cleanup_user(&email).await;
 }
+
+/// `resolve` runs on every authenticated request, so its `last_seen_at` write
+/// is throttled to at most once per five minutes (WP7). The 30-day idle window
+/// is unaffected: the column may lag by five minutes, which is immaterial
+/// against 30 days.
+#[db_test]
+async fn resolve_throttles_the_last_seen_write(_tx: &mut bikenest_test_support::TestTx) {
+    let db = Db::from_pool(pool().await);
+    let store = SqlxSessionStore::new(db);
+    let email = marker_email("session-throttle");
+    cleanup_user(&email).await;
+    let (uid,): (i64,) = sqlx::query_as("INSERT INTO users (email) VALUES ($1) RETURNING id")
+        .bind(&email)
+        .fetch_one(&pool().await)
+        .await
+        .unwrap();
+    let user_id = bikenest_domain::UserId(uid);
+
+    let raw = SessionId::new([31u8; 32]);
+    let csrf = CsrfToken::new([32u8; 32]);
+    let now = Utc::now();
+    store.create(user_id, &raw, &csrf, now).await.unwrap();
+
+    async fn last_seen(uid: i64) -> chrono::DateTime<Utc> {
+        sqlx::query_scalar("SELECT last_seen_at FROM sessions WHERE user_id = $1")
+            .bind(uid)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap()
+    }
+
+    // Two resolves a minute apart: inside the throttle window, so the column is
+    // left exactly as `create` wrote it.
+    let before = last_seen(uid).await;
+    assert!(store.resolve(&raw, now).await.unwrap().is_some());
+    assert!(
+        store
+            .resolve(&raw, now + Duration::minutes(1))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        last_seen(uid).await,
+        before,
+        "last_seen_at must not be rewritten inside the throttle window"
+    );
+
+    // Age the row past the throttle: the next resolve does write.
+    sqlx::query("UPDATE sessions SET last_seen_at = $2 WHERE user_id = $1")
+        .bind(uid)
+        .bind(now - Duration::minutes(10))
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let stale = last_seen(uid).await;
+    let at = now + Duration::seconds(1);
+    let session = store.resolve(&raw, at).await.unwrap().expect("still valid");
+    // The row is returned as *read* — the update lands in the same statement,
+    // under the same snapshot.
+    assert_eq!(session.last_seen_at, stale);
+    let refreshed = last_seen(uid).await;
+    assert!(
+        refreshed > stale,
+        "a stale last_seen_at must be refreshed: {refreshed} vs {stale}"
+    );
+    assert_eq!(refreshed.timestamp(), at.timestamp());
+
+    cleanup_user(&email).await;
+}

@@ -43,6 +43,7 @@ use std::sync::Arc;
 use crate::auth::{
     Auth, anon_csrf_token, clear_session_cookie, set_anon_csrf_cookie, set_session_cookie,
 };
+use crate::client_ip::ClientIp;
 use crate::i18n::{Locale, Translator};
 use crate::security::SecurityHeaders;
 use crate::view::{self, CardVm, ResultsData};
@@ -832,7 +833,7 @@ async fn media(
 async fn upload_photo(
     State(state): State<AppState>,
     locale: Locale,
-    headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     auth: Auth,
     Path(id): Path<i64>,
     mut multipart: Multipart,
@@ -842,7 +843,6 @@ async fn upload_photo(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    let ip = client_ip(&headers);
 
     let mut photo_bytes: Option<Vec<u8>> = None;
     let mut alt: Option<String> = None;
@@ -1124,7 +1124,7 @@ struct ReportForm {
 async fn report_submit(
     State(state): State<AppState>,
     locale: Locale,
-    headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     auth: Auth,
     Form(form): Form<ReportForm>,
 ) -> Response {
@@ -1149,7 +1149,6 @@ async fn report_submit(
             StatusCode::BAD_REQUEST,
         );
     };
-    let ip = client_ip(&headers);
     let description = if form.description.trim().is_empty() {
         None
     } else {
@@ -1892,23 +1891,6 @@ async fn set_lang(
 // Accounts & authentication handlers (M2)
 // ---------------------------------------------------------------------------
 
-fn client_ip(headers: &HeaderMap) -> String {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| "local".to_string())
-}
-
 fn redirect_with_cookie(path: &str, cookie: &str) -> Response {
     (
         [(header::SET_COOKIE, cookie)],
@@ -1978,7 +1960,7 @@ async fn register_page(State(state): State<AppState>, locale: Locale, auth: Auth
 async fn register_post(
     State(state): State<AppState>,
     locale: Locale,
-    headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     auth: Auth,
     Form(form): Form<RegisterForm>,
 ) -> Response {
@@ -1986,7 +1968,6 @@ async fn register_post(
         return axum::response::Redirect::to("/account").into_response();
     }
     let tr = Translator::new(locale);
-    let ip = client_ip(&headers);
     let display_name = if form.display_name.trim().is_empty() {
         None
     } else {
@@ -2087,7 +2068,7 @@ async fn login_page(
 async fn login_post(
     State(state): State<AppState>,
     locale: Locale,
-    headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     auth: Auth,
     Form(form): Form<LoginForm>,
 ) -> Response {
@@ -2095,7 +2076,6 @@ async fn login_post(
         return axum::response::Redirect::to("/account").into_response();
     }
     let tr = Translator::new(locale);
-    let ip = client_ip(&headers);
     match state.auth.login(&ip, &form.email, &form.password).await {
         Ok(outcome) => redirect_with_cookie("/account", &set_session_cookie(&outcome.session)),
         // One generic message for bad credentials AND suspended/deleted (§45).
@@ -2192,11 +2172,10 @@ struct ResendForm {
 async fn verify_resend(
     State(state): State<AppState>,
     locale: Locale,
-    headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     Form(form): Form<ResendForm>,
 ) -> Response {
     let tr = Translator::new(locale);
-    let ip = client_ip(&headers);
     let Ok(email) = UserEmail::parse(&form.email) else {
         return axum::response::Redirect::to("/login?resend=1").into_response();
     };
@@ -2264,11 +2243,10 @@ async fn password_reset_page(
 async fn password_reset_post(
     State(state): State<AppState>,
     locale: Locale,
-    headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     Form(form): Form<ResetRequestForm>,
 ) -> Response {
     let tr = Translator::new(locale);
-    let ip = client_ip(&headers);
     let Ok(email) = UserEmail::parse(&form.email) else {
         return axum::response::Redirect::to("/password-reset?sent=1").into_response();
     };
@@ -3511,7 +3489,7 @@ async fn parking_new_page(State(state): State<AppState>, locale: Locale, auth: A
 async fn parking_new_post(
     State(state): State<AppState>,
     locale: Locale,
-    headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     auth: Auth,
     Form(form): Form<NewParkingForm>,
 ) -> Response {
@@ -3520,7 +3498,6 @@ async fn parking_new_post(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    let ip = client_ip(&headers);
 
     let new = match new_location_from_form(&form) {
         Ok(n) => n,
@@ -3915,7 +3892,7 @@ async fn review_page(
 async fn review_post(
     State(state): State<AppState>,
     locale: Locale,
-    headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     auth: Auth,
     Path(id): Path<i64>,
     mut multipart: Multipart,
@@ -4017,7 +3994,6 @@ async fn review_post(
                     .await
                 && let Some(review) = own.own_review
             {
-                let ip = client_ip(&headers);
                 for p in photos {
                     let _ = state
                         .photo

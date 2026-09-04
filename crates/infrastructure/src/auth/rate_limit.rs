@@ -31,14 +31,72 @@ use std::time::{Duration, Instant};
 // In-memory
 // ---------------------------------------------------------------------------
 
+/// Hard ceiling on the number of live buckets. Rate-limit keys embed
+/// caller-controlled strings (client address, e-mail), so a map that only ever
+/// grows is a memory-exhaustion vector: one attacker with a header they choose
+/// can mint a bucket per request. Dropping a bucket only *forgets* past events,
+/// so the worst case of an eviction is a few extra allowed requests — never a
+/// false 429.
+pub const MAX_BUCKETS: usize = 100_000;
+
+/// How many *new* keys may be added between sweeps. Sweeping is O(live keys),
+/// so it is amortised over this many insertions rather than run per request.
+const SWEEP_EVERY_NEW_KEYS: u32 = 512;
+
+/// One key's sliding window plus when it was last touched (eviction order) and
+/// the window it was last checked with (so a sweep triggered by a short-window
+/// key cannot drop a long-window bucket that is still live).
+struct Bucket {
+    events: VecDeque<Instant>,
+    last_seen: Instant,
+    window: Duration,
+}
+
+#[derive(Default)]
+struct Buckets {
+    map: HashMap<String, Bucket>,
+    /// New keys added since the last sweep.
+    since_sweep: u32,
+}
+
 #[derive(Default)]
 pub struct InMemoryRateLimiter {
-    buckets: Mutex<HashMap<String, VecDeque<Instant>>>,
+    buckets: Mutex<Buckets>,
 }
 
 impl InMemoryRateLimiter {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Number of live buckets. Exposed so the tests can assert the map stays
+    /// bounded and that expired buckets are actually reclaimed.
+    pub fn bucket_count(&self) -> usize {
+        self.buckets.lock().map(|b| b.map.len()).unwrap_or(0)
+    }
+
+    /// Drop every bucket whose whole window has elapsed (its deque would trim
+    /// to empty), then — if the map is still at the cap — the
+    /// least-recently-touched keys until there is headroom again.
+    fn sweep(buckets: &mut Buckets, now: Instant) {
+        buckets.since_sweep = 0;
+        buckets
+            .map
+            .retain(|_, b| now.duration_since(b.last_seen) < b.window);
+        if buckets.map.len() < MAX_BUCKETS {
+            return;
+        }
+        let target = MAX_BUCKETS - MAX_BUCKETS / 10;
+        let excess = buckets.map.len() - target;
+        let mut ages: Vec<(Instant, String)> = buckets
+            .map
+            .iter()
+            .map(|(k, b)| (b.last_seen, k.clone()))
+            .collect();
+        ages.sort_unstable_by_key(|(t, _)| *t);
+        for (_, key) in ages.into_iter().take(excess) {
+            buckets.map.remove(&key);
+        }
     }
 }
 
@@ -50,12 +108,31 @@ impl RateLimiter for InMemoryRateLimiter {
             .buckets
             .lock()
             .map_err(|_| RateLimitError::Unavailable)?;
-        let queue = buckets.entry(key.to_string()).or_default();
+
+        // Only a *new* key can grow the map, so that is the only place a sweep
+        // can be needed.
+        if !buckets.map.contains_key(key) {
+            buckets.since_sweep += 1;
+            if buckets.since_sweep >= SWEEP_EVERY_NEW_KEYS || buckets.map.len() >= MAX_BUCKETS {
+                Self::sweep(&mut buckets, now);
+            }
+        }
+
+        let bucket = buckets
+            .map
+            .entry(key.to_string())
+            .or_insert_with(|| Bucket {
+                events: VecDeque::new(),
+                last_seen: now,
+                window,
+            });
+        bucket.last_seen = now;
+        bucket.window = window;
 
         // Drop events that have fallen outside the window.
-        while let Some(front) = queue.front() {
+        while let Some(front) = bucket.events.front() {
             if now.duration_since(*front) >= window {
-                queue.pop_front();
+                bucket.events.pop_front();
             } else {
                 break;
             }
@@ -64,10 +141,10 @@ impl RateLimiter for InMemoryRateLimiter {
         // Over the limit → deny. Otherwise record this event and allow. (A
         // fresh bucket must still be recorded, or the counter never accrues and
         // the limit never trips.)
-        if queue.len() >= limit as usize {
+        if bucket.events.len() >= limit as usize {
             return Ok(false);
         }
-        queue.push_back(now);
+        bucket.events.push_back(now);
         Ok(true)
     }
 }
@@ -300,5 +377,66 @@ impl SharedRateLimiter {
 impl RateLimiter for SharedRateLimiter {
     async fn check(&self, key: &str, limit: u32, window: Duration) -> Result<bool, RateLimitError> {
         self.0.check(key, limit, window).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests (in-memory limiter only; the ValKey path has its own integration test)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn the_window_still_limits_and_then_reopens() {
+        let rl = InMemoryRateLimiter::new();
+        let window = Duration::from_millis(50);
+        assert!(rl.check("k", 2, window).await.unwrap());
+        assert!(rl.check("k", 2, window).await.unwrap());
+        assert!(!rl.check("k", 2, window).await.unwrap(), "third is over");
+        tokio::time::sleep(Duration::from_millis(70)).await;
+        assert!(rl.check("k", 2, window).await.unwrap(), "window reopened");
+    }
+
+    /// A bucket whose window has fully elapsed is removed by the next sweep, so
+    /// keys minted from attacker-controlled strings do not accumulate forever.
+    #[tokio::test]
+    async fn expired_buckets_are_reclaimed() {
+        let rl = InMemoryRateLimiter::new();
+        let short = Duration::from_millis(20);
+        let long = Duration::from_secs(3600);
+        rl.check("expires-quickly", 5, short).await.unwrap();
+        assert_eq!(rl.bucket_count(), 1);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Sweeps are amortised: one runs per SWEEP_EVERY_NEW_KEYS new keys.
+        // These keys carry a long window, so only the expired one is dropped.
+        for i in 0..SWEEP_EVERY_NEW_KEYS {
+            rl.check(&format!("live-{i}"), 5, long).await.unwrap();
+        }
+        assert_eq!(
+            rl.bucket_count(),
+            SWEEP_EVERY_NEW_KEYS as usize,
+            "the expired bucket must have been reclaimed, the live ones kept"
+        );
+    }
+
+    /// Even with every key still inside its window, the map is capped: past the
+    /// ceiling the least-recently-touched keys are evicted.
+    #[tokio::test]
+    async fn the_bucket_map_never_exceeds_the_cap() {
+        let rl = InMemoryRateLimiter::new();
+        let window = Duration::from_secs(3600);
+        for i in 0..(MAX_BUCKETS + 2_000) {
+            rl.check(&format!("key-{i}"), 5, window).await.unwrap();
+        }
+        assert!(
+            rl.bucket_count() <= MAX_BUCKETS,
+            "bucket map grew past the cap: {}",
+            rl.bucket_count()
+        );
+        // Eviction leaves headroom rather than trimming one key at a time.
+        assert!(rl.bucket_count() >= MAX_BUCKETS - MAX_BUCKETS / 10);
     }
 }

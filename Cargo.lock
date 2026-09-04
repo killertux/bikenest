@@ -786,6 +786,7 @@ dependencies = [
  "sqlx",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -834,6 +835,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
+ "tokio-util",
  "tower",
  "tower-http",
  "tracing",

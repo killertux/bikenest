@@ -27,6 +27,11 @@ services:
   app:
     image: rust:1.95
     working_dir: /app
+    # PID 1 is `sh`/`cargo watch` here, not the server, so run an init to
+    # forward signals and reap children — `docker compose down` then stops the
+    # app the same graceful way production does (the release image bakes tini in
+    # as its ENTRYPOINT).
+    init: true
     environment:
       DATABASE_URL: postgres://bikenest:bikenest@db:5432/bikenest
       BIND_ADDR: 0.0.0.0:8080

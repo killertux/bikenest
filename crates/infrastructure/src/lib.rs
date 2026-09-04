@@ -26,7 +26,7 @@ pub use community::{
     SqlxReviewRepository, SqlxVerificationRepository,
 };
 pub use config::{
-    AppEnv, Config, ConfigError, EmailConfig, FakeOAuthConfig, GeocoderConfig, JobConfig,
+    AppEnv, Config, ConfigError, DbConfig, EmailConfig, FakeOAuthConfig, GeocoderConfig, JobConfig,
     MapConfig, ModerationConfig, PhotoConfig, PolicySeedConfig, RateLimiterBackend,
     RateLimiterConfig, S3Config, SecurityConfig,
 };
