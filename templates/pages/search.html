@@ -7,7 +7,9 @@
 <section class="border-b border-border bg-surface">
   <div class="mx-auto max-w-shell px-4 pb-6 pt-8 lg:px-8">
     <h1 id="search-heading" class="font-display text-2xl font-bold tracking-tight sm:text-3xl">
-      {% if let Some(label) = results.destination_label %}
+      {% if results.browse %}
+        {{ tr.t("search.browse.heading") }}
+      {% else if let Some(label) = results.destination_label %}
         {{ tr.t("search.heading.near") }} <span class="text-accent-strong">“{{ label }}”</span>
       {% else %}
         {{ tr.t("search.heading.generic") }}
@@ -21,7 +23,7 @@
       hx-push-url="true" hx-indicator="#results-indicator"
       class="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center"
     >
-      {% call state::hidden(form, true, false, false) %}
+      {% call state::hidden(form, true, false, false, true) %}
       <div class="relative flex-1">
         <svg aria-hidden="true" class="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-muted" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
         <label for="q" class="sr-only">{{ tr.t("home.search.placeholder") }}</label>
@@ -67,12 +69,12 @@
         {% else %}
           <a href="/register" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg hover:border-fg">{{ tr.t("nav.signup_to_add") }}</a>
         {% endif %}
-        <button @click="toggleMap" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg lg:hidden">
+        <button @click="toggleMap" :aria-expanded="mapOpen" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg">
           <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.5 9.9 3.8 4 6v15l5.9-2.2 4.2 1.7 5.9-2.3V3.7Z" /><path d="M9.9 3.8v15" /><path d="M14.1 5.5v15" /></svg>
           <span x-text="mapOpen ? '{{ tr.t("search.map.hide") }}' : '{{ tr.t("search.map.show") }}'">{{ tr.t("search.map.show") }}</span>
         </button>
         <form action="/search" method="get" hx-get="/search" hx-target="#results" hx-swap="innerHTML" hx-push-url="true" hx-indicator="#results-indicator" class="flex items-center gap-2.5">
-          {% call state::hidden(form, false, true, false) %}
+          {% call state::hidden(form, false, true, false, false) %}
           <label class="flex items-center gap-2 text-sm text-muted">
             {{ tr.t("search.sort.label") }}
             <select
@@ -108,7 +110,7 @@
         hx-push-url="true" hx-indicator="#results-indicator"
         class="mt-4 grid gap-6 md:grid-cols-3"
       >
-        {% call state::hidden(form, false, false, true) %}
+        {% call state::hidden(form, false, false, true, false) %}
 
         <fieldset>
           <legend class="mb-2.5 text-sm font-semibold text-fg">{{ tr.t("search.filters.type") }}</legend>
@@ -153,6 +155,7 @@
             <option value="500" {% if radius_is(500) %}selected{% endif %}>500 m</option>
             <option value="1000" {% if radius_is(1000) %}selected{% endif %}>1 km</option>
             <option value="2000" {% if radius_is(2000) %}selected{% endif %}>2 km</option>
+            <option value="5000" {% if radius_is(5000) %}selected{% endif %}>{{ tr.t("search.radius.5km") }}</option>
           </select>
           <p class="mt-2 text-xs text-muted">{{ tr.t("search.radius.hint") }}</p>
         </fieldset>
@@ -178,7 +181,31 @@
               </button>
             </div>
             <div class="relative aspect-[5/4] overflow-hidden">
-              <div id="map" class="absolute inset-0" data-label-destination="{{ tr.t("map.destination") }}" data-label-on-map="{{ tr.t("map.on_map") }}"></div>
+              <div
+                id="map" class="absolute inset-0"
+                data-label-destination="{{ tr.t("map.destination") }}"
+                data-label-on-map="{{ tr.t("map.on_map") }}"
+                data-label-spot="{{ tr.t("map.spot") }}"
+                data-label-details="{{ tr.t("card.view") }}"
+                data-label-cluster="{{ tr.t("map.cluster") }}"
+              ></div>
+              <!-- Appears once the viewer has panned or zoomed: the map's own
+                   box, submitted as a browse search. Inside the map frame so it
+                   reads as "this area", and hidden until there is an area to
+                   search (Alpine's `moved`, set from `bikenest:map-moved`). -->
+              <form
+                x-show="moved" x-cloak
+                action="/search" method="get"
+                hx-get="/search" hx-target="#results" hx-swap="innerHTML"
+                hx-push-url="true" hx-indicator="#results-indicator"
+                class="absolute inset-x-0 bottom-3 flex justify-center"
+              >
+                {% call state::browse(form) %}
+                <button type="submit" class="inline-flex items-center gap-1.5 rounded-full bg-accent-strong px-4 py-2 text-sm font-medium text-white shadow-pop transition-colors hover:bg-accent-dark">
+                  <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg>
+                  {{ tr.t("search.browse.here") }}
+                </button>
+              </form>
             </div>
             <div class="flex items-center justify-between border-t border-border px-4 py-3">
               <p class="font-mono text-[11px] text-muted">{{ tr.t("search.map.pins") }}</p>
@@ -189,7 +216,11 @@
       </div>
 
       <!-- Results list (the accessible non-map alternative) -->
-      <div class="lg:col-span-7" :class="resultsClass">
+      <!-- The column's width is the binding's alone: a static `lg:col-span-7`
+           here would fight `resultsClass` when the map is hidden. Both literal
+           class strings live in app.js (and input.css's `@source inline`), so
+           Tailwind still generates them. -->
+      <div :class="resultsClass">
         <div class="relative">
           <!-- HTMX loading overlay -->
           <div id="results-indicator" class="htmx-indicator absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-[oklch(98%_0.004_240_/_0.7)]" aria-hidden="true">

@@ -43,6 +43,70 @@
   cursor: pointer;
 }
 
+/* A result marker: the number the matching card shows. Big enough to hit with
+   a thumb and to read a two-digit number in. */
+.marker-numbered {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  background: var(--color-accent-strong);
+}
+
+.marker-numbered:focus-visible,
+.marker-cluster:focus-visible {
+  outline: 3px solid var(--color-fg, #222);
+  outline-offset: 2px;
+}
+
+/* A grid cell's count, for an area too full to draw one pin per spot. Larger
+   and darker than a result marker, so a count never reads as a location. */
+.marker-cluster {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  background: var(--color-accent-dark);
+  border: 2px solid white;
+  box-shadow: 0 1px 6px rgb(0 0 0 / 0.4);
+  cursor: pointer;
+}
+
+/* Marker popup: name, distance/cost, and the way to the details page. Content
+   is built with DOM APIs in search.js, so this only lays it out. */
+.map-popup-name {
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.map-popup-meta {
+  margin-top: 0.15rem;
+  font-size: 12px;
+  color: var(--color-muted, #666);
+}
+
+.map-popup-link {
+  display: inline-block;
+  margin-top: 0.4rem;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-accent-dark);
+  text-decoration: underline;
+}
+
 .marker-destination {
   background: var(--color-accent-dark);
   width: 22px;

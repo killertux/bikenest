@@ -52,14 +52,63 @@ document.addEventListener('alpine:init', function () {
   });
 
   /* ---- search.html: map/filters toggle + locate -------------------------------- */
+  /* The search page's controls. The map itself lives in search.js (it needs
+   * MapLibre); the two talk over events that bubble from #map, so nothing
+   * leaks across a boosted navigation:
+   *
+   *   this component --bikenest:map-toggle--> #map   (panel shown/hidden)
+   *   #map           --bikenest:map-moved---> this   (panned/zoomed; the box)
+   *
+   * The listener is on `$el` (this component's root, an ancestor of #map)
+   * rather than on `document`, so a swapped-in page cannot leave a handler
+   * behind holding a component that is gone. */
   Alpine.data('searchFilters', function () {
     return {
       filtersOpen: true,
       mapOpen: false,
       locating: false,
-      init: function () { this.mapOpen = window.innerWidth >= 1024; },
-      toggleMap: function () { this.mapOpen = !this.mapOpen; },
+      /* True once the viewer has panned or zoomed: only then is there an area
+       * worth offering to search. */
+      moved: false,
+      init: function () {
+        var self = this;
+        /* Whether the map panel is open is a per-viewer preference, not a
+         * breakpoint: the width only decides the first time (a phone opens on
+         * the list, a desktop on both). */
+        var stored = null;
+        try { stored = window.localStorage.getItem('bn.search.mapOpen'); } catch (e) { stored = null; }
+        this.mapOpen = stored === null ? window.innerWidth >= 1024 : stored === '1';
+        this.$el.addEventListener('bikenest:map-moved', function (e) {
+          var bbox = e && e.detail && e.detail.bbox;
+          if (!bbox) return;
+          var input = document.getElementById('bbox-input');
+          if (input) input.value = bbox;
+          self.moved = true;
+        });
+        /* search.js builds the map lazily — a MapLibre map created inside a
+         * hidden panel renders blank — so it has to be told the panel's
+         * starting state, not only its changes. `$nextTick`: the announcement
+         * is worth nothing before `x-show` has applied. */
+        this.$nextTick(function () { self.publishMapState(); });
+      },
+      toggleMap: function () {
+        this.mapOpen = !this.mapOpen;
+        try { window.localStorage.setItem('bn.search.mapOpen', this.mapOpen ? '1' : '0'); } catch (e) { /* private mode: the toggle still works, it just won't be remembered */ }
+        this.publishMapState();
+      },
+      publishMapState: function () {
+        var el = document.getElementById('map');
+        if (!el) return;
+        el.dispatchEvent(new CustomEvent('bikenest:map-toggle', {
+          bubbles: true,
+          detail: { open: this.mapOpen },
+        }));
+      },
       toggleFilters: function () { this.filtersOpen = !this.filtersOpen; },
+      /* The whole class, not a modifier: search.html leaves the results
+       * column's width entirely to this binding, so hiding the map really does
+       * widen the list (a static `lg:col-span-7` used to win the tie). Both
+       * strings are literals here so Tailwind's scanner generates them. */
       get resultsClass() {
         return this.mapOpen ? 'lg:col-span-7' : 'lg:col-span-12';
       },

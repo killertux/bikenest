@@ -8,8 +8,8 @@
 //! Everything else in the suite still uses transaction-per-test rollback.
 
 use bikenest_application::{
-    CostFilter, Cursor, Filters, ParkingDetailsReader, ParkingSummary, ReaderError, SearchInput,
-    SearchPage, SearchParking, SearchRequest, SitemapReader, Sort,
+    BoundsPage, BoundsQuery, CostFilter, Cursor, Filters, ParkingDetailsReader, ParkingSummary,
+    ReaderError, SearchInput, SearchPage, SearchParking, SearchRequest, SitemapReader, Sort,
 };
 use bikenest_domain::{Cost, CurrencyCode, Money, ParkingType, PricingUnit};
 use bikenest_test_support::{ParkingBuilder, db_test, pool};
@@ -80,6 +80,30 @@ async fn real_search(
     reader(db)
         .search_at(request, limit, apply_cursor, fixed_now())
         .await
+}
+
+/// A browse box of ±`half` degrees around test patch `k`'s origin — so the
+/// box's centre *is* the patch origin and a fixture's distance from it is the
+/// distance the fixture was placed at.
+fn bounds_at(k: f64, half: f64, limit: usize) -> BoundsQuery {
+    let o = test_origin(k);
+    BoundsQuery::parse(
+        &format!(
+            "{},{},{},{}",
+            o.lon() - half,
+            o.lat() - half,
+            o.lon() + half,
+            o.lat() + half
+        ),
+        Filters::default(),
+        limit,
+    )
+    .expect("a valid test box")
+}
+
+async fn real_bounds(query: &BoundsQuery) -> Result<BoundsPage, ReaderError> {
+    let db = bikenest_infrastructure::Db::from_pool(pool().await);
+    reader(db).in_bounds_at(query, fixed_now()).await
 }
 
 async fn real_details(id: i64) -> Result<Option<bikenest_domain::ParkingLocation>, ReaderError> {
@@ -1154,4 +1178,128 @@ async fn sql_is_open_at(id: i64, tz: &str, at_instant: chrono::DateTime<chrono::
         .await
         .expect("open-now function");
     row.0
+}
+
+// ---------------------------------------------------------------------------
+// Browse mode (WP20): the map's viewport, and the grid it falls back to
+// ---------------------------------------------------------------------------
+
+#[db_test]
+async fn in_bounds_returns_the_envelope_only_and_measures_from_its_centre(tx: &mut TestTx) {
+    const MARK: &str = "fix-in-bounds";
+    cleanup_fixture(MARK).await;
+    let conn = tx.executor();
+    // ±0.01° is ~1.1 km north–south, so 300 m north is inside the box and
+    // 2 km north is not.
+    at(20.0, 0.0)
+        .with_fixture_tag(MARK)
+        .with_name("Inside centre")
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    at(20.0, 300.0)
+        .with_fixture_tag(MARK)
+        .with_name("Inside 300m")
+        .with_cost(bikenest_domain::Cost::Paid { price: None })
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    at(20.0, 2000.0)
+        .with_fixture_tag(MARK)
+        .with_name("Outside 2km")
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    let page = real_bounds(&bounds_at(20.0, 0.01, 200)).await.unwrap();
+    assert_eq!(page.total, 2, "the 2 km row is outside the envelope");
+    assert!(
+        page.clusters.is_empty(),
+        "under the cap the answer is rows, not a grid"
+    );
+    let names: Vec<&str> = page.items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["Inside centre", "Inside 300m"], "nearest first");
+    // Distances are measured from the box's centre — the only origin a
+    // viewport has.
+    assert!(page.items[0].distance_m < 5.0, "{:?}", page.items[0]);
+    assert!(
+        (page.items[1].distance_m - 300.0).abs() < 5.0,
+        "{:?}",
+        page.items[1]
+    );
+    // Browse rows carry no keyset key: there is no page after this one.
+    assert!(page.items.iter().all(|i| i.sort_key.is_none()));
+
+    // The filters are the radius search's filters, applied to the same box.
+    let mut free_only = bounds_at(20.0, 0.01, 200);
+    free_only.filters.cost = Some(CostFilter::Free);
+    let page = real_bounds(&free_only).await.unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].name, "Inside centre");
+
+    let mut lockers_only = bounds_at(20.0, 0.01, 200);
+    lockers_only.filters.types = vec![ParkingType::Locker];
+    let page = real_bounds(&lockers_only).await.unwrap();
+    assert_eq!(page.total, 0, "every fixture here is a rack");
+    assert!(page.items.is_empty());
+    cleanup_fixture(MARK).await;
+}
+
+#[db_test]
+async fn in_bounds_clusters_past_the_cap_and_the_counts_sum_to_the_total(tx: &mut TestTx) {
+    const MARK: &str = "fix-in-bounds-clusters";
+    cleanup_fixture(MARK).await;
+    let conn = tx.executor();
+    let o = test_origin(21.0);
+    // Two groups of *identical* points, six grid cells apart (the cell is the
+    // box's width over twelve, so 0.01° cannot fall in one cell with them):
+    // clustering is then a fact about the grid, not about a boundary landing
+    // where the test hoped it would.
+    for i in 0..3 {
+        ParkingBuilder::new()
+            .with_fixture_tag(MARK)
+            .with_name(format!("West {i}"))
+            .at(o.lat(), o.lon() - 0.005)
+            .create(&mut *conn)
+            .await
+            .unwrap();
+    }
+    for i in 0..4 {
+        ParkingBuilder::new()
+            .with_fixture_tag(MARK)
+            .with_name(format!("East {i}"))
+            .at(o.lat(), o.lon() + 0.005)
+            .create(&mut *conn)
+            .await
+            .unwrap();
+    }
+    tx.commit_fixture().await;
+
+    // Cap of 3, seven rows in the box → the grid, not the rows.
+    let page = real_bounds(&bounds_at(21.0, 0.01, 3)).await.unwrap();
+    assert_eq!(page.total, 7, "the total is the whole box, cap or no cap");
+    assert!(
+        page.items.is_empty(),
+        "past the cap there are no rows to list"
+    );
+    assert_eq!(page.clusters.len(), 2, "{:?}", page.clusters);
+    let counts: Vec<i64> = page.clusters.iter().map(|c| c.count).collect();
+    assert_eq!(counts, vec![4, 3], "biggest cluster first");
+    assert_eq!(
+        counts.iter().sum::<i64>(),
+        page.total as i64,
+        "every row is in exactly one cluster"
+    );
+    // A cluster of identical points sits exactly on them.
+    let east = page.clusters.iter().find(|c| c.count == 4).unwrap();
+    assert!((east.lon - (o.lon() + 0.005)).abs() < 1e-6, "{east:?}");
+    assert!((east.lat - o.lat()).abs() < 1e-6, "{east:?}");
+
+    // Exactly at the cap the rows come back instead: the grid is for boxes
+    // that hold *more* than can be drawn.
+    let page = real_bounds(&bounds_at(21.0, 0.01, 7)).await.unwrap();
+    assert_eq!(page.items.len(), 7);
+    assert!(page.clusters.is_empty());
+    cleanup_fixture(MARK).await;
 }

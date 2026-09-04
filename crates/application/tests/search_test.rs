@@ -2,8 +2,9 @@
 //! fake ports (no database — the real-SQL tests live in infrastructure).
 
 use bikenest_application::{
-    Cursor, Filters, GeoHit, GeocodeError, Geocoder, GetParkingDetails, ParkingDetailsReader,
-    ParkingSearchReader, ParkingSummary, ReaderError, SearchError, SearchInput, SearchParking,
+    BoundsPage, BoundsQuery, Cursor, Filters, GeoHit, GeocodeError, Geocoder, GetParkingDetails,
+    ParkingDetailsReader, ParkingSearchReader, ParkingSummary, ReaderError, SearchError,
+    SearchInput, SearchParking,
 };
 use bikenest_domain::{Cost, GeoPoint, ParkingLocation, ParkingType, Rating, TimeRange, hms};
 use std::sync::{Arc, Mutex};
@@ -79,6 +80,10 @@ struct FakeReader {
     items: Vec<ParkingSummary>,
     received_limit: Arc<Mutex<Vec<usize>>>,
     received_apply_cursor: Arc<Mutex<Vec<bool>>>,
+    /// Every bounds query that reached the reader — what the browse tests
+    /// assert the use case passed through (and, by its emptiness, what it
+    /// refused before touching the database).
+    received_bounds: Arc<Mutex<Vec<BoundsQuery>>>,
 }
 
 impl FakeReader {
@@ -108,6 +113,15 @@ impl ParkingSearchReader for FakeReader {
             items,
             total: self.items.len() as i64,
             next_cursor: None,
+        })
+    }
+
+    async fn in_bounds(&self, query: &BoundsQuery) -> Result<BoundsPage, ReaderError> {
+        self.received_bounds.lock().unwrap().push(query.clone());
+        Ok(BoundsPage {
+            items: self.items.clone(),
+            total: self.items.len(),
+            clusters: Vec::new(),
         })
     }
 }
@@ -466,4 +480,114 @@ async fn details_view_computes_freshness_and_open_status() {
 async fn details_of_unknown_id_is_none() {
     let uc = GetParkingDetails::new(Box::new(OneLocationReader(None)), Default::default());
     assert!(uc.execute(999).await.unwrap().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Browse mode (WP20): the box is the request, and it is validated here
+// ---------------------------------------------------------------------------
+
+fn browse_input(bbox: &str) -> SearchInput {
+    SearchInput {
+        bbox: Some(bbox.to_string()),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn browse_rejects_every_kind_of_impossible_box() {
+    // Each of these must be refused *before* the reader is asked anything: a
+    // box the database cannot be trusted with is a 400, not an empty page.
+    let cases = [
+        ("", "no box at all"),
+        ("-49.30,-25.45,-49.25", "three numbers"),
+        ("-49.30,-25.45,-49.25,-25.41,7", "five numbers"),
+        ("west,-25.45,-49.25,-25.41", "not a number"),
+        ("-49.25,-25.45,-49.30,-25.41", "west east of east"),
+        ("-49.30,-25.41,-49.25,-25.45", "south north of north"),
+        ("-49.30,-25.45,-49.30,-25.41", "zero width"),
+        ("-181.0,-25.45,-49.25,-25.41", "longitude off the globe"),
+        ("-49.30,-91.0,-49.25,-25.41", "latitude off the globe"),
+        ("-50.30,-25.45,-49.25,-25.41", "wider than the span limit"),
+        ("-49.30,-26.45,-49.25,-25.41", "taller than the span limit"),
+    ];
+    for (bbox, why) in cases {
+        let reader = FakeReader::default();
+        let result = use_case(FakeGeocoder::default(), reader.clone())
+            .browse(&browse_input(bbox))
+            .await;
+        assert!(
+            matches!(result, Err(SearchError::InvalidBounds)),
+            "{why} ({bbox}) must be InvalidBounds"
+        );
+        assert!(
+            reader.received_bounds.lock().unwrap().is_empty(),
+            "{why} must not reach the reader"
+        );
+    }
+}
+
+#[tokio::test]
+async fn browse_refuses_a_cursor_because_it_has_no_pages() {
+    let reader = FakeReader::default();
+    let input = SearchInput {
+        cursor: Some("whatever".to_string()),
+        ..browse_input("-49.30,-25.45,-49.25,-25.41")
+    };
+    let result = use_case(FakeGeocoder::default(), reader.clone())
+        .browse(&input)
+        .await;
+    assert!(matches!(result, Err(SearchError::BoundsNotPaginated)));
+    assert!(reader.received_bounds.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn browse_passes_the_box_and_every_filter_to_the_reader() {
+    let reader = FakeReader::new(vec![summary(1, 120.0, None, Some(1))]);
+    let input = SearchInput {
+        cost: Some("free".to_string()),
+        types: Some("rack,locker".to_string()),
+        security: Some("cctv".to_string()),
+        open_now: true,
+        ..browse_input(" -49.30 , -25.45 , -49.25 , -25.41 ")
+    };
+    let (bounds, page) = use_case(FakeGeocoder::default(), reader.clone())
+        .browse(&input)
+        .await
+        .expect("a valid box");
+
+    assert_eq!(page.total, 1);
+    let seen = reader.received_bounds.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1, "exactly one reader call");
+    // The box the reader got is the box the caller gets back — the view layer
+    // frames the map with it, so they must not be two different boxes.
+    assert_eq!(seen[0], bounds);
+    assert_eq!(seen[0].west, -49.30);
+    assert_eq!(seen[0].south, -25.45);
+    assert_eq!(seen[0].east, -49.25);
+    assert_eq!(seen[0].north, -25.41);
+    assert_eq!(seen[0].limit, bikenest_application::BROWSE_MARKER_CAP);
+    assert_eq!(
+        seen[0].filters.cost,
+        Some(bikenest_application::CostFilter::Free)
+    );
+    assert_eq!(
+        seen[0].filters.types,
+        vec![
+            bikenest_domain::ParkingType::Rack,
+            bikenest_domain::ParkingType::Locker
+        ]
+    );
+    assert_eq!(seen[0].filters.security_all, vec!["cctv".to_string()]);
+    assert!(seen[0].filters.open_now);
+}
+
+#[test]
+fn a_browse_box_centres_and_grids_itself() {
+    let bounds = BoundsQuery::parse("-49.30,-25.45,-49.25,-25.41", Filters::default(), 200)
+        .expect("a valid box");
+    let center = bounds.center();
+    assert!((center.lat() - -25.43).abs() < 1e-9, "{center:?}");
+    assert!((center.lon() - -49.275).abs() < 1e-9, "{center:?}");
+    // The grid is the box's width over twelve columns, whatever the zoom.
+    assert!((bounds.cell_deg() - 0.05 / 12.0).abs() < 1e-9);
 }

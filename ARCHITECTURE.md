@@ -111,7 +111,7 @@ directly. Examples: `SearchParking`, `ContributionService`, `AuthService`,
 | Port | Purpose |
 |---|---|
 | `Geocoder` | address/place → coordinates |
-| `ParkingSearchReader` / `ParkingDetailsReader` | proximity search + detail reads |
+| `ParkingSearchReader` / `ParkingDetailsReader` | proximity search (`search`) + map-viewport browse (`in_bounds`, clustered past the marker cap) + detail reads |
 | `ParkingPhotoReader` / `ReviewPhotosReader` | photo gallery reads |
 | `SitemapReader` | the ids `/sitemap.xml` lists (every ACTIVE location) |
 | `ParkingContributionRepository` | add/edit/propose, optimistic apply, revisions |

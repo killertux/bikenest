@@ -445,6 +445,168 @@ async fn search_map_payload_is_html_safe_for_ugc_names(tx: &mut TestTx) {
         .unwrap();
 }
 
+// --- Browse mode (WP20): ?bbox= ---------------------------------------------
+
+/// A box around the fixture below, as the map writes it: `west,south,east,north`.
+const BROWSE_BBOX: &str = "-49.30,-25.45,-49.25,-25.41";
+
+/// The JSON the map reads, lifted out of the page's `#search-data` island.
+fn search_data_block(body: &str) -> String {
+    let marker = "<script type=\"application/json\" id=\"search-data\">";
+    let start = body.find(marker).expect("search-data block present");
+    let rest = &body[start + marker.len()..];
+    let end = rest.find("</script>").unwrap_or(rest.len());
+    rest[..end].to_string()
+}
+
+#[db_test]
+async fn browsing_a_box_lists_numbered_cards_and_no_next_page(tx: &mut TestTx) {
+    const MARK: &str = "fix-http-browse";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let conn = tx.executor();
+    // Inside the box, so the assertions below hold on an otherwise empty
+    // database as well as on a seeded one.
+    ParkingBuilder::new()
+        .with_fixture_tag(MARK)
+        .with_name("Browse Box Fixture")
+        .at(-25.430_000, -49.275_000)
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    let (status, body) = get(&format!("/search?bbox={BROWSE_BBOX}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(is_document(&body), "a bbox URL is a page, not a fragment");
+    assert!(body.contains("Parking in this area"), "browse heading");
+    assert!(body.contains("Browse Box Fixture"), "the fixture is listed");
+    // Distances have no destination to be from, so the list says what they are
+    // measured from instead.
+    assert!(
+        body.contains("Distances are measured from the centre of the map."),
+        "from-centre note"
+    );
+    // Numbered cards, and the same numbers in the map payload.
+    assert!(body.contains(r#"aria-label="Spot 1""#), "card number badge");
+    let json_block = search_data_block(&body);
+    let parsed: serde_json::Value = serde_json::from_str(&json_block).expect("valid JSON block");
+    let first = &parsed["items"][0];
+    assert_eq!(first["n"], 1, "markers carry the card's number: {parsed}");
+    assert!(
+        first["href"]
+            .as_str()
+            .expect("a marker links to its details page")
+            .starts_with("/parking/"),
+        "{parsed}"
+    );
+    assert_eq!(
+        parsed["bbox"].as_array().map(Vec::len),
+        Some(4),
+        "the map frames the box the server answered for: {parsed}"
+    );
+    // Browse is not paginated.
+    assert!(!body.contains("Next page"), "browse has no next page");
+
+    // The same URL as an htmx fragment: the results list, not a document.
+    let app = test_app().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/search?bbox={BROWSE_BBOX}"))
+                .header("HX-Request", "true")
+                .header("HX-Target", "results")
+                .header("Accept-Language", "en")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let fragment = res.into_body().collect().await.unwrap().to_bytes();
+    let fragment = String::from_utf8_lossy(&fragment).to_string();
+    assert!(!fragment.contains("<!DOCTYPE"), "fragment: {fragment}");
+    assert!(fragment.contains("Browse Box Fixture"), "fragment: {fragment}");
+    assert!(
+        fragment.contains("Parking in this area"),
+        "the out-of-band heading names the area too"
+    );
+
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+#[db_test]
+async fn an_unusable_box_is_a_400_with_a_notice_not_a_500(_tx: &mut TestTx) {
+    // Inside out, off the globe, wider than the span limit, not a box at all.
+    for bbox in [
+        "-49.25,-25.45,-49.30,-25.41",
+        "-49.30,-95.0,-49.25,-25.41",
+        "-52.00,-25.45,-49.25,-25.41",
+        "not-a-box",
+    ] {
+        let (status, body) = get(&format!("/search?bbox={bbox}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "bbox={bbox}");
+        assert!(
+            body.contains("That map area can&#39;t be searched"),
+            "bbox={bbox} must explain itself: {body}"
+        );
+        assert!(is_document(&body), "bbox={bbox} renders a styled page");
+    }
+}
+
+#[db_test]
+async fn a_cursor_on_a_browse_url_is_refused(_tx: &mut TestTx) {
+    let (status, body) = get(&format!("/search?bbox={BROWSE_BBOX}&cursor=abc")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.contains("Browsing the map has no pages"),
+        "the notice says why: {body}"
+    );
+}
+
+#[db_test]
+async fn a_destination_wins_over_a_box(_tx: &mut TestTx) {
+    // A hand-edited URL carrying both: the destination is what the viewer
+    // asked for, so it is a radius search — not a browse.
+    let (status, body) = get(&format!(
+        "/search?q=Rua%20XV%20de%20Novembro&bbox={BROWSE_BBOX}"
+    ))
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Parking near"), "radius search headline");
+    assert!(!body.contains("Parking in this area"));
+}
+
+#[db_test]
+async fn every_entry_point_offers_the_map(_tx: &mut TestTx) {
+    // The empty prompt: a way in that needs no destination typed.
+    let (status, body) = get("/search").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Explore the map"), "the prompt offers the map");
+    assert!(
+        body.contains("/search?bbox=-49.2905,-25.4497,-49.2505,-25.4097"),
+        "…pointed at the centre box: {body}"
+    );
+    // The home page's explore link is that same box, not one hard-coded street.
+    let (status, body) = get("/").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("/search?bbox=-49.2905,-25.4497,-49.2505,-25.4097"),
+        "home explore link"
+    );
+    assert!(
+        !body.contains("/search?q=Rua+XV+de+Novembro"),
+        "the hard-coded street link is gone"
+    );
+}
+
 #[db_test]
 async fn parking_details_renders_full_page_and_404_for_unknown(tx: &mut TestTx) {
     // Unknown id → styled 404 page.
@@ -4712,6 +4874,73 @@ fn read_template(rel: &str) -> String {
     let path =
         std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates")).join(rel);
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+/// One of the shipped front-end files, read from the source tree — the map's
+/// behaviour lives in JS a request cannot assert on.
+fn read_static(rel: &str) -> String {
+    let path =
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/static")).join(rel);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+#[test]
+fn the_map_toggle_works_at_every_breakpoint() {
+    let page = read_template("pages/search.html");
+    let toggle = page
+        .lines()
+        .find(|l| l.contains(r#"@click="toggleMap""#))
+        .expect("the map toggle is in search.html");
+    // `lg:hidden` used to make the desktop map impossible to put away.
+    assert!(!toggle.contains("lg:hidden"), "{toggle}");
+    // The results column's width is the Alpine binding's alone: a static
+    // `lg:col-span-7` alongside `:class="resultsClass"` fights it.
+    assert!(
+        page.contains(r#"<div :class="resultsClass">"#),
+        "the results column is driven only by the binding: {page}"
+    );
+    assert!(
+        !page.contains(r#"class="lg:col-span-7" :class="resultsClass""#),
+        "{page}"
+    );
+    // Both widths still have to reach the stylesheet.
+    let css = read_static("css/app.css");
+    assert!(css.contains(r"lg\:col-span-7"), "narrow column generated");
+    assert!(css.contains(r"lg\:col-span-12"), "wide column generated");
+}
+
+#[test]
+fn the_search_map_is_built_lazily_and_resized_on_reveal() {
+    let js = read_static("js/search.js");
+    // A map built inside a hidden panel measures 0×0 and renders blank.
+    assert!(js.contains("resize("), "the map is resized: {js}");
+    assert!(js.contains("bikenest:map-toggle"), "the reveal is announced");
+    assert!(js.contains("ResizeObserver"), "belt and braces for the reveal");
+    assert!(js.contains("bikenest:map-moved"), "moves offer a new area");
+    let app = read_static("js/app.js");
+    assert!(
+        app.contains("bikenest:map-toggle") && app.contains("bikenest:map-moved"),
+        "the Alpine side of both events: {app}"
+    );
+    assert!(
+        app.contains("bn.search.mapOpen"),
+        "the panel's state is remembered per viewer"
+    );
+}
+
+#[test]
+fn map_markers_are_controls_and_their_popups_are_built_as_nodes() {
+    let js = read_static("js/search.js");
+    assert!(js.contains(r#"setAttribute("role", "button")"#), "{js}");
+    assert!(js.contains(r#"setAttribute("tabindex", "0")"#), "{js}");
+    assert!(js.contains("keydown"), "Enter/Space open the popup");
+    // A location's name is user content: it may only ever be written as text.
+    assert!(js.contains("createElement") && js.contains("textContent"), "{js}");
+    assert!(
+        !js.contains(".innerHTML") && !js.contains("innerHTML ="),
+        "popup content must never be assembled as markup: {js}"
+    );
+    assert!(js.contains("setDOMContent"), "the popup takes nodes: {js}");
 }
 
 #[test]

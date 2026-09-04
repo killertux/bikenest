@@ -34,6 +34,14 @@
 //! the recommendation score uses. They agree to ~0.3%; the key is opaque, so
 //! only its internal consistency matters.
 //!
+//! Browse mode (`in_bounds`) is the same shape one question over: a count
+//! over the map's bounding box, then *either* the nearest-to-centre rows (up
+//! to the marker cap, decorated in a `MATERIALIZED` CTE exactly as the page
+//! above) *or* — when the box holds more than the cap — those rows snapped to
+//! a grid and counted. It shares the filter text but not the numbering: a
+//! viewport has no origin, no sort and no cursor, so it gets its own
+//! `BOUNDS_FILTERS`/`BOUNDS_ORIGIN` pair rather than bending the radius one.
+//!
 //! "Open now" is not written here at all: it is `bikenest_is_open_at`
 //! (migration 0020), called once as a filter and once as the row's flag. The
 //! domain keeps `OpeningHours::status_at` for the details page, which needs
@@ -43,8 +51,8 @@
 use crate::Db;
 use async_trait::async_trait;
 use bikenest_application::{
-    CostFilter, FreshnessConfig, ParkingSummary, ReaderError, RecommendationConfig, SearchPage,
-    SearchRequest, Sort,
+    BoundsPage, BoundsQuery, Cluster, CostFilter, FreshnessConfig, ParkingSummary, ReaderError,
+    RecommendationConfig, SearchPage, SearchRequest, Sort,
 };
 use bikenest_domain::{Cost, CurrencyCode, GeoPoint, Money, ParkingType, PricingUnit, Rating};
 
@@ -145,6 +153,40 @@ const FILTERS: &str = r#"
       )
 "#;
 
+/// Browse mode's matching rule: the same criteria as [`FILTERS`], with the
+/// radius replaced by the map's own bounding box.
+///
+/// `&&` (bounding-box overlap) rather than `ST_Intersects`/`ST_DWithin`: for a
+/// point against an envelope the two answer the same question, and `&&` is the
+/// operator `parking_location_location_gist` indexes, so the viewport query is
+/// an index scan over the box instead of a filter over the table.
+///
+/// Parameters are numbered so the count, the cluster grid and the row page can
+/// share the text: `$1..$4` the box (west/south/east/north — `ST_MakeEnvelope`
+/// takes x/y, i.e. lon/lat), `$5..$8` the filters, `$9` the instant "open now"
+/// is judged at.
+const BOUNDS_FILTERS: &str = r#"
+    pl.moderation_state = 'ACTIVE'
+      AND pl.location && ST_MakeEnvelope($1, $2, $3, $4, 4326)::geography
+      AND ($5::text IS NULL OR pl.cost_kind = $5)
+      AND ($6::text[] IS NULL OR pl.parking_type = ANY($6))
+      AND ($7 = false OR bikenest_is_open_at(pl.id, pl.timezone, $9))
+      AND NOT EXISTS (
+          SELECT 1 FROM unnest($8::text[]) AS wanted(code)
+          WHERE NOT EXISTS (
+              SELECT 1 FROM parking_security ps
+              WHERE ps.location_id = pl.id
+                AND ps.feature_code = wanted.code
+                AND ps.state = 1
+          )
+      )
+"#;
+
+/// Browse mode's origin: the centre of the box, bound as `$10` (lat) / `$11`
+/// (lon). A viewport has no destination, so the centre is what distances —
+/// displayed and ordered on — are measured from.
+const BOUNDS_ORIGIN: &str = "ST_SetSRID(ST_MakePoint($11, $10), 4326)::geography";
+
 /// Count of confirmed security attributes, as a lateral join rather than a
 /// correlated subquery: one index lookup per *candidate* row, joined in only
 /// for the two sorts whose key needs it.
@@ -238,6 +280,10 @@ impl bikenest_application::ParkingSearchReader for SqlxParkingSearchReader {
         self.search_at(request, limit, apply_cursor, chrono::Utc::now())
             .await
     }
+
+    async fn in_bounds(&self, query: &BoundsQuery) -> Result<BoundsPage, ReaderError> {
+        self.in_bounds_at(query, chrono::Utc::now()).await
+    }
 }
 
 impl SqlxParkingSearchReader {
@@ -267,28 +313,7 @@ impl SqlxParkingSearchReader {
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<SearchPage, ReaderError> {
         let cursor = if apply_cursor { request.cursor } else { None };
-        let cost: Option<String> = request.filters.cost.map(|c: CostFilter| match c {
-            CostFilter::Free => "free".to_string(),
-            CostFilter::Paid => "paid".to_string(),
-            CostFilter::Unknown => "unknown".to_string(),
-        });
-        let types: Option<Vec<String>> = if request.filters.types.is_empty() {
-            None
-        } else {
-            Some(
-                request
-                    .filters
-                    .types
-                    .iter()
-                    .map(|t| t.as_code().to_string())
-                    .collect(),
-            )
-        };
-        let security_all: Option<Vec<String>> = if request.filters.security_all.is_empty() {
-            None
-        } else {
-            Some(request.filters.security_all.clone())
-        };
+        let (cost, types, security_all) = filter_binds(&request.filters);
 
         let total = self
             .count(request, &cost, &types, &security_all, now)
@@ -442,6 +467,239 @@ impl SqlxParkingSearchReader {
             .map_err(|e| reader_err("search.page", e))?;
         rows.into_iter().map(summary_of).collect()
     }
+
+    /// Browse mode, evaluated as of `now` (the "open now" filter's instant).
+    ///
+    /// One count first, then *either* the rows or the grid — never both, and
+    /// never the rows for a box holding thousands of them: the count is a
+    /// bounding-box index scan with no decoration, so it is what decides
+    /// whether individual markers are worth reading at all.
+    pub async fn in_bounds_at(
+        &self,
+        query: &BoundsQuery,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<BoundsPage, ReaderError> {
+        let (cost, types, security_all) = filter_binds(&query.filters);
+        let total = self
+            .bounds_count(query, &cost, &types, &security_all, now)
+            .await?;
+        let total = usize::try_from(total).unwrap_or(0);
+        if total > query.limit {
+            let clusters = self
+                .bounds_clusters(query, &cost, &types, &security_all, now)
+                .await?;
+            return Ok(BoundsPage {
+                items: Vec::new(),
+                total,
+                clusters,
+            });
+        }
+        let items = self
+            .bounds_page(query, &cost, &types, &security_all, now)
+            .await?;
+        Ok(BoundsPage {
+            items,
+            total,
+            clusters: Vec::new(),
+        })
+    }
+
+    /// How many locations are inside the box, with no decoration at all.
+    async fn bounds_count(
+        &self,
+        query: &BoundsQuery,
+        cost: &Option<String>,
+        types: &Option<Vec<String>>,
+        security_all: &Option<Vec<String>>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<i64, ReaderError> {
+        let sql = format!(
+            r#"
+            SELECT count(*)::bigint AS n
+            FROM parking_location pl
+            WHERE {BOUNDS_FILTERS}
+            "#
+        );
+        let total: (i64,) = sqlx::query_as(&sql)
+            .bind(query.west)
+            .bind(query.south)
+            .bind(query.east)
+            .bind(query.north)
+            .bind(cost.clone())
+            .bind(types.clone())
+            .bind(query.filters.open_now)
+            .bind(security_all.clone())
+            .bind(now)
+            .fetch_one(self.db.pool())
+            .await
+            .map_err(|e| reader_err("search.bounds_count", e))?;
+        Ok(total.0)
+    }
+
+    /// The viewport's rows, nearest the centre first, capped at `query.limit`.
+    ///
+    /// Same shape as the keyset page above and for the same reason: the ids
+    /// and their distances are picked in a `MATERIALIZED` CTE so the codes
+    /// array and the primary photo are read once per row that survives the
+    /// cap, not once per row in the box.
+    async fn bounds_page(
+        &self,
+        query: &BoundsQuery,
+        cost: &Option<String>,
+        types: &Option<Vec<String>>,
+        security_all: &Option<Vec<String>>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<ParkingSummary>, ReaderError> {
+        let center = query.center();
+        let sql = format!(
+            r#"
+            WITH candidates AS MATERIALIZED (
+                SELECT pl.id AS id,
+                       ST_Distance(pl.location, {BOUNDS_ORIGIN})::float8 AS distance_m
+                FROM parking_location pl
+                WHERE {BOUNDS_FILTERS}
+                ORDER BY distance_m ASC, pl.id ASC
+                LIMIT $12
+            )
+            SELECT
+                pl.id,
+                pl.name,
+                pl.address,
+                pl.parking_type,
+                pl.cost_kind,
+                pl.price_cents,
+                pl.price_currency,
+                pl.price_unit,
+                COALESCE(pl.lat, 0) AS lat,
+                COALESCE(pl.lon, 0) AS lon,
+                pl.timezone,
+                pl.rating_avg::float8 AS rating_avg,
+                pl.rating_count,
+                pl.last_verified_at,
+                c.distance_m,
+                codes.security_yes_codes,
+                bikenest_is_open_at(pl.id, pl.timezone, $9) AS is_open_now,
+                photo.storage_key AS photo_key,
+                -- Browse is not paginated, so these rows carry no keyset key:
+                -- a cursor minted from one would page through a viewport that
+                -- no longer exists by the time it is followed.
+                NULL::float8 AS sort_key
+            FROM candidates c
+            JOIN parking_location pl ON pl.id = c.id
+            LEFT JOIN LATERAL (
+                SELECT array_agg(ps.feature_code ORDER BY ps.feature_code) AS security_yes_codes
+                FROM parking_security ps
+                WHERE ps.location_id = pl.id AND ps.state = 1
+            ) codes ON true
+            LEFT JOIN LATERAL (
+                SELECT ph.storage_key FROM parking_photo ph
+                WHERE ph.location_id = pl.id AND ph.moderation_state = 'APPROVED'
+                ORDER BY ph.position, ph.id
+                LIMIT 1
+            ) photo ON true
+            ORDER BY c.distance_m ASC, c.id ASC
+            "#
+        );
+        let rows: Vec<SearchRow> = sqlx::query_as(&sql)
+            .bind(query.west)
+            .bind(query.south)
+            .bind(query.east)
+            .bind(query.north)
+            .bind(cost.clone())
+            .bind(types.clone())
+            .bind(query.filters.open_now)
+            .bind(security_all.clone())
+            .bind(now)
+            .bind(center.lat())
+            .bind(center.lon())
+            .bind(query.limit as i64)
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| reader_err("search.bounds_page", e))?;
+        rows.into_iter().map(summary_of).collect()
+    }
+
+    /// The same rows as counts on a grid, for a box too full to draw.
+    ///
+    /// The grid key is `ST_SnapToGrid` at [`BoundsQuery::cell_deg`] (the box's
+    /// width over twelve), so the cluster map is a ~12-column grid at every
+    /// zoom. The marker sits at the *mean* position of the cell's members
+    /// rather than the cell's corner, which is what keeps a cluster over the
+    /// spots it stands for; the counts sum to the count above.
+    async fn bounds_clusters(
+        &self,
+        query: &BoundsQuery,
+        cost: &Option<String>,
+        types: &Option<Vec<String>>,
+        security_all: &Option<Vec<String>>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<Cluster>, ReaderError> {
+        let sql = format!(
+            r#"
+            SELECT
+                avg(ST_Y(g.geom))::float8 AS lat,
+                avg(ST_X(g.geom))::float8 AS lon,
+                count(*)::bigint AS n
+            FROM (
+                SELECT
+                    pl.location::geometry AS geom,
+                    ST_SnapToGrid(pl.location::geometry, $10::float8) AS cell
+                FROM parking_location pl
+                WHERE {BOUNDS_FILTERS}
+            ) g
+            GROUP BY g.cell
+            ORDER BY n DESC, lat ASC, lon ASC
+            "#
+        );
+        let rows: Vec<ClusterRow> = sqlx::query_as(&sql)
+            .bind(query.west)
+            .bind(query.south)
+            .bind(query.east)
+            .bind(query.north)
+            .bind(cost.clone())
+            .bind(types.clone())
+            .bind(query.filters.open_now)
+            .bind(security_all.clone())
+            .bind(now)
+            .bind(query.cell_deg())
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| reader_err("search.bounds_clusters", e))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| Cluster {
+                lat: r.lat.unwrap_or(0.0),
+                lon: r.lon.unwrap_or(0.0),
+                count: r.n,
+            })
+            .collect())
+    }
+}
+
+/// The three filter binds every statement in this file shares, in the order
+/// their placeholders appear: the cost kind, the wanted type codes, and the
+/// security codes that must all be confirmed. `None` means "no such filter" —
+/// each fragment tests for `NULL` rather than building different SQL, so the
+/// count, the page and the cluster grid are one statement text each.
+fn filter_binds(
+    filters: &bikenest_application::Filters,
+) -> (Option<String>, Option<Vec<String>>, Option<Vec<String>>) {
+    let cost = filters.cost.map(|c: CostFilter| match c {
+        CostFilter::Free => "free".to_string(),
+        CostFilter::Paid => "paid".to_string(),
+        CostFilter::Unknown => "unknown".to_string(),
+    });
+    let types = (!filters.types.is_empty())
+        .then(|| filters.types.iter().map(|t| t.as_code().to_string()).collect());
+    let security_all = (!filters.security_all.is_empty()).then(|| filters.security_all.clone());
+    (cost, types, security_all)
+}
+
+#[derive(sqlx::FromRow)]
+struct ClusterRow {
+    lat: Option<f64>,
+    lon: Option<f64>,
+    n: i64,
 }
 
 /// Classify + log the sqlx error, then map it onto [`ReaderError`]. Shared by

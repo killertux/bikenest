@@ -1,12 +1,17 @@
 {# Shared hidden-input mirrors for the three search.html forms (main search box,
    sort select, filter panel) so that submitting any one of them preserves the
    state the other two own. Each caller skips the field(s) it renders as a
-   visible control, so no form ever submits a field twice. #}
-{% macro hidden(form, skip_q, skip_sort, skip_filters) %}
+   visible control, so no form ever submits a field twice.
+
+   `skip_bbox` is what the main search box sets: typing a destination leaves
+   browse mode, so that form must not carry the map area forward, while the
+   sort and filter forms must (changing a filter re-queries the same area). #}
+{% macro hidden(form, skip_q, skip_sort, skip_filters, skip_bbox) %}
 {% if let Some(lat) = form.lat %}<input type="hidden" name="lat" value="{{ lat }}" />{% endif %}
 {% if let Some(lon) = form.lon %}<input type="hidden" name="lon" value="{{ lon }}" />{% endif %}
 {% if !skip_q %}{% if !form.q.is_empty() %}<input type="hidden" name="q" value="{{ form.q }}" />{% endif %}{% endif %}
 {% if !skip_sort %}{% if !form.sort.is_empty() %}<input type="hidden" name="sort" value="{{ form.sort }}" />{% endif %}{% endif %}
+{% if !skip_bbox %}{% if !form.bbox.is_empty() %}<input type="hidden" name="bbox" value="{{ form.bbox }}" />{% endif %}{% endif %}
 {% if !skip_filters %}
 {% if let Some(r) = form.radius %}<input type="hidden" name="radius" value="{{ r }}" />{% endif %}
 {% if !form.cost.is_empty() %}<input type="hidden" name="cost" value="{{ form.cost }}" />{% endif %}
@@ -14,4 +19,17 @@
 {% if !form.security.is_empty() %}<input type="hidden" name="security" value="{{ form.security }}" />{% endif %}
 {% if !form.open_now.is_empty() %}<input type="hidden" name="open_now" value="{{ form.open_now }}" />{% endif %}
 {% endif %}
+{% endmacro %}
+
+{# The "search this area" form: the map's current box plus whatever the viewer
+   had narrowed down to — and deliberately no `q`/`lat`/`lon`, since browsing
+   an area replaces searching around a destination. search.js writes the box
+   into `#bbox-input` on every map move. #}
+{% macro browse(form) %}
+<input type="hidden" name="bbox" id="bbox-input" value="{{ form.bbox }}" />
+{% if !form.sort.is_empty() %}<input type="hidden" name="sort" value="{{ form.sort }}" />{% endif %}
+{% if !form.cost.is_empty() %}<input type="hidden" name="cost" value="{{ form.cost }}" />{% endif %}
+{% if !form.parking_type.is_empty() %}<input type="hidden" name="type" value="{{ form.parking_type }}" />{% endif %}
+{% if !form.security.is_empty() %}<input type="hidden" name="security" value="{{ form.security }}" />{% endif %}
+{% if !form.open_now.is_empty() %}<input type="hidden" name="open_now" value="{{ form.open_now }}" />{% endif %}
 {% endmacro %}

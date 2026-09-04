@@ -153,6 +153,15 @@ impl Translator {
         }
     }
 
+    /// "Spot {n}" — the accessible name of a numbered result: the badge on a
+    /// card and the number drawn in its map marker say the same thing.
+    ///
+    /// Takes `&usize` because this is called straight from a template, and
+    /// Askama passes a struct field to a method call by reference.
+    pub fn spot(&self, n: &usize) -> String {
+        self.t("map.spot").replace("{n}", &n.to_string())
+    }
+
     /// Localized security-attribute label from its catalog code.
     pub fn security(&self, code: &str) -> &'static str {
         match code {
@@ -327,6 +336,30 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         ),
         "map.destination" => ("Destination", "Destino"),
         "map.on_map" => ("{n} on map", "{n} no mapa"),
+        // `{n}` is substituted by `Translator::spot` (card badge + marker).
+        "map.spot" => ("Spot {n}", "Vaga {n}"),
+        // `{n}` is substituted in search.js, for a cluster marker's label.
+        "map.cluster" => ("{n} spots here", "{n} vagas aqui"),
+        // --- browse mode (?bbox=) -----------------------------------------
+        "search.browse.heading" => ("Parking in this area", "Vagas nesta área"),
+        "search.browse.here" => ("Search this area", "Buscar nesta área"),
+        "search.browse.explore" => ("Explore the map", "Explorar o mapa"),
+        "search.browse.from_center" => (
+            "Distances are measured from the centre of the map.",
+            "As distâncias são medidas a partir do centro do mapa.",
+        ),
+        "search.browse.refine" => (
+            "Only the ones nearest the centre are listed. Zoom in or pan to a smaller area to see the rest.",
+            "A lista mostra apenas as mais próximas do centro. Aproxime o zoom ou mova o mapa para uma área menor para ver o resto.",
+        ),
+        "search.browse.invalid" => (
+            "That map area can't be searched. Move or zoom the map and search the area again.",
+            "Não é possível buscar nessa área do mapa. Mova ou aproxime o mapa e busque na área de novo.",
+        ),
+        "search.browse.no_pages" => (
+            "Browsing the map has no pages — move or zoom the map and search the area again.",
+            "A navegação pelo mapa não tem páginas — mova ou aproxime o mapa e busque na área de novo.",
+        ),
         "search.sort.label" => ("Sort", "Ordenar"),
         "search.sort.recommended" => ("Recommended", "Recomendados"),
         "search.sort.distance" => ("Distance", "Distância"),
@@ -347,6 +380,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "search.filters.open_now" => ("Open now", "Aberto agora"),
         "search.filters.apply" => ("Apply filters", "Aplicar filtros"),
         "search.radius.default" => ("default", "padrão"),
+        "search.radius.5km" => ("5 km", "5 km"),
         "search.radius.hint" => (
             "Selections apply immediately and stay in the URL.",
             "As seleções valem na hora e ficam na URL.",

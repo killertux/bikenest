@@ -13,7 +13,10 @@
   </div>
   <div class="flex-1 p-4 sm:p-5">
     <div class="flex items-start justify-between gap-3">
-      <h3 class="font-display text-base font-semibold leading-snug sm:text-lg">
+      <!-- The number is the card's handle on the map: the same digit is drawn
+           in this location's marker (search.js reads it from #search-data). -->
+      <span aria-label="{{ tr.spot(item.n) }}" class="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full bg-accent-strong font-mono text-[11px] font-semibold text-white">{{ item.n }}</span>
+      <h3 class="font-display flex-1 text-base font-semibold leading-snug sm:text-lg">
         <a href="{{ item.url }}" class="after:absolute after:inset-0" aria-label="{{ item.name }} — {{ tr.t("card.view") }}">{{ item.name }}</a>
       </h3>
       <span

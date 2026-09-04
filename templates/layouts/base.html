@@ -50,7 +50,7 @@
       </a>
       <nav class="hidden items-center gap-7 md:flex" aria-label="{{ tr.t("a11y.primary_nav") }}">
         <a href="/#how-it-works" class="text-sm text-muted hover:text-fg">{{ tr.t("nav.how") }}</a>
-        <a href="/search" {% if layout.current == "search" %}aria-current="page" class="text-sm font-medium text-fg"{% else %}class="text-sm text-muted hover:text-fg"{% endif %}>{{ tr.t("nav.spots") }}</a>
+        <a href="/search?bbox={{ layout.browse_bbox() }}" {% if layout.current == "search" %}aria-current="page" class="text-sm font-medium text-fg"{% else %}class="text-sm text-muted hover:text-fg"{% endif %}>{{ tr.t("nav.spots") }}</a>
         <a href="/about" {% if layout.current == "about" %}aria-current="page" class="text-sm font-medium text-fg"{% else %}class="text-sm text-muted hover:text-fg"{% endif %}>{{ tr.t("nav.community") }}</a>
       </nav>
       <div class="hidden items-center gap-4 md:flex">
@@ -131,7 +131,7 @@
     <div id="mobile-menu" class="border-t border-border bg-surface px-4 py-4 md:hidden" x-show="open" x-cloak>
       <nav class="flex flex-col gap-1 text-sm" aria-label="{{ tr.t("a11y.mobile_nav") }}">
         <a href="/" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("nav.home") }}</a>
-        <a href="/search" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("nav.spots") }}</a>
+        <a href="/search?bbox={{ layout.browse_bbox() }}" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("nav.spots") }}</a>
         <a href="/about" class="rounded-lg px-3 py-2 hover:bg-bg">{{ tr.t("nav.community_how") }}</a>
         {% if layout.is_authenticated %}
           <div class="mt-2 flex flex-col gap-1 border-t border-border pt-2">
@@ -187,7 +187,7 @@
         </div>
         <nav class="grid grid-cols-2 gap-x-12 gap-y-2 text-sm" aria-label="{{ tr.t("a11y.footer_nav") }}">
           <a href="/about" class="py-1 text-muted hover:text-fg">{{ tr.t("footer.about") }}</a>
-          <a href="/search" class="py-1 text-muted hover:text-fg">{{ tr.t("nav.spots") }}</a>
+          <a href="/search?bbox={{ layout.browse_bbox() }}" class="py-1 text-muted hover:text-fg">{{ tr.t("nav.spots") }}</a>
           <a href="/privacy" class="py-1 text-muted hover:text-fg">{{ tr.t("footer.privacy") }}</a>
           <a href="/terms" class="py-1 text-muted hover:text-fg">{{ tr.t("footer.terms") }}</a>
           <a href="/cookies" class="py-1 text-muted hover:text-fg">{{ tr.t("footer.cookies") }}</a>

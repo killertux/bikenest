@@ -160,6 +160,14 @@ impl PageLayout {
             .unwrap_or(after_scheme.len());
         format!("{}{}", &url[..scheme_end + 3], &after_scheme[..host_end])
     }
+
+    /// The `west,south,east,north` box behind every "browse the map" link in
+    /// the chrome (the nav's parking item, the home page's explore link).
+    /// A method rather than a field: it is a constant, and every layout would
+    /// otherwise have to carry it.
+    pub fn browse_bbox(&self) -> String {
+        view::featured_bbox_param()
+    }
 }
 
 /// Error page (E1/E2), styled via Tailwind tokens.
@@ -294,6 +302,11 @@ impl SearchPageVm {
     fn radius_none(&self) -> bool {
         self.form.radius.is_none()
     }
+    /// The explore-the-map box for the empty-search prompt (see
+    /// [`PageLayout::browse_bbox`]).
+    fn browse_bbox(&self) -> String {
+        view::featured_bbox_param()
+    }
 }
 
 /// HTMX fragment: only the results region.
@@ -310,6 +323,14 @@ pub struct SearchResultsVm {
     /// field, so the empty-state "Add a spot" CTA reads these directly.
     pub is_authenticated: bool,
     pub can_contribute: bool,
+}
+
+impl SearchResultsVm {
+    /// Same explore-the-map box as the full page: the prompt that carries the
+    /// link lives in the shared partial, which is also rendered standalone.
+    fn browse_bbox(&self) -> String {
+        view::featured_bbox_param()
+    }
 }
 
 /// P3 — parking details.

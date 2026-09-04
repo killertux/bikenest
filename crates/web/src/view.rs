@@ -179,6 +179,10 @@ pub fn open_label(t: Translator, s: OpenStatus) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct CardVm {
     pub id: i64,
+    /// 1-based position in the results list this card belongs to — the number
+    /// on the card's badge and on its map marker. `0` for cards outside a
+    /// numbered list (the home page's featured strip, the favorites list).
+    pub n: usize,
     pub name: String,
     pub address: String,
     pub type_label: String,
@@ -222,6 +226,9 @@ impl CardVm {
             .collect();
         Self {
             id: s.id,
+            // Only a numbered results list knows a card's position; callers
+            // that render one set it after the fact (`build_results`).
+            n: 0,
             name: s.name.clone(),
             address: s.address.clone(),
             type_label: type_label(t, s.parking_type).to_string(),
@@ -273,25 +280,56 @@ fn image_for(ty: ParkingType) -> (&'static str, &'static str) {
 
 /// One marker's data for the search page's `<script type="application/json"
 /// id="search-data">` island (WP14) — only what `web/static/js/search.js`
-/// actually reads: `id` (card↔marker sync via `data-parking-id`), `lat`/`lon`
-/// (marker position) and `name` (marker title). Deliberately not the full
-/// `CardVm` — that duplicated every card field (labels, image paths, security
-/// chips…) into a ~30 KB JSON blob the map never touches.
+/// actually reads: `id` (card↔marker sync via `data-parking-id`), `n` (the
+/// number drawn in the marker, matching the card's badge), `lat`/`lon`
+/// (position), `name`, the two labels the popup shows, and `href` (the popup's
+/// "view details" link). Deliberately not the full `CardVm` — that duplicated
+/// every card field (image paths, security chips, freshness…) into a ~30 KB
+/// JSON blob the map never touches.
+///
+/// Every string here is written into the popup with `textContent`, never
+/// `innerHTML`, so a location's name cannot smuggle markup into the map.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MapItemVm {
     pub id: i64,
+    pub n: usize,
     pub lat: f64,
     pub lon: f64,
     pub name: String,
+    pub distance_label: String,
+    pub cost_label: String,
+    pub href: String,
 }
 
-impl From<&CardVm> for MapItemVm {
-    fn from(c: &CardVm) -> Self {
+impl MapItemVm {
+    /// The marker for a card, numbered by its position in the list.
+    fn from_card(c: &CardVm, n: usize) -> Self {
         Self {
             id: c.id,
+            n,
             lat: c.lat,
             lon: c.lon,
             name: c.name.clone(),
+            distance_label: c.distance_label.clone(),
+            cost_label: c.cost_label.clone(),
+            href: c.url.clone(),
+        }
+    }
+
+    /// A marker for a browse row the list does not show: the map draws every
+    /// location inside the viewport (up to the marker cap), while the list
+    /// stops at [`bikenest_application::BROWSE_LIST_CAP`], so these markers
+    /// carry their own labels rather than a card's.
+    fn from_summary(t: Translator, s: &bikenest_application::ParkingSummary, n: usize) -> Self {
+        Self {
+            id: s.id,
+            n,
+            lat: s.point.lat(),
+            lon: s.point.lon(),
+            name: s.name.clone(),
+            distance_label: distance_label(s.distance_m),
+            cost_label: cost_label(t, &s.cost),
+            href: format!("/parking/{}", s.id),
         }
     }
 }
@@ -306,6 +344,12 @@ pub struct ResultsData {
     pub error: Option<String>,
     /// Precomputed JSON for the map (Alpine/JS reads this).
     pub map_json: String,
+    /// Browse mode (`?bbox=`): the heading names the area rather than a
+    /// destination, and the list says distances are from the map's centre.
+    pub browse: bool,
+    /// Browse mode, area too full to list: how many matched, and the ask to
+    /// zoom in. Browse has no next page, so this is what stands in for one.
+    pub refine_hint: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -320,14 +364,21 @@ pub async fn build_results(
     storage: &dyn ObjectStorage,
 ) -> ResultsData {
     let mut items = Vec::with_capacity(page.items.len());
-    for s in &page.items {
+    for (i, s) in page.items.iter().enumerate() {
         let freshness = bikenest_domain::categorize(s.last_verified_at, now, thresholds);
         let photo_url = resolve_photo(storage, s.photo_key.as_deref()).await;
-        items.push(CardVm::from_summary(t, s, freshness, photo_url));
+        let mut card = CardVm::from_summary(t, s, freshness, photo_url);
+        // The badge on the card and the number in its marker are the same
+        // position, assigned once here so they cannot drift apart.
+        card.n = i + 1;
+        items.push(card);
     }
 
     // Trimmed to what search.js reads (WP14) — see `MapItemVm`.
-    let map_items: Vec<MapItemVm> = items.iter().map(MapItemVm::from).collect();
+    let map_items: Vec<MapItemVm> = items
+        .iter()
+        .map(|c| MapItemVm::from_card(c, c.n))
+        .collect();
     let map_json = escape_script_json(
         serde_json::json!({
             "origin": hit.map(|h| serde_json::json!({"lat": h.point.lat(), "lon": h.point.lon(), "label": h.label})),
@@ -354,6 +405,89 @@ pub async fn build_results(
         cursor_url,
         error: None,
         map_json,
+        browse: false,
+        refine_hint: None,
+    }
+}
+
+/// The `west,south,east,north` box every "browse the map" entry point uses:
+/// [`FEATURED_ORIGIN`](bikenest_infrastructure::FEATURED_ORIGIN) ± the
+/// featured half-span. A constant, so the nav link, the home page's explore
+/// link and the empty-search prompt all open the same view.
+pub fn featured_bbox_param() -> String {
+    let (lat, lon) = bikenest_infrastructure::FEATURED_ORIGIN;
+    let d = bikenest_infrastructure::FEATURED_BBOX_HALF_DEG;
+    format!(
+        "{:.4},{:.4},{:.4},{:.4}",
+        lon - d,
+        lat - d,
+        lon + d,
+        lat + d
+    )
+}
+
+/// Browse mode's results payload: what is inside the map's own viewport.
+///
+/// Two caps, one answer. The list is the nearest
+/// [`BROWSE_LIST_CAP`](bikenest_application::BROWSE_LIST_CAP) rows — cards
+/// cost a presigned photo URL each, and a list nobody can read is not a
+/// result — while the map draws every row the reader returned (up to the
+/// marker cap) so panning is honest about what is there. Numbers run across
+/// the whole marker set, so marker 7 is card 7 wherever the list stops.
+///
+/// A viewport past the marker cap comes back as grid counts instead of rows:
+/// no cards at all, the counts on the map, and `refine_hint` asking for a
+/// smaller area.
+pub async fn build_browse_results(
+    t: Translator,
+    bounds: &bikenest_application::BoundsQuery,
+    page: &bikenest_application::BoundsPage,
+    now: chrono::DateTime<chrono::Utc>,
+    thresholds: &bikenest_domain::FreshnessThresholds,
+    storage: &dyn ObjectStorage,
+) -> ResultsData {
+    let listed = page.items.len().min(bikenest_application::BROWSE_LIST_CAP);
+    let mut items = Vec::with_capacity(listed);
+    for (i, s) in page.items.iter().take(listed).enumerate() {
+        let freshness = bikenest_domain::categorize(s.last_verified_at, now, thresholds);
+        let photo_url = resolve_photo(storage, s.photo_key.as_deref()).await;
+        let mut card = CardVm::from_summary(t, s, freshness, photo_url);
+        card.n = i + 1;
+        items.push(card);
+    }
+    let map_items: Vec<MapItemVm> = page
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, s)| MapItemVm::from_summary(t, s, i + 1))
+        .collect();
+    let clusters: Vec<serde_json::Value> = page
+        .clusters
+        .iter()
+        .map(|c| serde_json::json!({"lat": c.lat, "lon": c.lon, "count": c.count}))
+        .collect();
+    let map_json = escape_script_json(
+        serde_json::json!({
+            "origin": null,
+            "bbox": [bounds.west, bounds.south, bounds.east, bounds.north],
+            "items": map_items,
+            "clusters": clusters,
+            "total": page.total,
+        })
+        .to_string(),
+    );
+    let refine_hint = (page.total > items.len()).then(|| t.t("search.browse.refine").to_string());
+    ResultsData {
+        destination_label: None,
+        total_label: t.spots(page.total as i64),
+        items,
+        // Browse is not paginated: the answer is a viewport, and the next one
+        // is a pan, not a cursor.
+        cursor_url: None,
+        error: None,
+        map_json,
+        browse: true,
+        refine_hint,
     }
 }
 
@@ -1619,9 +1753,13 @@ mod tests {
     fn map_item_json_contains_only_the_allowed_keys() {
         let item = MapItemVm {
             id: 42,
+            n: 1,
             lat: -25.43,
             lon: -49.27,
             name: "Paraciclo Rua XV".to_string(),
+            distance_label: "300 m".to_string(),
+            cost_label: "Free".to_string(),
+            href: "/parking/42".to_string(),
         };
         let value = serde_json::to_value(&item).unwrap();
         let mut keys: Vec<&str> = value
@@ -1631,7 +1769,19 @@ mod tests {
             .map(String::as_str)
             .collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["id", "lat", "lon", "name"]);
+        assert_eq!(
+            keys,
+            [
+                "cost_label",
+                "distance_label",
+                "href",
+                "id",
+                "lat",
+                "lon",
+                "n",
+                "name"
+            ]
+        );
     }
 
     #[test]

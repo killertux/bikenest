@@ -1,8 +1,8 @@
 //! Search use cases: `SearchParking` and `GetParkingDetails`.
 
 use crate::ports::{
-    FreshnessConfig, GeoHit, GeocodeError, Geocoder, ParkingDetailsReader, ParkingSearchReader,
-    ReaderError, SearchInput, SearchPage, SearchRequest,
+    BoundsPage, BoundsQuery, FreshnessConfig, GeoHit, GeocodeError, Geocoder, ParkingDetailsReader,
+    ParkingSearchReader, ReaderError, SearchInput, SearchPage, SearchRequest,
 };
 use bikenest_domain::{FreshnessCategory, GeoPoint};
 
@@ -13,6 +13,14 @@ pub enum SearchError {
     MissingDestination,
     #[error("origin coordinates are invalid")]
     InvalidOrigin,
+    /// Browse mode: the bounding box is missing, malformed, inside out, off
+    /// the globe, or larger than [`crate::ports::MAX_BROWSE_SPAN_DEG`].
+    #[error("the map area is not a valid bounding box")]
+    InvalidBounds,
+    /// Browse mode has no pages: a cursor alongside a bounding box is a URL
+    /// that cannot be answered, not an empty page.
+    #[error("browse results are not paginated")]
+    BoundsNotPaginated,
     #[error(transparent)]
     Geocode(#[from] GeocodeError),
     #[error(transparent)]
@@ -67,6 +75,35 @@ impl SearchParking {
         let (request, geohit) = self.resolve(input).await?;
         let page = self.page(&request).await?;
         Ok((page, geohit))
+    }
+
+    /// Browse: everything inside the map's own viewport.
+    ///
+    /// The complement of [`Self::execute`] — no destination, no geocode, no
+    /// radius, no cursor. The filters are the same ones a radius search takes,
+    /// so panning the map keeps whatever the viewer had narrowed down to.
+    ///
+    /// Distances on the result rows are measured from the box's centre (the
+    /// reader computes them), which is what makes "300 m" mean anything on a
+    /// list that has no destination.
+    /// Returns the validated box alongside its contents: the view layer needs
+    /// the box it actually queried (to frame the map), and re-parsing the raw
+    /// parameter up there would put the validation rule in two places.
+    pub async fn browse(
+        &self,
+        input: &SearchInput,
+    ) -> Result<(BoundsQuery, BoundsPage), SearchError> {
+        if input.cursor.as_deref().is_some_and(|c| !c.trim().is_empty()) {
+            return Err(SearchError::BoundsNotPaginated);
+        }
+        let query = BoundsQuery::parse(
+            input.bbox.as_deref().unwrap_or_default(),
+            input.filters(),
+            crate::ports::BROWSE_MARKER_CAP,
+        )
+        .ok_or(SearchError::InvalidBounds)?;
+        let page = self.reader.in_bounds(&query).await?;
+        Ok((query, page))
     }
 
     /// Origin resolution (§21/§22): explicit coordinates win over the query;

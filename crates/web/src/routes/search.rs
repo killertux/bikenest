@@ -40,6 +40,11 @@ pub struct SearchParams {
     #[serde(default)]
     pub sort: String,
     pub cursor: Option<String>,
+    /// Browse mode: `west,south,east,north` in WGS84 degrees, as the map
+    /// writes it. Honoured only when there is no destination to search around
+    /// — see [`search`].
+    #[serde(default)]
+    pub bbox: String,
 }
 
 impl SearchParams {
@@ -56,10 +61,25 @@ impl SearchParams {
             sort: (!self.sort.is_empty()).then(|| self.sort.clone()),
             page_size: None,
             cursor: self.cursor.clone(),
+            bbox: (!self.bbox.is_empty()).then(|| self.bbox.clone()),
         }
     }
 
+    /// Is this a request to browse a map area rather than search around a
+    /// destination? A box only counts when nothing better is on offer:
+    /// explicit coordinates and a free-text query both name a destination, and
+    /// a destination is what the viewer actually asked for.
+    fn is_browse(&self) -> bool {
+        !self.bbox.trim().is_empty()
+            && self.q.trim().is_empty()
+            && !(self.lat.is_some() && self.lon.is_some())
+    }
+
     /// Query string without the cursor (for building the next-page link).
+    ///
+    /// `bbox` is deliberately absent: browse mode has no next page, and a box
+    /// that reached a *paginated* answer was ignored by [`Self::is_browse`]
+    /// anyway — carrying it into the link would suggest otherwise.
     fn query_string(&self) -> String {
         let mut parts = Vec::new();
         if !self.q.is_empty() {
@@ -117,6 +137,8 @@ pub(crate) fn results_notice(tr: Translator, key: &str) -> ResultsData {
         cursor_url: None,
         error: Some(tr.t(key).to_string()),
         map_json: serde_json::json!({ "origin": null, "items": [] }).to_string(),
+        browse: false,
+        refine_hint: None,
     }
 }
 
@@ -169,6 +191,12 @@ pub(crate) async fn search(
     let input = params.to_input();
     let query_string = params.query_string();
 
+    // Browse mode short-circuits everything below: a bounding box needs no
+    // geocode, so it can neither cost a provider call nor spend a budget.
+    if params.is_browse() {
+        return browse(&state, tr, &auth, &params, &headers, is_htmx).await;
+    }
+
     // One view of `/search?q=…` can be one billable geocode, so a page that
     // has to resolve free text is metered per IP before the use case runs.
     if geocode_is_billable(&state, &input) && !geocode_within_budget(&state, &ip).await {
@@ -213,6 +241,52 @@ pub(crate) async fn search(
     };
 
     render_search(&state, tr, &auth, &params, results, is_htmx, StatusCode::OK)
+}
+
+/// P2, browse mode — everything inside the map's current viewport.
+///
+/// The complement of a radius search: no destination, no geocode, no sort and
+/// no pages. A box that cannot be honoured is the viewer's URL, not a server
+/// fault, so both refusals are a 400 carrying the same styled results notice
+/// every other bad-input case uses.
+async fn browse(
+    state: &AppState,
+    tr: Translator,
+    auth: &Auth,
+    params: &Query<SearchParams>,
+    headers: &HeaderMap,
+    is_htmx: bool,
+) -> Response {
+    let notice = |key: &str| {
+        render_search(
+            state,
+            tr,
+            auth,
+            params,
+            results_notice(tr, key),
+            is_htmx,
+            StatusCode::BAD_REQUEST,
+        )
+    };
+    match state.search.browse(&params.to_input()).await {
+        Ok((bounds, page)) => {
+            let results = view::build_browse_results(
+                tr,
+                &bounds,
+                &page,
+                chrono::Utc::now(),
+                &state.freshness.thresholds,
+                &*state.storage,
+            )
+            .await;
+            render_search(state, tr, auth, params, results, is_htmx, StatusCode::OK)
+        }
+        Err(bikenest_application::SearchError::InvalidBounds) => notice("search.browse.invalid"),
+        Err(bikenest_application::SearchError::BoundsNotPaginated) => {
+            notice("search.browse.no_pages")
+        }
+        Err(_) => internal_error(headers, &state.map, auth, tr),
+    }
 }
 
 /// Render a results page: the bare list for an htmx swap, the full document

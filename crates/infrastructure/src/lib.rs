@@ -40,8 +40,8 @@ pub use email::{
     render as render_email,
 };
 pub use geocoding::{
-    CachingGeocoder, FEATURED_ORIGIN, FakeGeocoder, MapboxGeocoder, SharedGeocoder,
-    geocoder_from_config,
+    CachingGeocoder, FEATURED_BBOX_HALF_DEG, FEATURED_ORIGIN, FakeGeocoder, MapboxGeocoder,
+    SharedGeocoder, geocoder_from_config,
 };
 pub use job::{
     ClaimedJob, JobRegistry, JobServices, SendEmailHandler, SqlxJobRepository, Worker, job_services,

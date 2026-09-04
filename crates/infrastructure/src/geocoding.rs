@@ -33,6 +33,16 @@ use std::time::{Duration, Instant};
 /// coordinates win over a query).
 pub const FEATURED_ORIGIN: (f64, f64) = (-25.429_700, -49.270_500);
 
+/// Half-side of the "explore the centre" browse box, in degrees: ±0.02° is
+/// ~2.2 km north–south and ~2.0 km east–west at this latitude — a downtown's
+/// worth of map, and well inside the browse span limit.
+///
+/// Every "browse the map" entry point (the nav's parking link, the home page's
+/// explore link, the empty-search prompt) is this box around
+/// [`FEATURED_ORIGIN`], so they all land on the same view instead of one
+/// hard-coded street.
+pub const FEATURED_BBOX_HALF_DEG: f64 = 0.02;
+
 // ---------------------------------------------------------------------------
 // FakeGeocoder (deterministic, dev/test only)
 // ---------------------------------------------------------------------------
