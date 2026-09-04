@@ -15,6 +15,9 @@
       <div class="mt-4 rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">{{ error.as_deref().unwrap_or("") }}</div>
     {% endif %}
 
+    {# The safety net: a similar spot created between the pre-create check and
+       the insert. The normal duplicate path is the interstitial, which runs
+       before anything exists (pages/parking_new_confirm.html). #}
     {% if !duplicates.is_empty() %}
       <div class="mt-4 rounded-lg border border-aging/30 bg-aging/10 px-4 py-3 text-sm">
         <p class="font-medium">{{ tr.t("new.duplicate.title") }}</p>
@@ -34,10 +37,42 @@
           <label for="name" class="mb-1 block text-sm font-medium">{{ tr.t("new.field.name") }}</label>
           <input id="name" name="name" value="{{ name }}" required class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
         </div>
-        <div class="sm:col-span-2">
+
+        {# Address + map picker. The address is what a contributor knows; the
+           pin (and the geocode button behind it) is how that becomes a
+           position. The real lat/lon inputs live in "Advanced" below, so the
+           form still submits a position with scripting off. #}
+        <div class="sm:col-span-2" x-data="pinPicker"
+             data-empty="{{ tr.t("form.picked_none") }}"
+             data-locate-failed="{{ tr.t("form.locate_failed") }}"
+             data-geocode-failed="{{ tr.t("form.geocode_failed") }}">
           <label for="address" class="mb-1 block text-sm font-medium">{{ tr.t("new.field.address") }}</label>
-          <input id="address" name="address" value="{{ address }}" required class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
+          <input id="address" name="address" value="{{ address }}" required @change="addressChanged"
+                 class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
+
+          <div class="mt-3 flex flex-wrap items-center gap-2">
+            <button type="button" @click="findAddress"
+                    class="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted hover:border-accent hover:text-fg">
+              {{ tr.t("form.geocode_address") }}
+            </button>
+            <button type="button" @click="useLocation"
+                    class="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted hover:border-accent hover:text-fg">
+              {{ tr.t("form.use_location") }}
+              <span x-show="locating" class="text-muted">…</span>
+            </button>
+          </div>
+
+          <p class="mt-3 text-sm font-medium">{{ tr.t("form.pin.title") }}</p>
+          <p class="text-xs text-muted">{{ tr.t("form.pin_hint") }}</p>
+          <div id="pin-map" class="mt-2"
+               data-lat="{{ lat }}" data-lon="{{ lon }}"
+               data-default-lat="{{ default_lat }}" data-default-lon="{{ default_lon }}"
+               data-lat-input="lat" data-lon-input="lon"
+               @bikenest:pin="onPin"></div>
+          <p class="mt-2 text-xs text-muted">{{ tr.t("form.picked") }}: <span x-text="coords">{% if lat.is_empty() || lon.is_empty() %}{{ tr.t("form.picked_none") }}{% else %}{{ lat }}, {{ lon }}{% endif %}</span></p>
+          <p x-show="message" class="mt-1 text-xs font-medium text-danger" x-text="message"></p>
         </div>
+
         <div class="sm:col-span-2">
           <label for="description" class="mb-1 block text-sm font-medium">{{ tr.t("new.field.description") }}</label>
           <textarea id="description" name="description" rows="3" class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent">{{ description }}</textarea>
@@ -90,44 +125,49 @@
             </div>
           </div>
         </div>
-        <div>
-          <label for="lat" class="mb-1 block text-sm font-medium">{{ tr.t("new.field.lat") }}</label>
-          <input id="lat" name="lat" type="number" step="any" value="{{ lat }}" required placeholder="-25.4284" class="w-full rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-accent" />
-        </div>
-        <div>
-          <label for="lon" class="mb-1 block text-sm font-medium">{{ tr.t("new.field.lon") }}</label>
-          <input id="lon" name="lon" type="number" step="any" value="{{ lon }}" required placeholder="-49.2733" class="w-full rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-accent" />
-        </div>
-        <div class="sm:col-span-2">
-          <label for="timezone" class="mb-1 block text-sm font-medium">{{ tr.t("new.field.tz") }}</label>
-          <input id="timezone" name="timezone" value="{{ timezone }}" placeholder="America/Sao_Paulo" class="w-full rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-accent" />
-          <p class="mt-1 text-xs text-muted">{{ tr.t("new.field.tz_hint") }}</p>
-        </div>
-        <div class="sm:col-span-2">
-          <label class="flex items-center gap-2 text-sm">
-            <input type="checkbox" name="open_24h" value="true" {% if open_24h %}checked{% endif %} class="rounded border-border text-accent" />
-            {{ tr.t("new.field.open_24h") }}
-          </label>
-        </div>
       </div>
 
-      <fieldset class="mt-4">
-        <legend class="text-sm font-medium">{{ tr.t("new.field.security") }}</legend>
-        <div class="mt-2" x-data="parkingForm" data-picked="{{ security }}" @change="updatePicked">
-          <div class="grid gap-2 sm:grid-cols-2">
-            {% for o in security_options %}
-              <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" value="{{ o.value }}" {% if o.checked %}checked{% endif %} class="rounded border-border text-accent" />
-                {{ o.label }}
-              </label>
-            {% endfor %}
+      {% include "components/hours_editor.html" %}
+      {% include "components/security_tristate.html" %}
+
+      {# Coordinates and timezone: still real inputs, still submitted, just not
+         the first thing a contributor is asked for. Left alone, the pin sets
+         the position and the server derives the timezone from it. #}
+      <details class="mt-6 rounded-lg border border-border bg-surface px-3 py-2">
+        <summary class="cursor-pointer text-sm font-medium">{{ tr.t("form.advanced") }}</summary>
+        <p class="mt-2 text-xs text-muted">{{ tr.t("form.advanced_hint") }}</p>
+        <div class="mt-3 grid gap-3 sm:grid-cols-2">
+          <div>
+            <label for="lat" class="mb-1 block text-sm font-medium">{{ tr.t("new.field.lat") }}</label>
+            <input id="lat" name="lat" type="number" step="any" value="{{ lat }}" placeholder="-25.4284" class="w-full rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-accent" />
           </div>
-          <input type="hidden" name="security" :value="picked" value="{{ security }}" />
+          <div>
+            <label for="lon" class="mb-1 block text-sm font-medium">{{ tr.t("new.field.lon") }}</label>
+            <input id="lon" name="lon" type="number" step="any" value="{{ lon }}" placeholder="-49.2733" class="w-full rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-accent" />
+          </div>
+          <div class="sm:col-span-2">
+            <label for="timezone" class="mb-1 block text-sm font-medium">{{ tr.t("new.field.tz") }}</label>
+            <input id="timezone" name="timezone" value="{{ timezone }}" placeholder="America/Sao_Paulo" class="w-full rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-accent" />
+            <p class="mt-1 text-xs text-muted">{{ tr.t("new.field.tz_hint") }}</p>
+          </div>
         </div>
-      </fieldset>
+      </details>
 
       <button type="submit" class="mt-6 w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("new.submit") }}</button>
     </form>
   </div>
 </div>
+{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ layout.asset("vendor/maplibre-gl.css") }}">
+<link rel="stylesheet" href="{{ layout.asset("css/map.css") }}">
+{% if !layout.map_style_url.is_empty() %}
+<link rel="preconnect" href="{{ layout.tile_origin() }}" crossorigin>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ layout.asset("vendor/maplibre-gl.js") }}"></script>
+<script src="{{ layout.asset("js/pin-picker.js") }}"></script>
 {% endblock %}

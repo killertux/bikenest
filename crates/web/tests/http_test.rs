@@ -1575,7 +1575,8 @@ async fn verified_user_adds_a_location_and_sees_details(tx: &mut bikenest_test_s
             ("lat", "-25.4284"),
             ("lon", "-49.2733"),
             ("timezone", "America/Sao_Paulo"),
-            ("security", "well_lit"),
+            ("sec_well_lit", "yes"),
+            ("confirm", "1"),
         ],
         Some(&cookie),
     )
@@ -1691,6 +1692,13 @@ async fn add_location(
     if !extra.iter().any(|(k, _)| *k == "cost_kind") {
         fields.push(("cost_kind".into(), "unknown".into()));
     }
+    // `confirm=1` skips the pre-create duplicate interstitial: this helper's
+    // job is "a spot now exists", and without it a submission that resembles
+    // one an earlier test left behind answers 200 with the interstitial
+    // instead of the 303 the callers assert on.
+    if !extra.iter().any(|(k, _)| *k == "confirm") {
+        fields.push(("confirm".into(), "1".into()));
+    }
     fields.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
     let refs: Vec<(&str, &str)> = fields
         .iter()
@@ -1726,8 +1734,14 @@ async fn edit_preserves_cost_security_and_hours(tx: &mut bikenest_test_support::
             ("price", "1"),
             ("price_currency", "BRL"),
             ("price_unit", "hour"),
-            ("security", "well_lit"),
-            ("open_24h", "true"),
+            ("sec_well_lit", "yes"),
+            ("h_mon_state", "all_day"),
+            ("h_tue_state", "all_day"),
+            ("h_wed_state", "all_day"),
+            ("h_thu_state", "all_day"),
+            ("h_fri_state", "all_day"),
+            ("h_sat_state", "all_day"),
+            ("h_sun_state", "all_day"),
         ],
     )
     .await;
@@ -1740,10 +1754,13 @@ async fn edit_preserves_cost_security_and_hours(tx: &mut bikenest_test_support::
         "cost pre-filled, not defaulted to free"
     );
     assert!(
-        edit_html.contains("value=\"well_lit\""),
-        "security pre-filled"
+        edit_html.contains(r#"name="sec_well_lit" value="yes" class="peer sr-only" checked"#),
+        "the security radio pre-selects yes: {edit_html}"
     );
-    assert!(edit_html.contains("checked"), "open_24h pre-filled");
+    assert!(
+        edit_html.contains(r#"value="all_day" selected"#),
+        "the hours editor pre-selects the stored state"
+    );
 
     // Editing only the name must NOT reset cost/security/hours.
     let edit_csrf = extract_csrf(&edit_html);
@@ -1760,8 +1777,14 @@ async fn edit_preserves_cost_security_and_hours(tx: &mut bikenest_test_support::
             ("price", "1"),
             ("price_currency", "BRL"),
             ("price_unit", "hour"),
-            ("security", "well_lit"),
-            ("open_24h", "true"),
+            ("sec_well_lit", "yes"),
+            ("h_mon_state", "all_day"),
+            ("h_tue_state", "all_day"),
+            ("h_wed_state", "all_day"),
+            ("h_thu_state", "all_day"),
+            ("h_fri_state", "all_day"),
+            ("h_sat_state", "all_day"),
+            ("h_sun_state", "all_day"),
         ],
         Some(&cookie),
     )
@@ -1810,8 +1833,6 @@ async fn edit_writes_revision_visible_in_contributions(tx: &mut bikenest_test_su
             ("address", "Rua X, 1"),
             ("parking_type", "rack"),
             ("cost_kind", "unknown"),
-            ("security", ""),
-            ("open_24h", ""),
         ],
         Some(&cookie),
     )
@@ -1942,8 +1963,8 @@ async fn parking_create_is_rate_limited(tx: &mut bikenest_test_support::TestTx) 
     let csrf = extract_csrf(&form);
 
     // parking-create: 5/day per user (Ledger #6). Post 5, then the 6th → 429.
-    // Each add uses a distinct point (and distinct name) so none trips the
-    // advisory duplicate check and returns a re-render instead of a redirect.
+    // Each add carries `confirm=1`, so the pre-create duplicate interstitial
+    // never stands in for the redirect (or for the 429).
     for i in 0..5 {
         let lat = -23.4 - i as f64 * 0.01;
         let name = format!("RateSpot{n}{i}", n = i); // distinct low-similarity names
@@ -1959,6 +1980,7 @@ async fn parking_create_is_rate_limited(tx: &mut bikenest_test_support::TestTx) 
                 ("lat", &lat.to_string()),
                 ("lon", "-46.6"),
                 ("timezone", "America/Sao_Paulo"),
+                ("confirm", "1"),
             ],
             Some(&cookie),
         )
@@ -1977,6 +1999,7 @@ async fn parking_create_is_rate_limited(tx: &mut bikenest_test_support::TestTx) 
             ("lat", "-23.4"),
             ("lon", "-46.6"),
             ("timezone", "America/Sao_Paulo"),
+            ("confirm", "1"),
         ],
         Some(&cookie),
     )
@@ -2049,7 +2072,8 @@ async fn multiple_security_values_and_major_unit_price(tx: &mut bikenest_test_su
             ("price", "1.50"),
             ("price_currency", "BRL"),
             ("price_unit", "hour"),
-            ("security", "well_lit,cctv"),
+            ("sec_well_lit", "yes"),
+            ("sec_cctv", "yes"),
         ],
     )
     .await;
@@ -2087,8 +2111,8 @@ async fn multiple_security_values_and_major_unit_price(tx: &mut bikenest_test_su
             ("price", "1.50"),
             ("price_currency", "BRL"),
             ("price_unit", "hour"),
-            ("security", "well_lit,cctv"),
-            ("open_24h", ""),
+            ("sec_well_lit", "yes"),
+            ("sec_cctv", "yes"),
         ],
         Some(&cookie),
     )
@@ -6372,6 +6396,34 @@ async fn app_with_geocode_budget(per_ip: u32) -> axum::Router {
         .expect("test config builds every provider")
 }
 
+/// [`app_with_geocode_budget`] plus the captured mail, so a test can register
+/// and verify a session against the same limiter bucket.
+async fn auth_app_with_geocode_budget(per_ip: u32) -> (axum::Router, FakeEmailProvider) {
+    let email = FakeEmailProvider::with_root(None);
+    let config = bikenest_infrastructure::Config {
+        geocode: bikenest_infrastructure::GeocodeLimits {
+            per_ip,
+            window: std::time::Duration::from_secs(900),
+        },
+        ..test_config()
+    };
+    let deps = RouterDeps {
+        email: std::sync::Arc::new(email.clone()),
+        oauth: None,
+        hasher: TestPasswordHasher,
+        rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
+        storage: std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
+    };
+    (
+        app_router_with(
+            std::sync::Arc::new(config),
+            Db::from_pool(pool().await),
+            deps,
+        ),
+        email,
+    )
+}
+
 /// Resolving a free-text destination is a billable third-party call, so one
 /// network cannot spend an unbounded number of them — but a destination the
 /// in-process cache can already answer costs the provider nothing and must
@@ -6425,4 +6477,412 @@ async fn a_search_without_a_destination_is_not_metered(_tx: &mut TestTx) {
     // The one geocode in the budget is still there to spend.
     let (status, _) = get_c(&app, "/search?q=delta+drive", None).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+// ---------------------------------------------------------------------------
+// WP19: contributing from a phone — the map picker's no-JS fields, the hours
+// and tri-state security editors, the pre-create duplicate interstitial, and
+// the address→coordinates endpoint behind the picker.
+// ---------------------------------------------------------------------------
+
+/// The add form must ask for a place, not for GIS data: no required decimal
+/// coordinates in the main flow, no visible timezone field, a real hours
+/// editor and three-way security controls.
+#[db_test]
+async fn add_form_asks_for_a_place_not_for_coordinates(tx: &mut TestTx) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp19-form@example.com";
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+    let (status, body) = get_c(&app, "/parking/new", Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The picker's container, and the coordinates demoted into <details>.
+    assert!(
+        body.contains(r#"id="pin-map""#),
+        "the map picker is rendered"
+    );
+    assert!(
+        body.contains("<details") && body.contains("Advanced"),
+        "the coordinates live behind an Advanced disclosure: {body}"
+    );
+    assert!(
+        body.contains(r#"id="lat" name="lat""#) && body.contains(r#"id="lon" name="lon""#),
+        "…but they are still real inputs, so the no-JS path can post them"
+    );
+    assert!(
+        !body.contains(r#"name="lat" type="number" step="any" value="" required"#),
+        "coordinates are not a required field of the main flow"
+    );
+    let tz_at = body
+        .find(r#"name="timezone""#)
+        .expect("timezone input exists");
+    let details_at = body.find("<details").expect("an Advanced block exists");
+    assert!(
+        tz_at > details_at,
+        "the timezone field is inside Advanced, not in the default flow"
+    );
+
+    // The hours editor: seven day rows, each with the four states.
+    for day in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] {
+        assert!(
+            body.contains(&format!(r#"name="h_{day}_state""#)),
+            "hours row for {day}"
+        );
+        assert!(
+            body.contains(&format!(r#"name="h_{day}_1_open""#)),
+            "first range for {day}"
+        );
+    }
+    assert!(body.contains(r#"value="all_day""#) && body.contains(r#"value="ranges""#));
+
+    // Security: eight groups × three options, with real `name`s (the old
+    // checkboxes had none, so scripting off dropped every selection).
+    for code in [
+        "dedicated_locking_point",
+        "indoor",
+        "cctv",
+        "staffed",
+        "security_guard",
+        "controlled_access",
+        "well_lit",
+        "restricted_access",
+    ] {
+        for state in ["yes", "no", "unknown"] {
+            assert!(
+                body.contains(&format!(r#"name="sec_{code}" value="{state}""#)),
+                "security radio sec_{code}={state}"
+            );
+        }
+    }
+    assert!(
+        !body.contains(r#"name="security""#),
+        "the hidden comma-separated mirror is gone"
+    );
+
+    let _ = tx;
+    cleanup_user_contributions(EMAIL).await;
+}
+
+/// The whole no-JS submission: the fields a browser with no scripting can
+/// produce, and nothing else. A definitive "no" reaches the details page as
+/// the ✗ marker, and a weekly overnight range reaches its hours table.
+#[db_test]
+async fn a_script_free_submission_records_hours_and_a_definitive_no(tx: &mut TestTx) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp19-nojs@example.com";
+    const MARK: &str = "wp19-nojs";
+    sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
+        .bind(MARK)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+    let (_, form) = get_c(&app, "/parking/new", Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+
+    let (status, _, _) = post_form(
+        &app,
+        "/parking/new",
+        &[
+            ("csrf", &csrf),
+            ("name", "Overnight Rack"),
+            ("address", "Rua Y, 9"),
+            ("parking_type", "rack"),
+            ("cost_kind", "unknown"),
+            // Typed into the Advanced disclosure: no map, no geolocation.
+            ("lat", "-23.5"),
+            ("lon", "-46.7"),
+            ("h_mon_state", "ranges"),
+            ("h_mon_1_open", "22:00"),
+            ("h_mon_1_close", "02:00"),
+            ("h_tue_state", "closed"),
+            ("sec_cctv", "no"),
+            ("sec_well_lit", "yes"),
+            ("confirm", "1"),
+        ],
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::SEE_OTHER,
+        "the no-JS field set is a complete submission"
+    );
+
+    let (id,): (i64,) = sqlx::query_as(
+        "SELECT id FROM parking_location WHERE name = 'Overnight Rack' ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+
+    // No timezone was posted; the service derived one from the point.
+    let (timezone,): (String,) =
+        sqlx::query_as("SELECT timezone FROM parking_location WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert!(
+        !timezone.is_empty(),
+        "the timezone is derived from the pin, not typed"
+    );
+
+    // The overnight range is stored on Monday only; Tuesday has no row.
+    let rows: Vec<(i16, chrono::NaiveTime, chrono::NaiveTime, bool)> = sqlx::query_as(
+        "SELECT day_of_week, opens_at, closes_at, all_day FROM opening_hours
+         WHERE location_id = $1 ORDER BY day_of_week",
+    )
+    .bind(id)
+    .fetch_all(&pool().await)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1, "one range, on one day: {rows:?}");
+    assert_eq!(rows[0].0, 1, "Monday");
+    assert_eq!(
+        rows[0].1,
+        chrono::NaiveTime::from_hms_opt(22, 0, 0).unwrap()
+    );
+    assert_eq!(rows[0].2, chrono::NaiveTime::from_hms_opt(2, 0, 0).unwrap());
+    assert!(!rows[0].3);
+
+    // CCTV recorded as a definitive NO (state 2), not as unknown.
+    let (cctv,): (i16,) = sqlx::query_as(
+        "SELECT state FROM parking_security WHERE location_id = $1 AND feature_code = 'cctv'",
+    )
+    .bind(id)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    assert_eq!(cctv, 2, "\"no\" is recordable");
+
+    // …and the details page's ✗ marker, previously unreachable, renders.
+    let (status, body) = get_c(&app, &format!("/parking/{id}"), Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"aria-label="No">✗</span><span class="text-muted">CCTV"#),
+        "the details page marks CCTV as absent: {body}"
+    );
+    assert!(
+        body.contains("22:00 – 02:00"),
+        "the hours table shows the overnight range"
+    );
+
+    let _ = tx;
+    cleanup_user_contributions(EMAIL).await;
+}
+
+/// A day whose two ranges overlap is refused with the message next to that
+/// day, and nothing is created.
+#[db_test]
+async fn overlapping_hours_are_refused_with_a_field_level_message(tx: &mut TestTx) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp19-overlap@example.com";
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+    let (_, form) = get_c(&app, "/parking/new", Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+
+    let (status, body, _) = post_form(
+        &app,
+        "/parking/new",
+        &[
+            ("csrf", &csrf),
+            ("name", "Overlap Spot"),
+            ("address", "Rua Y, 9"),
+            ("parking_type", "rack"),
+            ("cost_kind", "unknown"),
+            ("lat", "-23.51"),
+            ("lon", "-46.71"),
+            ("h_wed_state", "ranges"),
+            ("h_wed_1_open", "09:00"),
+            ("h_wed_1_close", "18:00"),
+            ("h_wed_2_open", "17:00"),
+            ("h_wed_2_close", "20:00"),
+            ("confirm", "1"),
+        ],
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.contains("The two ranges for this day overlap."),
+        "the overlap is named: {body}"
+    );
+    assert!(
+        body.contains(r#"value="ranges" selected"#),
+        "the rejected form comes back with what was typed"
+    );
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM parking_location WHERE name = 'Overlap Spot'")
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(count, 0, "a rejected form creates nothing");
+
+    let _ = tx;
+    cleanup_user_contributions(EMAIL).await;
+}
+
+/// Duplicate detection runs BEFORE the insert: a near-identical spot 15 m away
+/// gets the interstitial and no row; confirming creates it and lands on the
+/// details page with the "what happens next" notice.
+#[db_test]
+async fn a_near_duplicate_is_confirmed_before_anything_is_created(tx: &mut TestTx) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp19-dupe@example.com";
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+    let (_, form) = get_c(&app, "/parking/new", Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+
+    // The spot that already exists.
+    let existing = add_location(&app, &cookie, &csrf, "Bicicletario Praca Central", &[]).await;
+
+    // ~15 m north of it, same name. `add_location` posts -23.4/-46.6.
+    let near_lat = (-23.4_f64 + 0.000_135).to_string();
+    let submission: Vec<(&str, &str)> = vec![
+        ("csrf", &csrf),
+        ("name", "Bicicletario Praca Central"),
+        ("address", "Rua X, 1"),
+        ("parking_type", "rack"),
+        ("cost_kind", "unknown"),
+        ("lat", &near_lat),
+        ("lon", "-46.6"),
+    ];
+    let (status, body, _) = post_form(&app, "/parking/new", &submission, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "the interstitial, not a redirect");
+    assert!(
+        body.contains("Is this the same spot?"),
+        "the interstitial asks first: {body}"
+    );
+    assert!(
+        body.contains(&format!(r#"href="/parking/{existing}""#)),
+        "the candidate is linked so it can be checked"
+    );
+    assert!(
+        body.contains(r#"name="confirm" value="1""#),
+        "…and offers a way through"
+    );
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM parking_location WHERE name = 'Bicicletario Praca Central'",
+    )
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "nothing was created while the question stood");
+
+    // Confirming creates it and lands on the notice.
+    let mut confirmed = submission.clone();
+    confirmed.push(("confirm", "1"));
+    let (status, _, _) = post_form(&app, "/parking/new", &confirmed, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (created,): (i64,) = sqlx::query_as(
+        "SELECT id FROM parking_location WHERE name = 'Bicicletario Praca Central'
+         ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    assert_ne!(created, existing, "a second spot now exists");
+    let (status, body) = get_c(
+        &app,
+        &format!("/parking/{created}?created=1"),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("Your spot is live. The community will verify it over time"),
+        "the details page says what happens next: {body}"
+    );
+
+    let _ = tx;
+    cleanup_user_contributions(EMAIL).await;
+}
+
+/// A submission nowhere near an existing spot skips the interstitial entirely.
+#[db_test]
+async fn a_lone_spot_is_created_without_an_interstitial(tx: &mut TestTx) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp19-lone@example.com";
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+    let (_, form) = get_c(&app, "/parking/new", Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+
+    // Far from the seed data and from anything the other tests create.
+    let (status, _, _) = post_form(
+        &app,
+        "/parking/new",
+        &[
+            ("csrf", &csrf),
+            ("name", "Deserted Wharf Racks"),
+            ("address", "Cais Norte, 400"),
+            ("parking_type", "rack"),
+            ("cost_kind", "unknown"),
+            ("lat", "-30.0331"),
+            ("lon", "-51.23"),
+        ],
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::SEE_OTHER,
+        "no candidates, so no question to ask"
+    );
+
+    let _ = tx;
+    cleanup_user_contributions(EMAIL).await;
+}
+
+/// `GET /api/geocode` is the picker's address lookup: verified users only, and
+/// metered on the same per-IP budget as `/search` because it reaches the same
+/// billable provider.
+#[db_test]
+async fn the_geocode_endpoint_is_gated_and_metered(tx: &mut TestTx) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp19-geocode@example.com";
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+
+    let (status, body) = get_c(&app, "/api/geocode?q=Rua+XV+de+Novembro", Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let hit: serde_json::Value = serde_json::from_str(&body).expect("JSON: {body}");
+    assert!(hit["lat"].as_f64().is_some(), "a latitude: {body}");
+    assert!(hit["lon"].as_f64().is_some(), "a longitude: {body}");
+    assert!(hit["label"].as_str().is_some(), "and a label: {body}");
+
+    // Anonymous callers are sent to sign in, never answered.
+    let (status, _) = get_c(&app, "/api/geocode?q=Rua+XV+de+Novembro", None).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    // An unverified session cannot spend the budget either.
+    let unverified = unverified_cookie(&app, "wp19-unverified@example.com").await;
+    let (status, _) = get_c(&app, "/api/geocode?q=Avenida+Nova", Some(&unverified)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let _ = tx;
+    cleanup_user(EMAIL).await;
+    cleanup_user("wp19-unverified@example.com").await;
+}
+
+/// The budget is the same bucket `/search` spends from, and a cached address
+/// costs nothing.
+#[db_test]
+async fn the_geocode_endpoint_refuses_over_budget(tx: &mut TestTx) {
+    let (app, email) = auth_app_with_geocode_budget(1).await;
+    const EMAIL: &str = "wp19-budget@example.com";
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+
+    let (status, _) = get_c(&app, "/api/geocode?q=Rua+Primeira", Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "the one geocode in the budget");
+
+    let (status, body) = get_c(&app, "/api/geocode?q=Rua+Segunda", Some(&cookie)).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body, "{}", "an empty object, not a page");
+
+    // The first address is cached now: free, so still answered.
+    let (status, _) = get_c(&app, "/api/geocode?q=Rua+Primeira", Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "a cache hit is not charged");
+
+    let _ = tx;
+    cleanup_user(EMAIL).await;
 }

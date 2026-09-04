@@ -21,6 +21,9 @@ use super::errors::{internal_error, not_found_page};
 pub(crate) struct DetailsNotice {
     #[serde(default)]
     added: Option<String>,
+    /// A spot the contributor just created (the "what happens next" notice).
+    #[serde(default)]
+    created: Option<String>,
     #[serde(default)]
     edited: Option<String>,
     #[serde(default)]
@@ -39,7 +42,9 @@ pub(crate) struct DetailsNotice {
 
 /// One notice for the details page banner, newest/strongest action first.
 pub(crate) fn details_notice(tr: Translator, q: &DetailsNotice) -> Option<String> {
-    if q.proposed.is_some() {
+    if q.created.is_some() {
+        Some(tr.t("contribution.created_notice").to_string())
+    } else if q.proposed.is_some() {
         Some(tr.t("details.notice.proposed").to_string())
     } else if q.edited.is_some() {
         Some(tr.t("details.notice.edited").to_string())

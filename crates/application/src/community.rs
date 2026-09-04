@@ -621,12 +621,10 @@ impl ContributionService {
             input.timezone = Some(self.deps.tz.resolve(input.point).await?);
         }
 
-        // Advisory duplicate detection (§36) — warnings, never a blocker.
-        let duplicates = self
-            .deps
-            .contributions
-            .duplicate_candidates(input.point, &input.name)
-            .await?;
+        // The safety net behind the web layer's pre-create interstitial:
+        // a similar spot created between that check and this insert is still
+        // reported, now as an advisory on a row that exists.
+        let duplicates = self.duplicates_for(input.point, &input.name).await?;
 
         let id = self
             .deps
@@ -643,6 +641,39 @@ impl ContributionService {
         .await?;
 
         Ok(AddParkingLocationOutcome { id, duplicates })
+    }
+
+    /// The duplicate check on its own, so a contributor can be shown the
+    /// candidates *before* a spot is created.
+    ///
+    /// "You added spot 8380 — by the way, it may already be listed" is not a
+    /// warning, it is a duplicate: the row is already live and the only way out
+    /// is a second, manual edit. Running the same query first turns that into a
+    /// decision, and [`Self::add_parking_location`] keeps its own check for the
+    /// race between the two requests.
+    ///
+    /// Only `point` and `name` are compared: the query already matches the
+    /// submitted name against each candidate's *name and address*, so passing
+    /// the submitted address as well would add no signal.
+    pub async fn find_duplicates(
+        &self,
+        user: &crate::auth::AuthenticatedUser,
+        point: GeoPoint,
+        name: &str,
+    ) -> Result<Vec<DuplicateCandidate>, ContributionError> {
+        self.require_verified(user)?;
+        self.duplicates_for(point, name).await
+    }
+
+    async fn duplicates_for(
+        &self,
+        point: GeoPoint,
+        name: &str,
+    ) -> Result<Vec<DuplicateCandidate>, ContributionError> {
+        self.deps
+            .contributions
+            .duplicate_candidates(point, name)
+            .await
     }
 
     /// Applies a reversible edit with optimistic concurrency (§100). The web

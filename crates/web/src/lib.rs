@@ -18,6 +18,12 @@ use auth::Auth;
 use bikenest_application::ParkingDetailsView;
 use bikenest_infrastructure::MapConfig;
 use i18n::Translator;
+// The add/edit form's editors are view models like any other, but they live
+// next to the grammar that parses them back (routes::contribution_form).
+use routes::contribution_form::{
+    HiddenField as ContributionHiddenField, HoursDayVm as ContributionHoursDayVm,
+    TriStateVm as ContributionTriStateVm,
+};
 
 /// Base layout data shared by all pages. `current` drives the active nav item;
 /// `csrf` is the per-session synchronizer token (empty when anonymous) — rendered
@@ -743,14 +749,28 @@ pub struct ParkingNewPage {
     pub lat: String,
     pub lon: String,
     pub timezone: String,
-    pub open_24h: bool,
+    /// Where the picker centres its map when the form carries no position yet.
+    pub default_lat: f64,
+    pub default_lon: f64,
+    pub hours_days: Vec<ContributionHoursDayVm>,
+    pub security_states: Vec<ContributionTriStateVm>,
     pub type_options: Vec<view::OptionVm>,
-    pub security_options: Vec<view::OptionVm>,
-    pub security: String,
     pub error: Option<String>,
     pub duplicates: Vec<view::DuplicateVm>,
-    /// Set when the add succeeded but similar listings exist (advisory).
+    /// Set when the add succeeded but similar listings turned up anyway — the
+    /// safety net behind the interstitial, not the normal path.
     pub added_id: Option<i64>,
+}
+
+/// D1 — the duplicate interstitial, rendered *before* anything is created.
+#[derive(Template)]
+#[template(path = "pages/parking_new_confirm.html")]
+pub struct ParkingNewConfirmPage {
+    pub layout: PageLayout,
+    pub tr: Translator,
+    pub duplicates: Vec<view::DuplicateVm>,
+    /// The whole submission, re-posted verbatim by "create it anyway".
+    pub fields: Vec<ContributionHiddenField>,
 }
 
 /// D2 — edit a location (reversible fields).
@@ -769,10 +789,13 @@ pub struct ParkingEditPage {
     pub price: String,
     pub price_currency: String,
     pub price_unit: String,
-    pub open_24h: bool,
+    pub hours_days: Vec<ContributionHoursDayVm>,
+    pub security_states: Vec<ContributionTriStateVm>,
     pub type_options: Vec<view::OptionVm>,
-    pub security_options: Vec<view::OptionVm>,
-    pub security: String,
+    /// The spot's current position. Not editable here — moving a pin is a
+    /// reviewed proposal — but it seeds the map on the "move the pin" form.
+    pub lat: f64,
+    pub lon: f64,
     pub error: Option<String>,
     pub notice: Option<String>,
 }

@@ -21,6 +21,13 @@
   height: 480px;
 }
 
+/* The add/edit position picker. Tall enough on a phone to aim a pin. */
+#pin-map {
+  width: 100%;
+  height: 16rem;
+  border-radius: 0.75rem;
+}
+
 #map-single {
   height: 18rem;
 }
@@ -48,6 +55,18 @@
   background: transparent;
   border: 2px dashed var(--color-muted, #888);
   box-shadow: none;
+}
+
+/* The draggable picker pin: bigger than a result marker, and it says so. */
+.marker-pin {
+  width: 24px;
+  height: 24px;
+  background: var(--color-accent-dark);
+  cursor: grab;
+}
+
+.marker-pin:active {
+  cursor: grabbing;
 }
 
 .marker.selected {

@@ -12,9 +12,11 @@
 //! [`AppState`](crate::state::AppState).
 
 pub mod admin;
+pub mod api;
 pub mod auth;
 pub mod common;
 pub mod community;
+pub mod contribution_form;
 pub mod details;
 pub mod errors;
 pub mod legal;
@@ -36,6 +38,7 @@ use admin::{
     admin_audit, admin_privacy_request_fulfill, admin_privacy_requests, admin_role_post,
     admin_user_contributions, admin_user_restore, admin_user_suspend, admin_users,
 };
+use api::geocode_api;
 use auth::{
     account, account_email, account_email_post, account_password, account_password_post,
     auth_google, auth_google_callback, auth_google_fake_consent, login_page, login_post, logout,
@@ -77,6 +80,10 @@ pub(crate) fn routes(state: &AppState) -> Router<AppState> {
     let mut router = Router::new()
         .route("/", get(home))
         .route("/search", get(search))
+        // Address → coordinates for the add/edit map picker. Signed-in and
+        // verified only, and metered on the same per-IP geocode budget as
+        // `/search`, because it reaches the same billable provider.
+        .route("/api/geocode", get(geocode_api))
         .route("/parking/{id}", get(parking_details))
         .route("/about", get(about))
         .route("/robots.txt", get(robots_txt))

@@ -84,18 +84,162 @@ document.addEventListener('alpine:init', function () {
   Alpine.data('parkingForm', function () {
     return {
       cur: '',
-      picked: '',
       syms: { BRL: 'R$', EUR: '€', USD: '$', GBP: '£', JPY: '¥' },
       init: function () {
         if (this.$el.dataset.currency) this.cur = this.$el.dataset.currency;
-        if (this.$el.dataset.picked) this.picked = this.$el.dataset.picked;
       },
       get sym() { return this.syms[this.cur.toUpperCase()] || this.cur; },
-      updatePicked: function () {
-        var checks = this.$el.querySelectorAll('input[type=checkbox]:checked');
-        var vals = [];
-        for (var i = 0; i < checks.length; i++) vals.push(checks[i].value);
-        this.picked = vals.join(',');
+    };
+  });
+
+  /* One day's row in the hours editor. The select is the source of truth (it
+   * is what the server reads); this only decides whether that day's two time
+   * ranges are worth showing. With Alpine absent they stay visible, which is
+   * what makes the no-JS path work. */
+  Alpine.data('hoursDay', function () {
+    return {
+      state: 'unknown',
+      init: function () {
+        if (this.$el.dataset.state) this.state = this.$el.dataset.state;
+      },
+      get showRanges() { return this.state === 'ranges'; },
+    };
+  });
+
+  /* "Copy to all days": copies Monday's five fields onto the other six.
+   * Values are written through the DOM and announced with input/change so each
+   * row's own x-model picks them up — no shared store to keep in sync. */
+  Alpine.data('hoursEditor', function () {
+    return {
+      suffixes: ['state', '1_open', '1_close', '2_open', '2_close'],
+      rest: ['tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+      copyAll: function () {
+        var root = this.$root;
+        var source = {};
+        this.suffixes.forEach(function (suffix) {
+          var el = root.querySelector('[name="h_mon_' + suffix + '"]');
+          source[suffix] = el ? el.value : '';
+        });
+        this.rest.forEach(function (day) {
+          Object.keys(source).forEach(function (suffix) {
+            var el = root.querySelector('[name="h_' + day + '_' + suffix + '"]');
+            if (!el) return;
+            el.value = source[suffix];
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          });
+        });
+      },
+    };
+  });
+
+  /* The map picker's controls. The map itself lives in pin-picker.js (it needs
+   * MapLibre, which only the pages with a picker load); the two talk over
+   * element-scoped events on #pin-map, so nothing leaks across a boosted
+   * navigation:
+   *
+   *   this component --bikenest:pin-set--> #pin-map   (move the pin there)
+   *   #pin-map       --bikenest:pin------> this        (the pin moved)
+   *
+   * With no map at all, the buttons still write the lat/lon inputs directly,
+   * so geolocation and address lookup work without MapLibre. */
+  Alpine.data('pinPicker', function () {
+    return {
+      lat: null,
+      lon: null,
+      locating: false,
+      message: '',
+      emptyLabel: '',
+      locateFailed: '',
+      geocodeFailed: '',
+      timer: null,
+      init: function () {
+        var ds = this.$el.dataset;
+        this.emptyLabel = ds.empty || '';
+        this.locateFailed = ds.locateFailed || '';
+        this.geocodeFailed = ds.geocodeFailed || '';
+        var current = this.inputs();
+        var lat = parseFloat(current.lat && current.lat.value);
+        var lon = parseFloat(current.lon && current.lon.value);
+        if (isFinite(lat) && isFinite(lon)) { this.lat = lat; this.lon = lon; }
+      },
+      get coords() {
+        if (this.lat === null || this.lon === null) return this.emptyLabel;
+        return this.lat.toFixed(6) + ', ' + this.lon.toFixed(6);
+      },
+      mapEl: function () { return this.$root.querySelector('[data-lat-input]'); },
+      inputs: function () {
+        var el = this.mapEl();
+        var ds = (el && el.dataset) || {};
+        return {
+          lat: document.getElementById(ds.latInput || 'lat'),
+          lon: document.getElementById(ds.lonInput || 'lon'),
+        };
+      },
+      /* The pin moved (drag or map click): mirror it into the readout. The
+       * inputs were already written by pin-picker.js. */
+      onPin: function (e) {
+        var d = (e && e.detail) || {};
+        if (!isFinite(d.lat) || !isFinite(d.lon)) return;
+        this.lat = d.lat;
+        this.lon = d.lon;
+        this.message = '';
+      },
+      setPosition: function (lat, lon) {
+        var fields = this.inputs();
+        if (fields.lat) fields.lat.value = lat.toFixed(6);
+        if (fields.lon) fields.lon.value = lon.toFixed(6);
+        this.lat = lat;
+        this.lon = lon;
+        this.message = '';
+        var el = this.mapEl();
+        if (el) {
+          el.dispatchEvent(new CustomEvent('bikenest:pin-set', {
+            detail: { lat: lat, lon: lon },
+          }));
+        }
+      },
+      useLocation: function () {
+        var self = this;
+        if (!navigator.geolocation) { self.message = self.locateFailed; return; }
+        self.locating = true;
+        navigator.geolocation.getCurrentPosition(
+          function (pos) {
+            self.locating = false;
+            self.setPosition(pos.coords.latitude, pos.coords.longitude);
+          },
+          function () { self.locating = false; self.message = self.locateFailed; }
+        );
+      },
+      /* Address → position. Never on a keystroke: this reaches a billable
+       * provider, so it fires on an explicit tap, or once (debounced) when the
+       * address field is left and no position has been picked yet. */
+      addressChanged: function () {
+        var self = this;
+        if (self.lat !== null) return;
+        if (self.timer) clearTimeout(self.timer);
+        self.timer = setTimeout(function () { self.findAddress(); }, 700);
+      },
+      findAddress: function () {
+        var self = this;
+        if (self.timer) { clearTimeout(self.timer); self.timer = null; }
+        var field = document.getElementById('address');
+        var query = field ? field.value.trim() : '';
+        if (!query) return;
+        var meta = document.querySelector('meta[name="csrf"]');
+        fetch('/api/geocode?q=' + encodeURIComponent(query), {
+          headers: meta ? { 'X-CSRF-Token': meta.content } : {},
+          credentials: 'same-origin',
+        })
+          .then(function (res) { return res.ok ? res.json() : null; })
+          .then(function (hit) {
+            if (!hit || !isFinite(hit.lat) || !isFinite(hit.lon)) {
+              self.message = self.geocodeFailed;
+              return;
+            }
+            self.setPosition(hit.lat, hit.lon);
+          })
+          .catch(function () { self.message = self.geocodeFailed; });
       },
     };
   });

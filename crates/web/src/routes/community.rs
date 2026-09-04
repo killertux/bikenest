@@ -1,25 +1,30 @@
 //! M3 contributions to a location: adding one, editing one, and proposing a
-//! change to one — plus the form → domain mapping the three share.
+//! change to one. The wire shape the three share — and the hours/security
+//! grammars — live in `super::contribution_form`; this module is the handlers,
+//! the form → domain mapping, and the pages they render.
 
 use axum::extract::{Form, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bikenest_application::{ContributionError, NewParkingLocation, ParkingEdit};
 use bikenest_domain::{
-    Cost, CurrencyCode, GeoPoint, ModerationState, Money, OpeningHours, ParkingLocation,
-    ParkingType, PricingUnit, ProposalKind, ProposalPayload, ProposedChange, SecurityFeature,
-    SecurityState, TimeRange, is_known_security_code,
+    Cost, CurrencyCode, GeoPoint, ModerationState, Money, ParkingLocation, ParkingType,
+    PricingUnit, ProposalKind, ProposalPayload, ProposedChange,
 };
-use bikenest_infrastructure::MapConfig;
+use bikenest_infrastructure::{FEATURED_ORIGIN, MapConfig};
 
 use crate::auth::Auth;
 use crate::client_ip::ClientIp;
 use crate::i18n::{Locale, Translator};
 use crate::state::AppState;
 use crate::view;
-use crate::{PageLayout, ParkingEditPage, ParkingNewPage};
+use crate::{PageLayout, ParkingEditPage, ParkingNewConfirmPage, ParkingNewPage};
 
 use super::common::render;
+use super::contribution_form::{
+    ContributionForm, DayFields, HoursError, hours_editor_vm, hours_fields_from, parse_hours,
+    parse_security, security_editor_vm, security_fields_from,
+};
 use super::errors::not_found_page;
 use super::moderation::non_empty;
 
@@ -27,13 +32,40 @@ pub(crate) fn parse_bool(s: &str) -> bool {
     s == "true" || s == "1" || s == "on"
 }
 
-pub(crate) fn security_from_form(s: &str) -> Vec<SecurityFeature> {
-    s.split(',')
-        .map(str::trim)
-        .filter(|c| !c.is_empty())
-        .filter(|c| is_known_security_code(c))
-        .map(|c| SecurityFeature::new(c, SecurityState::Yes))
-        .collect()
+/// Why a submission was refused. The hours editor reports per-day problems, so
+/// its rejection has to survive as far as the row it belongs to rather than
+/// collapsing into one "invalid field" banner.
+#[derive(Debug)]
+pub(crate) enum FormError {
+    Contribution(ContributionError),
+    Hours(HoursError),
+}
+
+impl From<ContributionError> for FormError {
+    fn from(e: ContributionError) -> Self {
+        FormError::Contribution(e)
+    }
+}
+
+impl FormError {
+    fn invalid(message: &str) -> Self {
+        FormError::Contribution(ContributionError::InvalidField(message.to_string()))
+    }
+
+    /// The banner message, and the day whose row carries the field error.
+    fn parts(&self, tr: Translator) -> (String, Option<HoursError>) {
+        match self {
+            FormError::Contribution(e) => (contribution_error_message(tr, e), None),
+            FormError::Hours(h) => (tr.t(h.key).to_string(), Some(*h)),
+        }
+    }
+
+    fn status(&self, default: StatusCode) -> StatusCode {
+        match self {
+            FormError::Contribution(e) => contribution_error_status(e, default),
+            FormError::Hours(_) => default,
+        }
+    }
 }
 
 /// Parse a price in major units ("5", "5.50", "5,50") into cents.
@@ -60,7 +92,7 @@ pub(crate) fn cents_to_major_string(cents: i64) -> String {
     }
 }
 
-pub(crate) fn cost_from_form(form: &NewParkingForm) -> Result<Cost, ContributionError> {
+pub(crate) fn cost_from_form(form: &ContributionForm) -> Result<Cost, FormError> {
     match form.cost_kind.as_str() {
         "free" => Ok(Cost::Free),
         "paid" => {
@@ -70,10 +102,10 @@ pub(crate) fn cost_from_form(form: &NewParkingForm) -> Result<Cost, Contribution
                 &form.price_unit,
             ) {
                 (Some(cents), cur, unit) if !cur.is_empty() && !unit.is_empty() => {
-                    let currency = CurrencyCode::parse(cur)
-                        .map_err(|e| ContributionError::InvalidField(e.to_string()))?;
+                    let currency =
+                        CurrencyCode::parse(cur).map_err(|e| FormError::invalid(&e.to_string()))?;
                     let unit = PricingUnit::from_code(unit)
-                        .map_err(|e| ContributionError::InvalidField(e.to_string()))?;
+                        .map_err(|e| FormError::invalid(&e.to_string()))?;
                     Some(Money::new(cents, currency, unit))
                 }
                 _ => None,
@@ -85,23 +117,25 @@ pub(crate) fn cost_from_form(form: &NewParkingForm) -> Result<Cost, Contribution
 }
 
 pub(crate) fn new_location_from_form(
-    form: &NewParkingForm,
-) -> Result<NewParkingLocation, ContributionError> {
+    form: &ContributionForm,
+) -> Result<NewParkingLocation, FormError> {
     let parking_type = ParkingType::from_code(&form.parking_type)
-        .map_err(|e| ContributionError::InvalidField(e.to_string()))?;
+        .map_err(|e| FormError::invalid(&e.to_string()))?;
     let cost = cost_from_form(form)?;
     let lat = form
         .lat
         .trim()
         .parse::<f64>()
-        .map_err(|_| ContributionError::InvalidField("latitude is required".to_string()))?;
+        .map_err(|_| FormError::invalid("latitude is required"))?;
     let lon = form
         .lon
         .trim()
         .parse::<f64>()
-        .map_err(|_| ContributionError::InvalidField("longitude is required".to_string()))?;
-    let point =
-        GeoPoint::new(lat, lon).map_err(|e| ContributionError::InvalidField(e.to_string()))?;
+        .map_err(|_| FormError::invalid("longitude is required"))?;
+    let point = GeoPoint::new(lat, lon).map_err(|e| FormError::invalid(&e.to_string()))?;
+    // Normally absent: the contribution service derives the zone from the
+    // point through its `TimezoneResolver`. The "Advanced" override is still
+    // validated here so a typo fails the form rather than the insert.
     let timezone = if form.timezone.trim().is_empty() {
         None
     } else {
@@ -109,69 +143,36 @@ pub(crate) fn new_location_from_form(
             form.timezone
                 .trim()
                 .parse()
-                .map_err(|_| ContributionError::InvalidField("invalid timezone".to_string()))?,
+                .map_err(|_| FormError::invalid("invalid timezone"))?,
         )
     };
-    let hours = if parse_bool(&form.open_24h) {
-        OpeningHours::weekly((1..=7).map(|d| (d, TimeRange::all_day())).collect())
-    } else {
-        OpeningHours::Unknown
-    };
-    let description = if form.description.trim().is_empty() {
-        None
-    } else {
-        Some(form.description.trim().to_string())
-    };
+    let hours = parse_hours(&form.hours_fields()).map_err(FormError::Hours)?;
     Ok(NewParkingLocation {
         name: form.name.clone(),
         address: form.address.clone(),
-        description,
+        description: non_empty(&form.description),
         parking_type,
         cost,
         point,
         timezone,
         hours,
-        security: security_from_form(&form.security),
+        security: parse_security(&form.security_fields()),
     })
 }
 
-pub(crate) fn edit_from_form(
-    form: &EditParkingForm,
-    current_hours: &OpeningHours,
-) -> Result<ParkingEdit, ContributionError> {
+pub(crate) fn edit_from_form(form: &ContributionForm) -> Result<ParkingEdit, FormError> {
     let parking_type = ParkingType::from_code(&form.parking_type)
-        .map_err(|e| ContributionError::InvalidField(e.to_string()))?;
-    let cost = cost_from_form(&NewParkingForm {
-        cost_kind: form.cost_kind.clone(),
-        price: form.price.clone(),
-        price_currency: form.price_currency.clone(),
-        price_unit: form.price_unit.clone(),
-        ..Default::default()
-    })?;
-    // Preserve the original hours unless the user explicitly toggled the 24h
-    // switch — otherwise submitting an unrelated field would wipe real hours.
-    let current_24h = hours_open_24h(current_hours);
-    let submitted_24h = parse_bool(&form.open_24h);
-    let hours = if submitted_24h == current_24h {
-        current_hours.clone()
-    } else if submitted_24h {
-        OpeningHours::weekly((1..=7).map(|d| (d, TimeRange::all_day())).collect())
-    } else {
-        OpeningHours::Unknown
-    };
-    let description = if form.description.trim().is_empty() {
-        None
-    } else {
-        Some(form.description.trim().to_string())
-    };
+        .map_err(|e| FormError::invalid(&e.to_string()))?;
     Ok(ParkingEdit {
         name: form.name.clone(),
         address: form.address.clone(),
-        description,
+        description: non_empty(&form.description),
         parking_type,
-        cost,
-        hours,
-        security: security_from_form(&form.security),
+        cost: cost_from_form(form)?,
+        // The editor round-trips the stored schedule, so an untouched form
+        // re-submits exactly what was there — no "preserve on match" guessing.
+        hours: parse_hours(&form.hours_fields()).map_err(FormError::Hours)?,
+        security: parse_security(&form.security_fields()),
     })
 }
 
@@ -199,24 +200,6 @@ pub(crate) fn cost_price_strings(cost: &Cost) -> (String, String, String) {
     }
 }
 
-/// True when the location is open 24h every day (the only "hours" state the
-/// add/edit form can express besides unknown).
-pub(crate) fn hours_open_24h(hours: &OpeningHours) -> bool {
-    matches!(hours, OpeningHours::Weekly(rows) if !rows.is_empty() && rows.iter().all(|(_, r)| r.all_day))
-}
-
-/// Comma-separated codes of the security attributes confirmed `yes` (to
-/// pre-fill the add/edit checkboxes).
-pub(crate) fn security_yes_codes_string(loc: &ParkingLocation) -> String {
-    loc.security()
-        .iter()
-        .filter(|f| f.state() == SecurityState::Yes)
-        .map(|f| f.code())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-/// Build a `ParkingEditPage` with all reversible fields pre-filled from `loc`.
 /// The page chrome shared by every render of the "edit parking" form.
 pub(crate) fn edit_parking_layout(map: &MapConfig, tr: Translator, auth: &Auth) -> PageLayout {
     PageLayout::for_request(tr.t("edit.title").to_string(), "edit", auth, map)
@@ -227,6 +210,7 @@ pub(crate) fn new_parking_layout(map: &MapConfig, tr: Translator, auth: &Auth) -
     PageLayout::for_request(tr.t("new.title").to_string(), "new", auth, map)
 }
 
+/// Build a `ParkingEditPage` with all reversible fields pre-filled from `loc`.
 pub(crate) fn parking_edit_page_vm(
     layout: PageLayout,
     tr: Translator,
@@ -250,47 +234,14 @@ pub(crate) fn parking_edit_page_vm(
         price,
         price_currency,
         price_unit,
-        open_24h: hours_open_24h(loc.hours()),
+        hours_days: hours_editor_vm(tr, &hours_fields_from(loc.hours()), None),
+        security_states: security_editor_vm(tr, &security_fields_from(loc.security())),
         type_options: view::type_options(tr, Some(loc.parking_type().as_code())),
-        security_options: view::security_options(tr, Some(&security_yes_codes_string(loc))),
-        security: security_yes_codes_string(loc),
+        lat: loc.point().lat(),
+        lon: loc.point().lon(),
         error,
         notice,
     }
-}
-
-#[derive(Debug, Default, serde::Deserialize)]
-pub(crate) struct NewParkingForm {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    address: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    parking_type: String,
-    #[serde(default)]
-    cost_kind: String,
-    /// Price in major units (e.g. "5"/"5.50"), NOT cents — cents is a backend
-    /// detail. The user types a human-readable amount (see the form UX).
-    #[serde(default)]
-    price: String,
-    #[serde(default)]
-    price_currency: String,
-    #[serde(default)]
-    price_unit: String,
-    #[serde(default)]
-    lat: String,
-    #[serde(default)]
-    lon: String,
-    #[serde(default)]
-    timezone: String,
-    #[serde(default)]
-    open_24h: String,
-    /// Comma-separated security attribute codes, produced by the checkboxes via
-    /// a single hidden field (serde_urlencoded rejects repeated keys).
-    #[serde(default)]
-    security: String,
 }
 
 pub(crate) async fn parking_new_page(
@@ -303,33 +254,14 @@ pub(crate) async fn parking_new_page(
         return resp;
     }
     render(
-        ParkingNewPage {
-            layout: PageLayout::for_request(
-                tr.t("new.title").to_string(),
-                "new",
-                &auth,
-                &state.map,
-            ),
+        new_page_vm(
+            new_parking_layout(&state.map, tr, &auth),
             tr,
-            name: String::new(),
-            address: String::new(),
-            description: String::new(),
-            parking_type: "rack".to_string(),
-            cost_kind: "unknown".to_string(),
-            price: String::new(),
-            price_currency: String::new(),
-            price_unit: String::new(),
-            lat: String::new(),
-            lon: String::new(),
-            timezone: String::new(),
-            open_24h: false,
-            type_options: view::type_options(tr, None),
-            security_options: view::security_options(tr, None),
-            security: String::new(),
-            error: None,
-            duplicates: Vec::new(),
-            added_id: None,
-        },
+            &ContributionForm::default(),
+            None,
+            Vec::new(),
+            None,
+        ),
         StatusCode::OK,
     )
 }
@@ -340,7 +272,7 @@ pub(crate) async fn parking_new_post(
     locale: Locale,
     ClientIp(ip): ClientIp,
     auth: Auth,
-    Form(form): Form<NewParkingForm>,
+    Form(form): Form<ContributionForm>,
 ) -> Response {
     let tr = Translator::new(locale);
     let user = match auth.require_verified() {
@@ -350,10 +282,43 @@ pub(crate) async fn parking_new_post(
 
     let new = match new_location_from_form(&form) {
         Ok(n) => n,
-        Err(e) => {
-            return render_form_error(&state.map, tr, auth, &form, &e);
-        }
+        Err(e) => return render_form_error(&state.map, tr, auth, &form, e),
     };
+
+    // Duplicate detection runs BEFORE anything is created: "you added spot
+    // 8380 — by the way, it may already exist" is not a warning, it is a
+    // duplicate. On candidates the contributor gets the interstitial and
+    // decides; nothing has been written yet.
+    let confirmed = parse_bool(&form.confirm);
+    if !confirmed {
+        match state
+            .contributions
+            .find_duplicates(user, new.point, &new.name)
+            .await
+        {
+            Ok(candidates) if !candidates.is_empty() => {
+                return render(
+                    ParkingNewConfirmPage {
+                        layout: new_parking_layout(&state.map, tr, &auth),
+                        tr,
+                        duplicates: candidates
+                            .iter()
+                            .map(|d| view::duplicate_vm(tr, d))
+                            .collect(),
+                        fields: form.hidden_fields(),
+                    },
+                    StatusCode::OK,
+                );
+            }
+            Ok(_) => {}
+            Err(ContributionError::NotVerified) => {
+                return axum::response::Redirect::to("/account?verify=1").into_response();
+            }
+            // A pre-check that could not run must not block the contribution:
+            // `add_parking_location` runs the same query as its safety net.
+            Err(_) => {}
+        }
+    }
 
     match state
         .contributions
@@ -361,23 +326,30 @@ pub(crate) async fn parking_new_post(
         .await
     {
         Ok(outcome) => {
-            let duplicates: Vec<view::DuplicateVm> = outcome
-                .duplicates
-                .iter()
-                .map(|d| view::duplicate_vm(tr, d))
-                .collect();
-            if duplicates.is_empty() {
-                axum::response::Redirect::to(&format!("/parking/{}", outcome.id)).into_response()
+            // The safety net: a spot created between the pre-check and the
+            // insert still gets flagged, now as an advisory on a real row.
+            let duplicates: Vec<view::DuplicateVm> = if confirmed {
+                Vec::new()
             } else {
-                // Advisory: the location was added, but similar listings
-                // exist. Re-render the form with the warnings + a success note.
-                render_new_form(
-                    new_parking_layout(&state.map, tr, &auth),
-                    tr,
-                    &form,
-                    None,
-                    duplicates,
-                    Some(outcome.id),
+                outcome
+                    .duplicates
+                    .iter()
+                    .map(|d| view::duplicate_vm(tr, d))
+                    .collect()
+            };
+            if duplicates.is_empty() {
+                axum::response::Redirect::to(&format!("/parking/{}?created=1", outcome.id))
+                    .into_response()
+            } else {
+                render(
+                    new_page_vm(
+                        new_parking_layout(&state.map, tr, &auth),
+                        tr,
+                        &form,
+                        None,
+                        duplicates,
+                        Some(outcome.id),
+                    ),
                     StatusCode::OK,
                 )
             }
@@ -385,70 +357,86 @@ pub(crate) async fn parking_new_post(
         Err(ContributionError::NotVerified) => {
             axum::response::Redirect::to("/account?verify=1").into_response()
         }
-        Err(ContributionError::RateLimited) => render_new_form(
-            new_parking_layout(&state.map, tr, &auth),
-            tr,
-            &form,
-            Some(tr.t("contribution.error.rate_limited").to_string()),
-            Vec::new(),
-            None,
+        Err(ContributionError::RateLimited) => render(
+            new_page_vm(
+                new_parking_layout(&state.map, tr, &auth),
+                tr,
+                &form,
+                Some((tr.t("contribution.error.rate_limited").to_string(), None)),
+                Vec::new(),
+                None,
+            ),
             StatusCode::TOO_MANY_REQUESTS,
         ),
-        Err(e) => render_form_error(&state.map, tr, auth, &form, &e),
+        Err(e) => render_form_error(&state.map, tr, auth, &form, e.into()),
     }
 }
 
-pub(crate) fn render_new_form(
+/// The add page, rendered from whatever the form currently holds. `error` is
+/// the banner message plus (for an hours problem) the day whose row is wrong.
+pub(crate) fn new_page_vm(
     layout: PageLayout,
     tr: Translator,
-    form: &NewParkingForm,
-    error: Option<String>,
+    form: &ContributionForm,
+    error: Option<(String, Option<HoursError>)>,
     duplicates: Vec<view::DuplicateVm>,
     added_id: Option<i64>,
-    status: StatusCode,
-) -> Response {
-    render(
-        ParkingNewPage {
-            layout,
-            tr,
-            name: form.name.clone(),
-            address: form.address.clone(),
-            description: form.description.clone(),
-            parking_type: form.parking_type.clone(),
-            cost_kind: form.cost_kind.clone(),
-            price: form.price.clone(),
-            price_currency: form.price_currency.clone(),
-            price_unit: form.price_unit.clone(),
-            lat: form.lat.clone(),
-            lon: form.lon.clone(),
-            timezone: form.timezone.clone(),
-            open_24h: parse_bool(&form.open_24h),
-            type_options: view::type_options(tr, Some(&form.parking_type)),
-            security_options: view::security_options(tr, Some(&form.security)),
-            security: form.security.clone(),
-            error,
-            duplicates,
-            added_id,
+) -> ParkingNewPage {
+    let (message, hours_error) = match error {
+        Some((message, hours_error)) => (Some(message), hours_error),
+        None => (None, None),
+    };
+    let hours_fields: [DayFields; 7] = form.hours_fields();
+    ParkingNewPage {
+        layout,
+        tr,
+        name: form.name.clone(),
+        address: form.address.clone(),
+        description: form.description.clone(),
+        parking_type: if form.parking_type.is_empty() {
+            "rack".to_string()
+        } else {
+            form.parking_type.clone()
         },
-        status,
-    )
+        cost_kind: if form.cost_kind.is_empty() {
+            "unknown".to_string()
+        } else {
+            form.cost_kind.clone()
+        },
+        price: form.price.clone(),
+        price_currency: form.price_currency.clone(),
+        price_unit: form.price_unit.clone(),
+        lat: form.lat.clone(),
+        lon: form.lon.clone(),
+        timezone: form.timezone.clone(),
+        default_lat: FEATURED_ORIGIN.0,
+        default_lon: FEATURED_ORIGIN.1,
+        hours_days: hours_editor_vm(tr, &hours_fields, hours_error),
+        security_states: security_editor_vm(tr, &form.security_fields()),
+        type_options: view::type_options(tr, Some(&form.parking_type)),
+        error: message,
+        duplicates,
+        added_id,
+    }
 }
 
 pub(crate) fn render_form_error(
     map: &MapConfig,
     tr: Translator,
     auth: Auth,
-    form: &NewParkingForm,
-    e: &ContributionError,
+    form: &ContributionForm,
+    e: FormError,
 ) -> Response {
-    render_new_form(
-        new_parking_layout(map, tr, &auth),
-        tr,
-        form,
-        Some(contribution_error_message(tr, e)),
-        Vec::new(),
-        None,
-        contribution_error_status(e, StatusCode::BAD_REQUEST),
+    render(
+        new_page_vm(
+            new_parking_layout(map, tr, &auth),
+            tr,
+            form,
+            Some(e.parts(tr)),
+            Vec::new(),
+            None,
+        ),
+        e.status(StatusCode::BAD_REQUEST),
     )
 }
 
@@ -477,38 +465,9 @@ pub(crate) fn contribution_error_status(e: &ContributionError, default: StatusCo
     match e {
         ContributionError::Conflict => StatusCode::CONFLICT,
         ContributionError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
-        // A location moderation took down reads as "gone" everywhere, exactly
-        // as the public details page already treats it.
         ContributionError::LocationNotActive => StatusCode::NOT_FOUND,
         _ => default,
     }
-}
-
-#[derive(Debug, Default, serde::Deserialize)]
-pub(crate) struct EditParkingForm {
-    #[serde(default)]
-    version: i64,
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    address: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    parking_type: String,
-    #[serde(default)]
-    cost_kind: String,
-    /// Price in major units (e.g. "5"/"5.50"), NOT cents.
-    #[serde(default)]
-    price: String,
-    #[serde(default)]
-    price_currency: String,
-    #[serde(default)]
-    price_unit: String,
-    #[serde(default)]
-    open_24h: String,
-    #[serde(default)]
-    security: String,
 }
 
 pub(crate) async fn parking_edit_page(
@@ -525,15 +484,10 @@ pub(crate) async fn parking_edit_page(
     let Some(view) = state.details.execute(id).await.ok().flatten() else {
         return not_found_page(&headers, &state.map, &auth, tr);
     };
-    // A location moderation took down accepts no contributions, so the form
-    // (and the sensitive-change proposals it hosts) is gone for everyone —
-    // moderators included, since the write path refuses them too.
     if view.location.moderation_state() != ModerationState::Active {
         return not_found_page(&headers, &state.map, &auth, tr);
     }
     let loc = &view.location;
-    // Pre-fill every reversible field so editing one doesn't silently reset
-    // cost/security/hours (the editable fields arrive pre-filled).
     render(
         parking_edit_page_vm(
             edit_parking_layout(&state.map, tr, &auth),
@@ -554,26 +508,30 @@ pub(crate) async fn parking_edit_post(
     auth: Auth,
     headers: HeaderMap,
     Path(id): Path<i64>,
-    Form(form): Form<EditParkingForm>,
+    Form(form): Form<ContributionForm>,
 ) -> Response {
     let tr = Translator::new(locale);
-    if let Err(resp) = auth.require_verified() {
-        return resp;
-    }
     let user = match auth.require_verified() {
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    // Load the current location so an untouched field is preserved (and so we
-    // can detect a version conflict against the latest values).
-    let current = match state.details.execute(id).await {
-        Ok(Some(v)) => v.location,
-        _ => return not_found_page(&headers, &state.map, &auth, tr),
+    // The 404 gate: a spot that is gone or hidden must not render an edit form
+    // (the service re-checks inside its transaction). Its position comes back
+    // with it, because a re-render still has to seed the move-proposal map.
+    let Some(current) = state
+        .details
+        .execute(id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|v| v.location.moderation_state() == ModerationState::Active)
+    else {
+        return not_found_page(&headers, &state.map, &auth, tr);
     };
-    let current_hours = current.hours().clone();
-    let edit = match edit_from_form(&form, &current_hours) {
+    let point = *current.location.point();
+    let edit = match edit_from_form(&form) {
         Ok(e) => e,
-        Err(e) => return contribution_edit_error(&state.map, tr, auth, id, &form, &e),
+        Err(e) => return contribution_edit_error(&state.map, tr, auth, id, point, &form, e),
     };
     match state
         .contributions
@@ -582,7 +540,6 @@ pub(crate) async fn parking_edit_post(
     {
         Ok(_) => axum::response::Redirect::to(&format!("/parking/{id}?edited=1")).into_response(),
         Err(ContributionError::VersionConflict) => {
-            // A concurrent edit won: reload the latest values and tell the user.
             let Some(view) = state.details.execute(id).await.ok().flatten() else {
                 return not_found_page(&headers, &state.map, &auth, tr);
             };
@@ -605,79 +562,95 @@ pub(crate) async fn parking_edit_post(
             tr,
             auth,
             id,
+            point,
             &form,
             tr.t("contribution.error.rate_limited").to_string(),
         ),
-        // Same answer as the GET above: there is nothing here to edit.
         Err(ContributionError::LocationNotActive) => {
             not_found_page(&headers, &state.map, &auth, tr)
         }
-        Err(e) => contribution_edit_error(&state.map, tr, auth, id, &form, &e),
+        Err(e) => contribution_edit_error(&state.map, tr, auth, id, point, &form, e.into()),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn contribution_edit_error(
     map: &MapConfig,
     tr: Translator,
     auth: Auth,
     id: i64,
-    form: &EditParkingForm,
-    e: &ContributionError,
+    point: GeoPoint,
+    form: &ContributionForm,
+    e: FormError,
 ) -> Response {
-    contribution_edit_notice_status(
-        map,
-        tr,
-        auth,
-        id,
-        form,
-        contribution_error_message(tr, e),
-        contribution_error_status(e, StatusCode::OK),
+    let (message, hours_error) = e.parts(tr);
+    render(
+        edit_page_vm(
+            map,
+            tr,
+            &auth,
+            id,
+            point,
+            form,
+            hours_error,
+            Some(message),
+            None,
+        ),
+        e.status(StatusCode::OK),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn contribution_edit_notice(
     map: &MapConfig,
     tr: Translator,
     auth: Auth,
     id: i64,
-    form: &EditParkingForm,
+    point: GeoPoint,
+    form: &ContributionForm,
     notice: String,
-) -> Response {
-    contribution_edit_notice_status(map, tr, auth, id, form, notice, StatusCode::OK)
-}
-
-pub(crate) fn contribution_edit_notice_status(
-    map: &MapConfig,
-    tr: Translator,
-    auth: Auth,
-    id: i64,
-    form: &EditParkingForm,
-    notice: String,
-    status: StatusCode,
 ) -> Response {
     render(
-        ParkingEditPage {
-            layout: PageLayout::for_request(tr.t("edit.title").to_string(), "edit", &auth, map),
-            tr,
-            id,
-            version: form.version,
-            name: form.name.clone(),
-            address: form.address.clone(),
-            description: form.description.clone(),
-            parking_type: form.parking_type.clone(),
-            cost_kind: form.cost_kind.clone(),
-            price: form.price.clone(),
-            price_currency: form.price_currency.clone(),
-            price_unit: form.price_unit.clone(),
-            open_24h: parse_bool(&form.open_24h),
-            type_options: view::type_options(tr, Some(&form.parking_type)),
-            security_options: view::security_options(tr, Some(&form.security)),
-            security: form.security.clone(),
-            error: None,
-            notice: Some(notice),
-        },
-        status,
+        edit_page_vm(map, tr, &auth, id, point, form, None, None, Some(notice)),
+        StatusCode::OK,
     )
+}
+
+/// The edit page rendered from a rejected submission (so nothing the
+/// contributor typed is lost on the way back).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn edit_page_vm(
+    map: &MapConfig,
+    tr: Translator,
+    auth: &Auth,
+    id: i64,
+    point: GeoPoint,
+    form: &ContributionForm,
+    hours_error: Option<HoursError>,
+    error: Option<String>,
+    notice: Option<String>,
+) -> ParkingEditPage {
+    ParkingEditPage {
+        layout: edit_parking_layout(map, tr, auth),
+        tr,
+        id,
+        version: form.version,
+        name: form.name.clone(),
+        address: form.address.clone(),
+        description: form.description.clone(),
+        parking_type: form.parking_type.clone(),
+        cost_kind: form.cost_kind.clone(),
+        price: form.price.clone(),
+        price_currency: form.price_currency.clone(),
+        price_unit: form.price_unit.clone(),
+        hours_days: hours_editor_vm(tr, &form.hours_fields(), hours_error),
+        security_states: security_editor_vm(tr, &form.security_fields()),
+        type_options: view::type_options(tr, Some(&form.parking_type)),
+        lat: point.lat(),
+        lon: point.lon(),
+        error,
+        notice,
+    }
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -713,9 +686,6 @@ pub(crate) async fn parking_proposal_post(
         Ok(k) => k,
         Err(_) => return axum::response::Redirect::to(&format!("/parking/{id}")).into_response(),
     };
-    // Build the typed payload and let it render its own JSON, so the stored
-    // shape is defined in one place (the domain) instead of by a `json!` here
-    // and a hand-written reader in the moderation queue.
     let change = match kind {
         ProposalKind::MoveLocation => {
             let Ok(lat) = form.lat.trim().parse::<f64>() else {
@@ -735,8 +705,6 @@ pub(crate) async fn parking_proposal_post(
             None => return proposal_error(id),
         },
     };
-    // An out-of-range coordinate would round-trip as `Unknown`; refuse it at
-    // the door instead of filing a proposal no moderator can act on.
     if change == ProposedChange::Unknown {
         return proposal_error(id);
     }
@@ -747,9 +715,6 @@ pub(crate) async fn parking_proposal_post(
         .await
     {
         Ok(_) => axum::response::Redirect::to(&format!("/parking/{id}?proposed=1")).into_response(),
-        // The proposal forms live on the edit page, which 404s for a
-        // taken-down location; a direct POST gets the same answer rather than
-        // a redirect to a page that would itself 404.
         Err(ContributionError::LocationNotActive) => {
             not_found_page(&headers, &state.map, &auth, tr)
         }
@@ -769,7 +734,6 @@ pub(crate) async fn parking_proposal_post(
 pub(crate) fn parse_proposed_existence(raw: &str) -> Option<bool> {
     match raw.trim() {
         "removed" | "no_longer_exists" => Some(false),
-        // "the information changed" is not a removal: the spot is still there.
         "exists" | "info_changed" | "still_exists" => Some(true),
         _ => None,
     }
@@ -781,17 +745,10 @@ pub(crate) fn proposal_error(id: i64) -> Response {
     axum::response::Redirect::to(&format!("/parking/{id}?proposal_error=1")).into_response()
 }
 
-// ---------------------------------------------------------------------------
-// Error-mapping unit tests
-// ---------------------------------------------------------------------------
-//
-// The handlers that surface these are covered end to end in
-// `tests/http_test.rs`; provoking a real database conflict through HTTP is
-// inherently racy, so the mapping itself is pinned here instead.
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bikenest_domain::{OpeningHours, SecurityState, TimeRange, hms};
 
     fn en() -> Translator {
         Translator::new(Locale::En)
@@ -807,7 +764,6 @@ mod tests {
             contribution_error_status(&ContributionError::Unavailable, StatusCode::OK),
             StatusCode::SERVICE_UNAVAILABLE
         );
-        // Every other variant keeps the status its own flow chose.
         assert_eq!(
             contribution_error_status(&ContributionError::NotFound, StatusCode::BAD_REQUEST),
             StatusCode::BAD_REQUEST
@@ -820,5 +776,66 @@ mod tests {
             contribution_error_message(en(), &ContributionError::Unavailable),
             en().t("error.unavailable")
         );
+    }
+
+    fn base_form() -> ContributionForm {
+        ContributionForm {
+            name: "Spot".to_string(),
+            address: "Rua X, 1".to_string(),
+            parking_type: "rack".to_string(),
+            cost_kind: "unknown".to_string(),
+            lat: "-25.43".to_string(),
+            lon: "-49.27".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_form_with_no_hours_or_security_fields_still_parses() {
+        let new = new_location_from_form(&base_form()).expect("the no-JS minimum is enough");
+        assert_eq!(new.hours, OpeningHours::Unknown);
+        assert!(new.security.is_empty());
+        assert!(new.timezone.is_none(), "derived from the point server-side");
+    }
+
+    #[test]
+    fn the_form_carries_weekly_hours_and_a_definitive_no() {
+        let form = ContributionForm {
+            h_mon_state: "ranges".to_string(),
+            h_mon_1_open: "22:00".to_string(),
+            h_mon_1_close: "02:00".to_string(),
+            h_tue_state: "closed".to_string(),
+            sec_cctv: "no".to_string(),
+            sec_well_lit: "yes".to_string(),
+            ..base_form()
+        };
+        let new = new_location_from_form(&form).unwrap();
+        assert_eq!(
+            new.hours,
+            OpeningHours::weekly(vec![(1, TimeRange::new(hms(22, 0), hms(2, 0)))]),
+            "the overnight range survives and Tuesday is closed (no row)"
+        );
+        let cctv = new
+            .security
+            .iter()
+            .find(|f| f.code() == "cctv")
+            .expect("cctv recorded");
+        assert_eq!(cctv.state(), SecurityState::No);
+    }
+
+    #[test]
+    fn an_overlapping_day_is_reported_against_that_day() {
+        let form = ContributionForm {
+            h_wed_state: "ranges".to_string(),
+            h_wed_1_open: "09:00".to_string(),
+            h_wed_1_close: "18:00".to_string(),
+            h_wed_2_open: "17:00".to_string(),
+            h_wed_2_close: "20:00".to_string(),
+            ..base_form()
+        };
+        let err = new_location_from_form(&form).unwrap_err();
+        let (message, hours) = err.parts(en());
+        assert_eq!(message, en().t("form.hours.overlap"));
+        assert_eq!(hours.expect("a day-level error").day, 3);
     }
 }

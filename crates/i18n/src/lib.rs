@@ -249,6 +249,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         ),
         "home.search.button" => ("Search parking", "Buscar vagas"),
         "home.search.locate" => ("Use my location", "Usar minha localização"),
+        "home.locate_denied" => (
+            "We couldn't get your location. Type a destination instead.",
+            "Não conseguimos obter sua localização. Digite um destino.",
+        ),
         "home.search.locate_hint" => (
             "Used once, only for this search.",
             "Usada uma vez, só para esta busca.",
@@ -811,12 +815,65 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Left blank, we derive it from the pin. You can override.",
             "Em branco, o derivamos do ponto. Você pode alterar.",
         ),
-        "new.field.open_24h" => ("Open 24 hours", "Aberto 24 horas"),
         "new.field.security" => ("Security attributes", "Itens de segurança"),
         "new.field.price" => ("Price", "Preço"),
         "new.field.currency" => ("Currency", "Moeda"),
         "new.field.unit" => ("Per", "Por"),
         "new.submit" => ("Add parking spot", "Adicionar vaga"),
+
+        // --- the shared add/edit form: pin picker, hours, tri-state -------
+        "form.pin.title" => ("Where is it?", "Onde fica?"),
+        "form.pin_hint" => ("Drag the pin onto the spot.", "Arraste o pino até a vaga."),
+        "form.picked" => ("Picked position", "Posição escolhida"),
+        "form.picked_none" => ("No position picked yet", "Nenhuma posição escolhida"),
+        "form.use_location" => ("Use my location", "Usar minha localização"),
+        "form.locate_failed" => (
+            "We couldn't get your location. Drag the pin instead.",
+            "Não conseguimos obter sua localização. Arraste o pino.",
+        ),
+        "form.geocode_address" => ("Find address", "Localizar endereço"),
+        "form.geocode_failed" => (
+            "We couldn't find that address. Drag the pin instead.",
+            "Não encontramos esse endereço. Arraste o pino.",
+        ),
+        "form.advanced" => ("Advanced", "Avançado"),
+        "form.advanced_hint" => (
+            "Exact coordinates and timezone. Left alone, the pin sets the position and we derive the timezone.",
+            "Coordenadas exatas e fuso horário. Sem mexer, o pino define a posição e derivamos o fuso.",
+        ),
+        "form.hours.title" => ("Opening hours", "Horário de funcionamento"),
+        "form.hours.hint" => (
+            "Pick a state per day. \"Set hours\" takes one or two time ranges; a range that ends before it starts runs past midnight.",
+            "Escolha um estado por dia. \"Definir horário\" aceita um ou dois intervalos; um intervalo que termina antes de começar passa da meia-noite.",
+        ),
+        "form.hours.ranges" => ("Set hours", "Definir horário"),
+        "form.hours.open" => ("Opens", "Abre"),
+        "form.hours.close" => ("Closes", "Fecha"),
+        "form.hours.invalid_range" => (
+            "Check this day's opening and closing times.",
+            "Confira os horários de abertura e fechamento deste dia.",
+        ),
+        "form.hours.overlap" => (
+            "The two ranges for this day overlap.",
+            "Os dois intervalos deste dia se sobrepõem.",
+        ),
+        "form.copy_hours" => ("Copy to all days", "Copiar para todos os dias"),
+        "form.tri.yes" => ("Yes", "Sim"),
+        "form.tri.no" => ("No", "Não"),
+        "form.tri.unknown" => ("Don't know", "Não sei"),
+
+        // --- the duplicate interstitial, shown BEFORE anything is created --
+        "new.confirm.title" => ("Is this the same spot?", "É a mesma vaga?"),
+        "new.confirm.body" => (
+            "Spots this close with a similar name are usually the same one. Open it to check — nothing has been created yet.",
+            "Vagas tão próximas e com nome parecido geralmente são a mesma. Abra para conferir — nada foi criado ainda.",
+        ),
+        "new.confirm.is_this" => ("That's the one", "É esta"),
+        "new.confirm.create_anyway" => (
+            "It's a different spot, create it anyway",
+            "É outra vaga, criar mesmo assim",
+        ),
+        "new.confirm.back" => ("Go back and edit", "Voltar e corrigir"),
 
         // --- M3 contributions: edit (D2) --------------------------------
         "edit.title" => ("Edit parking spot", "Editar vaga"),
@@ -943,6 +1000,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Obrigado — sua avaliação foi salva.",
         ),
         "details.notice.added" => ("The parking spot was added.", "A vaga foi adicionada."),
+        "contribution.created_notice" => (
+            "Your spot is live. The community will verify it over time; you can edit it any time.",
+            "Sua vaga está no ar. A comunidade vai conferi-la com o tempo; você pode editá-la quando quiser.",
+        ),
 
         // --- P3 recommended because (§105) -------------------------------
         "details.recommend.title" => ("Recommended because", "Recomendado porque"),
