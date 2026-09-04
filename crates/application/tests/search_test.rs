@@ -2,9 +2,8 @@
 //! fake ports (no database — the real-SQL tests live in infrastructure).
 
 use bikenest_application::{
-    Cursor, DEFAULT_RECOMMENDATION_CONFIG, Filters, GeoHit, GeocodeError, Geocoder,
-    GetParkingDetails, ParkingDetailsReader, ParkingSearchReader, ParkingSummary, ReaderError,
-    SearchError, SearchInput, SearchParking,
+    Cursor, Filters, GeoHit, GeocodeError, Geocoder, GetParkingDetails, ParkingDetailsReader,
+    ParkingSearchReader, ParkingSummary, ReaderError, SearchError, SearchInput, SearchParking,
 };
 use bikenest_domain::{Cost, GeoPoint, ParkingLocation, ParkingType, Rating, TimeRange, hms};
 use std::sync::{Arc, Mutex};
@@ -43,6 +42,15 @@ fn summary(
         // Stands in for the reader's key: these fakes are read with the
         // distance sort, whose key is the distance itself.
         sort_key: Some(distance_m),
+    }
+}
+
+/// A summary whose sort key is set independently of its distance — what a
+/// scoring sort returns.
+fn summary_keyed(id: i64, distance_m: f64, sort_key: f64) -> ParkingSummary {
+    ParkingSummary {
+        sort_key: Some(sort_key),
+        ..summary(id, distance_m, None, Some(2))
     }
 }
 
@@ -105,12 +113,7 @@ impl ParkingSearchReader for FakeReader {
 }
 
 fn use_case(geocoder: FakeGeocoder, reader: FakeReader) -> SearchParking {
-    SearchParking::new(
-        Box::new(geocoder),
-        Box::new(reader),
-        DEFAULT_RECOMMENDATION_CONFIG,
-        Default::default(),
-    )
+    SearchParking::new(Box::new(geocoder), Box::new(reader))
 }
 
 fn input() -> SearchInput {
@@ -171,7 +174,7 @@ async fn query_is_geocoded_and_label_preserved() {
 #[tokio::test]
 async fn radius_and_page_size_are_clamped() {
     let mut input = input();
-    input.sort = Some("distance".to_string()); // SQL path: limit = page_size + 1
+    input.sort = Some("distance".to_string());
     input.radius_m = Some(9999); // not in allowlist → default 1000
     input.page_size = Some(100_000); // clamp to MAX_PAGE_SIZE
     let reader = FakeReader::default();
@@ -179,101 +182,104 @@ async fn radius_and_page_size_are_clamped() {
         .execute(input)
         .await
         .unwrap();
-    // limit was requested as page_size + 1 (lookahead), so 100 + 1.
     assert_eq!(*reader.received_limit.lock().unwrap().last().unwrap(), 101);
 
-    // The recommended path uses the candidate cap instead.
-    let mut rec_input = SearchInput {
+    // Every sort now reads one page plus the look-ahead row, `recommended`
+    // (the default) included: there is no candidate fetch to cap any more.
+    let rec_input = SearchInput {
         query: Some("Rua XV de Novembro".to_string()),
+        page_size: Some(100_000),
         ..Default::default()
-    }; // default sort = recommended
-    rec_input.page_size = Some(100_000);
+    };
     let reader = FakeReader::default();
     use_case(FakeGeocoder::default(), reader.clone())
         .execute(rec_input)
         .await
         .unwrap();
-    assert_eq!(
-        *reader.received_limit.lock().unwrap().last().unwrap(),
-        DEFAULT_RECOMMENDATION_CONFIG.candidate_cap
-    );
+    assert_eq!(*reader.received_limit.lock().unwrap().last().unwrap(), 101);
 }
 
+/// The home page's featured strip asks for four cards; the reader must be
+/// asked for five (the look-ahead row), not for a five-hundred-row candidate
+/// set it would then throw away.
 #[tokio::test]
-async fn recommended_sort_orders_by_score_then_id_and_paginates() {
-    // Two items with identical scores (both verified recently, free, no
-    // security known, no rating) at different distances → tie broken by id.
+async fn a_small_page_size_reads_a_small_page() {
+    let reader = FakeReader::new(
+        (1..=30)
+            .map(|i| summary(i, i as f64 * 10.0, None, Some(1)))
+            .collect(),
+    );
+    let (page, _) = use_case(FakeGeocoder::default(), reader.clone())
+        .execute(SearchInput {
+            lat: Some(-25.4297),
+            lon: Some(-49.2705),
+            radius_m: Some(1000),
+            page_size: Some(4),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        *reader.received_limit.lock().unwrap().last().unwrap(),
+        5,
+        "page_size 4 + one look-ahead row"
+    );
+    assert_eq!(page.items.len(), 4);
+    assert!(page.next_cursor.is_some(), "more rows exist");
+}
+
+/// `Recommended` is a SQL sort like every other one now: the reader ranks and
+/// limits, the use case passes the cursor down and mints the next one from the
+/// key the reader computed. Nothing is re-ranked in memory, so no page can be
+/// ordered differently from the query that produced it.
+#[tokio::test]
+async fn recommended_sort_pages_through_the_reader_like_the_other_sorts() {
     let items = vec![
-        summary(2, 100.0, None, Some(2)),
-        summary(1, 100.0, None, Some(2)),
-        summary(3, 50.0, None, Some(2)), // closer → higher distance score
+        summary_keyed(3, 50.0, -0.72),
+        summary_keyed(1, 100.0, -0.68),
+        summary_keyed(2, 100.0, -0.61),
     ];
     let reader = FakeReader::new(items);
     let mut input = input();
     input.sort = Some("recommended".to_string());
+    input.page_size = Some(2);
     let (page, _) = use_case(FakeGeocoder::default(), reader.clone())
         .execute(input.clone())
         .await
         .unwrap();
     assert_eq!(
-        page.items.iter().map(|i| i.id).collect::<Vec<_>>(),
-        vec![3, 1, 2]
+        reader.received_apply_cursor.lock().unwrap().last().unwrap(),
+        &true,
+        "the reader applies the keyset predicate for recommended too"
     );
-
-    // Deterministic: same input → same order.
-    let (page2, _) = use_case(
-        FakeGeocoder::default(),
-        FakeReader::new(vec![
-            summary(2, 100.0, None, Some(2)),
-            summary(1, 100.0, None, Some(2)),
-            summary(3, 50.0, None, Some(2)),
-        ]),
-    )
-    .execute(input.clone())
-    .await
-    .unwrap();
+    assert_eq!(reader.received_limit.lock().unwrap().last().unwrap(), &3);
     assert_eq!(
         page.items.iter().map(|i| i.id).collect::<Vec<_>>(),
-        page2.items.iter().map(|i| i.id).collect::<Vec<_>>()
+        vec![3, 1],
+        "reader order is the page order"
     );
+    let next = page.next_cursor.expect("a second page exists");
+    assert_eq!(next.sort, bikenest_application::Sort::Recommended);
+    assert!(
+        (next.v - (-0.68)).abs() < 1e-9,
+        "the cursor anchors on the reader's own sort key, not a recomputed score"
+    );
+    assert_eq!(next.id, 1);
 
-    // Missing data is neutral, not worst: an unverified, unreviewed item with
-    // unknown security still beats a verified one that is twice as far? No —
-    // but it must beat nothing-by-default: check score neutrality directly.
-    let now = chrono::Utc::now();
-    let cfg = DEFAULT_RECOMMENDATION_CONFIG;
-    let fresh = Default::default();
-    let neutral = bikenest_application::recommendation_score(
-        &summary(9, 500.0, None, None),
+    // A cursor minted for one sort must not be replayed against another.
+    let mut crossed = input;
+    crossed.sort = Some("distance".to_string());
+    crossed.cursor = Some(next.encode());
+    let request = bikenest_application::SearchRequest::new(
+        GeoPoint::new(-23.5, -46.6).unwrap(),
+        None,
         1000,
-        now,
-        &cfg,
-        &fresh,
+        Filters::default(),
+        bikenest_application::Sort::Distance,
+        20,
+        Some(&next.encode()),
     );
-    // distance .35*(1-0.5) + security .25*0.5 + rating .2*0.5 + freshness .15*0.5 + verification .05*0.5
-    let expected = 0.35 * 0.5 + 0.5 * (0.25 + 0.2 + 0.15 + 0.05);
-    assert!((neutral - expected).abs() < 1e-9);
-
-    // Cursor pagination on the recommended sort.
-    let cursor = Cursor {
-        sort: bikenest_application::Sort::Recommended,
-        v: page.items[0].id as f64, // not a real score, but exercises the filter path
-        id: page.items[0].id,
-    };
-    let mut paged_input = input;
-    paged_input.cursor = Some(cursor.encode());
-    let (paged, _) = use_case(
-        FakeGeocoder::default(),
-        FakeReader::new(vec![
-            summary(1, 100.0, None, Some(2)),
-            summary(2, 100.0, None, Some(2)),
-            summary(3, 50.0, None, Some(2)),
-        ]),
-    )
-    .execute(paged_input)
-    .await
-    .unwrap();
-    assert!(paged.items.iter().all(|i| i.id != page.items[0].id));
+    assert!(request.cursor.is_none());
 }
 
 #[tokio::test]
@@ -368,6 +374,43 @@ async fn filters_parse_from_input() {
 // ---------------------------------------------------------------------------
 // GetParkingDetails
 // ---------------------------------------------------------------------------
+
+/// A filter code no catalog knows can never be confirmed on any location, so
+/// keeping it would turn the whole search into "no results". A stale or
+/// hand-edited URL degrades to the filters that still mean something.
+#[tokio::test]
+async fn unknown_security_codes_are_dropped_from_the_request() {
+    let request = |codes: Vec<&str>| {
+        bikenest_application::SearchRequest::new(
+            GeoPoint::new(-23.5, -46.6).unwrap(),
+            None,
+            1000,
+            Filters {
+                security_all: codes.into_iter().map(str::to_string).collect(),
+                ..Filters::default()
+            },
+            bikenest_application::Sort::Distance,
+            20,
+            None,
+        )
+    };
+
+    assert_eq!(
+        request(vec!["cctv", "laser_fence", "well_lit"])
+            .filters
+            .security_all,
+        vec!["cctv", "well_lit"],
+    );
+    assert!(
+        request(vec!["laser_fence"]).filters.security_all.is_empty(),
+        "an all-unknown filter set becomes no filter, not an impossible one"
+    );
+    assert_eq!(
+        request(vec![" cctv ", "cctv", ""]).filters.security_all,
+        vec!["cctv"],
+        "codes are trimmed and deduped"
+    );
+}
 
 struct OneLocationReader(Option<ParkingLocation>);
 

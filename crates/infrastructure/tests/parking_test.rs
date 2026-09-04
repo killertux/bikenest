@@ -8,8 +8,8 @@
 //! Everything else in the suite still uses transaction-per-test rollback.
 
 use bikenest_application::{
-    CostFilter, Cursor, ParkingDetailsReader, ReaderError, SearchInput, SearchPage, SearchParking,
-    SearchRequest, Sort,
+    CostFilter, Cursor, Filters, ParkingDetailsReader, ParkingSummary, ReaderError, SearchInput,
+    SearchPage, SearchParking, SearchRequest, Sort,
 };
 use bikenest_domain::{Cost, CurrencyCode, Money, ParkingType, PricingUnit};
 use bikenest_test_support::{ParkingBuilder, db_test, pool};
@@ -60,13 +60,24 @@ fn fixed_now() -> chrono::DateTime<chrono::Utc> {
     instant_at("America/Sao_Paulo", 2026, 3, 10, 12, 0)
 }
 
+/// The search reader under test, carrying the documented default weights and
+/// freshness thresholds — the same values production loads from the
+/// environment, so the SQL sort key the tests assert on is the shipped one.
+fn reader(db: bikenest_infrastructure::Db) -> bikenest_infrastructure::SqlxParkingSearchReader {
+    bikenest_infrastructure::SqlxParkingSearchReader::new(
+        db,
+        bikenest_application::DEFAULT_RECOMMENDATION_CONFIG,
+        Default::default(),
+    )
+}
+
 async fn real_search(
     request: &SearchRequest,
     limit: usize,
     apply_cursor: bool,
 ) -> Result<SearchPage, ReaderError> {
     let db = bikenest_infrastructure::Db::from_pool(pool().await);
-    bikenest_infrastructure::SqlxParkingSearchReader::new(db)
+    reader(db)
         .search_at(request, limit, apply_cursor, fixed_now())
         .await
 }
@@ -298,7 +309,14 @@ async fn keyset_pagination_is_stable_across_inserts(tx: &mut TestTx) {
         let last = page.items.last().unwrap();
         req.cursor = Some(Cursor {
             sort: Sort::Distance,
-            v: last.distance_m,
+            // The key the query itself computed. `distance_m` is the spheroid
+            // distance the card displays; the distance sort orders on the
+            // sphere distance the GIST index can supply, and they differ by a
+            // fraction of a percent — enough, at this spacing, to repeat a row
+            // across the page boundary if the cursor were recomputed here.
+            v: last
+                .sort_key
+                .expect("the reader always returns its sort key"),
             id: last.id,
         });
     }
@@ -475,9 +493,7 @@ async fn search_at(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<SearchPage, ReaderError> {
     let db = bikenest_infrastructure::Db::from_pool(pool().await);
-    bikenest_infrastructure::SqlxParkingSearchReader::new(db)
-        .search_at(request, 20, false, now)
-        .await
+    reader(db).search_at(request, 20, false, now).await
 }
 
 /// `is_open_now` for the single fixture living in test patch `k`.
@@ -641,9 +657,7 @@ async fn search_use_case() -> SearchParking {
     let db = bikenest_infrastructure::Db::from_pool(pool().await);
     SearchParking::new(
         Box::new(bikenest_infrastructure::FakeGeocoder),
-        Box::new(bikenest_infrastructure::SqlxParkingSearchReader::new(db)),
-        bikenest_application::DEFAULT_RECOMMENDATION_CONFIG,
-        Default::default(),
+        Box::new(reader(db)),
     )
 }
 
@@ -665,9 +679,19 @@ async fn page_of(k: f64, sort: &str, cursor: Option<String>) -> SearchPage {
     page
 }
 
+/// Every sort code the search understands, so a new one cannot quietly skip
+/// the pagination tests.
+const SORTS: [&str; 5] = [
+    "recommended",
+    "distance",
+    "security",
+    "rating",
+    "recently_verified",
+];
+
 /// Walks both pages of a 25-row patch and returns the rows in page order,
 /// asserting the page shapes and that the two pages are disjoint.
-async fn both_pages(k: f64, sort: &str) -> Vec<bikenest_application::ParkingSummary> {
+async fn both_pages(k: f64, sort: &str) -> Vec<ParkingSummary> {
     let mut first = page_of(k, sort, None).await;
     assert_eq!(first.items.len(), 20, "{sort}: full first page");
     assert_eq!(first.total, 25, "{sort}: total counts every match");
@@ -725,4 +749,368 @@ async fn recently_verified_pages_advance_instead_of_repeating(tx: &mut TestTx) {
         "distances ascend across the page boundary"
     );
     cleanup_fixture(MARK).await;
+}
+
+/// The five sorts, on one 25-row patch: two pages each, disjoint, strictly
+/// ordered by the key the query itself computed, and reproducible.
+///
+/// `Recommended` is in this list because it is now a SQL sort like the others.
+/// It used to fetch a 500-row candidate set and re-rank it in memory, which
+/// meant its pages were only as correct as that cap and its cursor was a score
+/// no query had produced.
+#[db_test]
+async fn every_sort_pages_disjointly_and_deterministically(tx: &mut TestTx) {
+    const MARK: &str = "fix-all-sorts";
+    cleanup_fixture(MARK).await;
+    let conn = tx.executor();
+    for m in 1..=25u32 {
+        let mut spot = at(16.0, f64::from(m) * 10.0)
+            .with_fixture_tag(MARK)
+            .with_name(format!("Spot {m:02}"))
+            .verified_days_ago(i64::from(m) * 7)
+            .with_rating(f64::from(1 + m % 5), i64::from(m));
+        // Deliberately few distinct values per key, so every sort has ties for
+        // the id tiebreak to resolve.
+        for code in ["cctv", "well_lit", "indoor"].iter().take((m % 4) as usize) {
+            spot = spot.with_security(code, 1);
+        }
+        spot.create(&mut *conn).await.unwrap();
+    }
+    tx.commit_fixture().await;
+
+    for sort in SORTS {
+        let rows = both_pages(16.0, sort).await;
+        let keys: Vec<(f64, i64)> = rows
+            .iter()
+            .map(|r| (r.sort_key.expect("every sort carries its key"), r.id))
+            .collect();
+        assert!(
+            keys.windows(2).all(|w| w[0] < w[1]),
+            "{sort}: (key, id) strictly ascends across the page boundary"
+        );
+
+        let again = page_of(16.0, sort, None).await;
+        assert_eq!(
+            again.items.iter().map(|i| i.id).collect::<Vec<_>>(),
+            rows[..20].iter().map(|i| i.id).collect::<Vec<_>>(),
+            "{sort}: the same request twice is the same page"
+        );
+
+        // A page past the end. The count is its own statement now, so it is
+        // still the truth here; it used to ride on the returned rows and read 0.
+        let beyond = Cursor {
+            sort: Sort::from_code(sort).unwrap(),
+            v: f64::MAX,
+            id: i64::MAX,
+        };
+        let empty = page_of(16.0, sort, Some(beyond.encode())).await;
+        assert!(empty.items.is_empty(), "{sort}: nothing past the end");
+        assert_eq!(
+            empty.total, 25,
+            "{sort}: the total does not ride on the rows"
+        );
+        assert!(empty.next_cursor.is_none());
+    }
+    cleanup_fixture(MARK).await;
+}
+
+/// A security code no catalog knows is dropped rather than matched, so the
+/// search degrades to the filters that still mean something instead of
+/// returning nothing.
+#[db_test]
+async fn an_unknown_security_filter_code_is_ignored(tx: &mut TestTx) {
+    const MARK: &str = "fix-unknown-security";
+    cleanup_fixture(MARK).await;
+    let conn = tx.executor();
+    at(17.0, 30.0)
+        .with_fixture_tag(MARK)
+        .with_security("cctv", 1)
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    at(17.0, 60.0)
+        .with_fixture_tag(MARK)
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    let request = |codes: Vec<&str>| {
+        SearchRequest::new(
+            test_origin(17.0),
+            None,
+            1000,
+            Filters {
+                security_all: codes.into_iter().map(str::to_string).collect(),
+                ..Filters::default()
+            },
+            Sort::Distance,
+            20,
+            None,
+        )
+    };
+    let unfiltered = real_search(&request(vec![]), 20, false).await.unwrap();
+    let unknown_only = real_search(&request(vec!["laser_fence"]), 20, false)
+        .await
+        .unwrap();
+    assert_eq!(unknown_only.total, unfiltered.total);
+    assert_eq!(
+        unknown_only.items.iter().map(|i| i.id).collect::<Vec<_>>(),
+        unfiltered.items.iter().map(|i| i.id).collect::<Vec<_>>(),
+    );
+
+    // A known code alongside it still applies.
+    let mixed = real_search(&request(vec!["laser_fence", "cctv"]), 20, false)
+        .await
+        .unwrap();
+    assert_eq!(mixed.total, 1);
+    cleanup_fixture(MARK).await;
+}
+
+/// The recommendation score, transcribed from the SQL sort key back into
+/// Rust. The point of the test below is that these two never drift: the score
+/// lives in one place (the query), and this is the independent reading of it.
+fn recommendation_score(
+    item: &ParkingSummary,
+    radius_m: u32,
+    now: chrono::DateTime<chrono::Utc>,
+    weights: &bikenest_application::RecommendationConfig,
+    thresholds: &bikenest_domain::FreshnessThresholds,
+) -> f64 {
+    let distance_score = 1.0 - (item.distance_m / f64::from(radius_m)).clamp(0.0, 1.0);
+
+    let yes = item.security_yes.len() as f64;
+    let security_score = if yes > 0.0 { (yes / 8.0).min(1.0) } else { 0.5 };
+
+    let rating_score = item.rating.avg().map(|a| a / 5.0).unwrap_or(0.5);
+
+    let freshness_score = match bikenest_domain::categorize(item.last_verified_at, now, thresholds)
+    {
+        bikenest_domain::FreshnessCategory::Fresh => 1.0,
+        bikenest_domain::FreshnessCategory::RecentlyVerified => 0.75,
+        bikenest_domain::FreshnessCategory::Aging => 0.5,
+        bikenest_domain::FreshnessCategory::Stale => 0.25,
+        bikenest_domain::FreshnessCategory::VeryStale => 0.1,
+        bikenest_domain::FreshnessCategory::Never => 0.5,
+    };
+
+    let verification_score = if item.last_verified_at.is_some() {
+        1.0
+    } else {
+        0.5
+    };
+
+    weights.w_distance * distance_score
+        + weights.w_security * security_score
+        + weights.w_rating * rating_score
+        + weights.w_freshness * freshness_score
+        + weights.w_verification * verification_score
+}
+
+/// The SQL sort key for `Recommended` is exactly `-recommendation_score`, on
+/// both sides of every freshness threshold.
+///
+/// The ladder's boundaries are where a translation goes wrong: the domain
+/// compares *whole days* with `<`, so a location verified exactly 30 days ago
+/// is "recently verified", not "fresh". Each row below is pinned to an exact
+/// day offset from the instant the search is evaluated at, so the comparison
+/// lands on the boundary rather than near it.
+#[db_test]
+async fn the_recommended_sort_key_is_the_documented_score(tx: &mut TestTx) {
+    const MARK: &str = "fix-score-agreement";
+    cleanup_fixture(MARK).await;
+    let now = instant_at("America/Sao_Paulo", 2026, 3, 10, 12, 0);
+    let thresholds = bikenest_domain::DEFAULT_THRESHOLDS;
+    let ages: [Option<i64>; 10] = [
+        None,
+        Some(0),
+        Some(thresholds.fresh_days - 1),
+        Some(thresholds.fresh_days),
+        Some(thresholds.recent_days - 1),
+        Some(thresholds.recent_days),
+        Some(thresholds.aging_days - 1),
+        Some(thresholds.aging_days),
+        Some(thresholds.stale_days - 1),
+        Some(thresholds.stale_days),
+    ];
+
+    let conn = tx.executor();
+    let mut ids = Vec::new();
+    for (i, age) in ages.iter().enumerate() {
+        let mut spot = at(18.0, 30.0 + i as f64 * 40.0)
+            .with_fixture_tag(MARK)
+            .with_name(format!("Score {i}"));
+        // Vary the other three terms too, including their neutral defaults:
+        // no rating and no confirmed attributes must score 0.5, not 0.
+        if i % 3 == 1 {
+            spot = spot.with_rating(4.25, 4);
+        }
+        for code in bikenest_domain::SECURITY_FEATURE_CODES.iter().take(i) {
+            spot = spot.with_security(code, 1);
+        }
+        spot = match age {
+            None => spot.never_verified(),
+            Some(days) => spot.verified_days_ago(*days),
+        };
+        let created = spot.create(&mut *conn).await.unwrap();
+        ids.push(created.id());
+        // The builder dates verification from wall-clock `now()`; pin it to an
+        // exact offset from the instant this search is evaluated at, or the
+        // boundary rows land a few hours off it.
+        if let Some(days) = age {
+            sqlx::query(
+                "UPDATE parking_location SET last_verified_at = $2 - make_interval(days => $3) WHERE id = $1",
+            )
+            .bind(created.id())
+            .bind(now)
+            .bind(i32::try_from(*days).unwrap())
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        }
+    }
+    tx.commit_fixture().await;
+
+    let page = search_at(&request_at(18.0, Sort::Recommended), now)
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), ages.len(), "every fixture is in range");
+
+    let weights = bikenest_application::DEFAULT_RECOMMENDATION_CONFIG;
+    for item in &page.items {
+        let expected = -recommendation_score(item, 1000, now, &weights, &thresholds);
+        let actual = item.sort_key.expect("recommended carries its key");
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "{}: SQL key {actual} vs Rust score {expected} (verified {:?}, {} confirmed, rating {:?})",
+            item.name,
+            item.last_verified_at,
+            item.security_yes.len(),
+            item.rating.avg(),
+        );
+    }
+    let keys: Vec<f64> = page.items.iter().map(|i| i.sort_key.unwrap()).collect();
+    assert!(
+        keys.windows(2).all(|w| w[0] <= w[1]),
+        "the best score comes first: the key is the negated score"
+    );
+    cleanup_fixture(MARK).await;
+}
+
+/// `bikenest_is_open_at` (migration 0020) is the SQL half of
+/// `OpeningHours::status_at`, so the two must answer the same question at the
+/// same instant. "Open now" is one implementation with two callers, not two
+/// implementations — this is what keeps it that way.
+#[db_test]
+async fn the_open_now_function_agrees_with_the_domain(tx: &mut TestTx) {
+    const MARK: &str = "fix-open-fn";
+    cleanup_fixture(MARK).await;
+    let conn = tx.executor();
+
+    // (label, fixture) — each shape the rule has an arm for.
+    let same_day = at(19.0, 30.0)
+        .with_fixture_tag(MARK)
+        .with_hours(1..=7, (8, 0), (18, 0))
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    let overnight = at(19.0, 60.0)
+        .with_fixture_tag(MARK)
+        .with_hours(1..=7, (22, 0), (2, 0))
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    let all_day = at(19.0, 90.0)
+        .with_fixture_tag(MARK)
+        .with_all_day_hours(1..=7)
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    let weekdays_only = at(19.0, 120.0)
+        .with_fixture_tag(MARK)
+        .with_hours(1..=5, (9, 0), (17, 0))
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    let no_hours = at(19.0, 150.0)
+        .with_fixture_tag(MARK)
+        .with_unknown_hours()
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    let dst = at(19.0, 180.0)
+        .with_fixture_tag(MARK)
+        .with_timezone("America/New_York")
+        .with_hours(1..=7, (3, 0), (6, 0))
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    // Tuesday 2026-03-10 in São Paulo, Sunday 2026-03-08 around the US
+    // spring-forward instant (02:00 EST → 03:00 EDT).
+    let sp = |h, mi| instant_at("America/Sao_Paulo", 2026, 3, 10, h, mi);
+    let cases: [(
+        &str,
+        &bikenest_domain::ParkingLocation,
+        chrono::DateTime<chrono::Utc>,
+        bool,
+    ); 16] = [
+        ("same-day, before opening", &same_day, sp(7, 59), false),
+        ("same-day, opening minute", &same_day, sp(8, 0), true),
+        ("same-day, last minute", &same_day, sp(17, 59), true),
+        ("same-day, closing minute", &same_day, sp(18, 0), false),
+        ("overnight, before opening", &overnight, sp(21, 59), false),
+        ("overnight, own evening", &overnight, sp(23, 0), true),
+        ("overnight, after midnight", &overnight, sp(1, 0), true),
+        ("overnight, closing minute", &overnight, sp(2, 0), false),
+        ("all day, midnight", &all_day, sp(0, 0), true),
+        ("all day, last second", &all_day, sp(23, 59), true),
+        ("weekdays only, on Tuesday", &weekdays_only, sp(12, 0), true),
+        (
+            "weekdays only, on Sunday",
+            &weekdays_only,
+            instant_at("America/Sao_Paulo", 2026, 3, 8, 12, 0),
+            false,
+        ),
+        ("hours unknown is never open", &no_hours, sp(12, 0), false),
+        ("hours unknown at midnight", &no_hours, sp(0, 0), false),
+        (
+            "DST: 01:30 EST, before the skip",
+            &dst,
+            utc_at(2026, 3, 8, 6, 30),
+            false,
+        ),
+        (
+            "DST: 03:30 EDT, after the skip",
+            &dst,
+            utc_at(2026, 3, 8, 7, 30),
+            true,
+        ),
+    ];
+
+    for (label, spot, at_instant, expected) in cases {
+        let sql = sql_is_open_at(spot.id(), spot.timezone().name(), at_instant).await;
+        let domain = domain_open_now(spot, at_instant);
+        assert_eq!(sql, expected, "SQL disagrees with the case: {label}");
+        assert_eq!(
+            domain, expected,
+            "the domain disagrees with the case: {label}"
+        );
+        assert_eq!(sql, domain, "SQL and domain disagree: {label}");
+    }
+    cleanup_fixture(MARK).await;
+}
+
+/// `bikenest_is_open_at` called directly, rather than through the search: the
+/// function is the thing under test.
+async fn sql_is_open_at(id: i64, tz: &str, at_instant: chrono::DateTime<chrono::Utc>) -> bool {
+    let row: (bool,) = sqlx::query_as("SELECT bikenest_is_open_at($1, $2, $3)")
+        .bind(id)
+        .bind(tz)
+        .bind(at_instant)
+        .fetch_one(&pool().await)
+        .await
+        .expect("open-now function");
+    row.0
 }

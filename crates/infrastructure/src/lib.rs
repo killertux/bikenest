@@ -28,9 +28,9 @@ pub use community::{
     SqlxReviewRepository, SqlxVerificationRepository,
 };
 pub use config::{
-    AppEnv, Config, ConfigError, DbConfig, EmailConfig, FakeOAuthConfig, GeocoderConfig, JobConfig,
-    MapConfig, ModerationConfig, PhotoConfig, PolicySeedConfig, RateLimiterBackend,
-    RateLimiterConfig, S3Config, SecurityConfig,
+    AppEnv, Config, ConfigError, DbConfig, EmailConfig, FakeOAuthConfig, GeocodeLimits,
+    GeocoderConfig, JobConfig, MapConfig, ModerationConfig, PhotoConfig, PolicySeedConfig,
+    RateLimiterBackend, RateLimiterConfig, S3Config, SecurityConfig,
 };
 pub use db::Db;
 pub use db_error::{DbFailure, classify, classify_and_log, classify_code};
@@ -39,7 +39,10 @@ pub use email::{
     ResendEmailProvider, SmtpEmailProvider, from_config as email_from_config,
     render as render_email,
 };
-pub use geocoding::{FakeGeocoder, MapboxGeocoder, geocoder_from_config};
+pub use geocoding::{
+    CachingGeocoder, FEATURED_ORIGIN, FakeGeocoder, MapboxGeocoder, SharedGeocoder,
+    geocoder_from_config,
+};
 pub use job::{
     ClaimedJob, JobRegistry, JobServices, SendEmailHandler, SqlxJobRepository, Worker, job_services,
 };

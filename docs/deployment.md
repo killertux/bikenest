@@ -56,6 +56,7 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | `STATIC_ROOT` | directory `/static` is served from; the image sets `/app/web/static`. Unset falls back to `web/static` beside the working directory, then to the compile-time path |
 | `GEOCODER` | **Geocoder** (Ledger #2): `mapbox` \| `fake` (default `fake`). `mapbox` sends the query to Mapbox server-side (§77/§83) |
 | `MAPBOX_ACCESS_TOKEN` | Mapbox token; required when `GEOCODER=mapbox` (a missing token is a startup error, never a fallback to `fake`) |
+| `RATE_GEOCODE_PER_IP` / `RATE_GEOCODE_WINDOW_SECS` | per-IP budget for **billable** geocodes on `/search` (default 60 per 15 min). Only cache **misses** count; over the budget `/search` answers 429 with a notice instead of calling the provider |
 | `MAP_STYLE_URL` | **Basemap** (Ledger #3): style URL; default MapLibre demo tiles |
 | `MAPBOX_MAP_ACCESS_TOKEN` | **Basemap** public Mapbox token (client-side); falls back to `MAPBOX_ACCESS_TOKEN` if unset; only loaded when the style is Mapbox-based |
 | `EMAIL_PROVIDER` | `smtp` or `resend` in production (not `fake`) |
@@ -213,6 +214,20 @@ remain (Google OAuth) are documented below and must be replaced before launch.
   destination — no account identity, cookie, or client IP crosses to Mapbox
   (see `docs/provider-transfer-inventory.md`). A Mapbox error is **graceful**: the
   search page shows a "location service unavailable" message rather than a 500.
+
+  **Cost control.** Two things bound what a hosted geocoder can be billed for.
+  Resolved destinations are cached in-process for 24 h (bounded at ~10k
+  queries), which covers the common case of the same handful of destinations
+  being searched repeatedly — including the home page, which now passes fixed
+  coordinates for its featured strip instead of geocoding a constant string on
+  every render. Searches that *miss* that cache are metered per client IP
+  (`RATE_GEOCODE_PER_IP` / `RATE_GEOCODE_WINDOW_SECS`, default 60 per 15 min);
+  over the budget `/search` answers 429 with a "try again in a few minutes"
+  notice and calls nobody. Cache hits and searches that carry coordinates are
+  never metered, because they cost nothing. The cache is per instance: a shared
+  ValKey tier (the rate limiter already talks to one) would let replicas share
+  the savings and survive restarts — a worthwhile follow-up, not a
+  correctness gap.
   Terms of service, attribution, rate limits and the **provider contract / DPA /
   international-transfer review** apply —
   Mapbox is a paid hosted SaaS (free tier ≈100k geocode/mo); self-hosted Photon

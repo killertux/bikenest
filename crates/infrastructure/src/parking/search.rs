@@ -1,27 +1,59 @@
-//! SQL-backed parking search (REQUIREMENTS §9, §31–§32).
+//! SQL-backed parking search: the nearby query behind the results page.
 //!
-//! One hand-written, runtime-checked query. All sorts normalize to an
-//! ascending `sort_key` (distance keeps its value; the others negate), so a
-//! single keyset predicate `(sort_key, id) > ($v, $id)` paginates every
-//! SQL-side sort. `Recommended` paginates in the application layer.
+//! Two runtime-checked statements per search, both driven by the same filter
+//! text: a COUNT that answers "how many match" over nothing but the filters,
+//! and a PAGE that orders, limits, and only then decorates.
+//!
+//! Why two. The count used to ride along in the paging query as a CTE
+//! (`total AS (SELECT count(*) FROM matching)`), which forced the whole
+//! filtered set to be materialised before the LIMIT could apply — so the four
+//! per-row subqueries (security count, security codes, open-now, first photo)
+//! ran once for every location inside the radius to render a page of twenty.
+//! Splitting them makes the work O(page) instead of O(radius) and fixes a
+//! second bug for free: the total no longer rides on the rows, so a page past
+//! the end reports the real total instead of 0.
+//!
+//! The PAGE statement is a keyset page of ids computed from columns and cheap
+//! expressions, wrapped in a `MATERIALIZED` CTE so the decoration below it
+//! runs exactly once per row on the page (EXPLAIN: `loops=21` for a page of
+//! twenty plus the look-ahead row).
+//!
+//! All five sorts normalize to an ascending `sort_key` (distance keeps its
+//! value; the others negate), so a single keyset predicate
+//! `(sort_key, id) > ($v, $id)` paginates every one of them — `Recommended`
+//! included: its score is this query's sort key, computed in SQL from the
+//! configured weights, rather than a re-ranking of whatever rows a capped
+//! fetch happened to return.
 //!
 //! The key each row carries back on its summary *is* the value the query
 //! computed, so the cursor the application builds and the predicate that
-//! consumes it are the same number in the same units.
+//! consumes it are the same number in the same units. Note that the distance
+//! sort's key is the sphere distance the GIST index orders on
+//! (`location <-> origin`, which is what makes the index's KNN path reachable)
+//! while `distance_m` stays the spheroid `ST_Distance` the card displays and
+//! the recommendation score uses. They agree to ~0.3%; the key is opaque, so
+//! only its internal consistency matters.
 //!
-//! "Open now" is evaluated against each location's own wall clock: the search
-//! instant is converted once with `$now AT TIME ZONE pl.timezone`, which turns
-//! a `timestamptz` into local time. Converting twice (`AT TIME ZONE 'UTC'`
-//! first) would reinterpret an already-naive timestamp and shift the clock by
-//! the offset in the wrong direction.
+//! "Open now" is not written here at all: it is `bikenest_is_open_at`
+//! (migration 0020), called once as a filter and once as the row's flag. The
+//! domain keeps `OpeningHours::status_at` for the details page, which needs
+//! the Open/Closed/**Unknown** tri-state that a card's boolean cannot carry;
+//! `parking_test.rs` pins the two together.
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{CostFilter, ParkingSummary, ReaderError, SearchPage, SearchRequest};
+use bikenest_application::{
+    CostFilter, FreshnessConfig, ParkingSummary, ReaderError, RecommendationConfig, SearchPage,
+    SearchRequest, Sort,
+};
 use bikenest_domain::{Cost, CurrencyCode, GeoPoint, Money, ParkingType, PricingUnit, Rating};
 
 pub struct SqlxParkingSearchReader {
     db: Db,
+    /// Weights for the `Recommended` sort key, bound into the paging query.
+    recommendation: RecommendationConfig,
+    /// Day thresholds behind the freshness sub-score of that same key.
+    freshness: FreshnessConfig,
 }
 
 #[derive(sqlx::FromRow)]
@@ -41,12 +73,9 @@ struct SearchRow {
     rating_count: i32,
     last_verified_at: Option<chrono::DateTime<chrono::Utc>>,
     distance_m: Option<f64>,
-    #[allow(dead_code)]
-    security_yes_count: Option<i64>,
     security_yes_codes: Option<Vec<String>>,
     is_open_now: Option<bool>,
     photo_key: Option<String>,
-    total: Option<i64>,
     sort_key: Option<f64>,
 }
 
@@ -91,6 +120,113 @@ fn summary_of(row: SearchRow) -> Result<ParkingSummary, ReaderError> {
     })
 }
 
+/// The search origin as a geography point, from the `$1` (lat) / `$2` (lon)
+/// binds. Written once and interpolated, so the count, the sort key and the
+/// displayed distance can never drift onto different origins.
+const ORIGIN: &str = "ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography";
+
+/// Everything that decides *whether* a location matches, and nothing that
+/// decides where it ranks. Shared verbatim by both statements: the count and
+/// the page cannot disagree about the size of the result set.
+const FILTERS: &str = r#"
+    pl.moderation_state = 'ACTIVE'
+      AND ST_DWithin(pl.location, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography, $3)
+      AND ($4::text IS NULL OR pl.cost_kind = $4)
+      AND ($5::text[] IS NULL OR pl.parking_type = ANY($5))
+      AND ($6 = false OR bikenest_is_open_at(pl.id, pl.timezone, $8))
+      AND NOT EXISTS (
+          SELECT 1 FROM unnest($7::text[]) AS wanted(code)
+          WHERE NOT EXISTS (
+              SELECT 1 FROM parking_security ps
+              WHERE ps.location_id = pl.id
+                AND ps.feature_code = wanted.code
+                AND ps.state = 1
+          )
+      )
+"#;
+
+/// Count of confirmed security attributes, as a lateral join rather than a
+/// correlated subquery: one index lookup per *candidate* row, joined in only
+/// for the two sorts whose key needs it.
+///
+/// `WHERE state = 1` rather than `count(*) FILTER (WHERE state = 1)`: the
+/// filtered aggregate has to read every one of a location's eight attribute
+/// rows and discard most, while the predicate is answered by
+/// `parking_security_yes_idx` (migration 0020) without touching the heap.
+const SECURITY_COUNT_JOIN: &str = r#"
+    LEFT JOIN LATERAL (
+        SELECT count(*) AS yes
+        FROM parking_security ps
+        WHERE ps.location_id = pl.id AND ps.state = 1
+    ) sec ON true
+"#;
+
+/// Whole days since the last verification, `NULL` when never verified —
+/// `chrono`'s `(now - verified).num_days().max(0)`, which the freshness ladder
+/// then compares against the configured thresholds exactly as
+/// `bikenest_domain::categorize` does.
+const FRESHNESS_DAYS_JOIN: &str = r#"
+    CROSS JOIN LATERAL (
+        SELECT GREATEST(
+            TRUNC(EXTRACT(EPOCH FROM ($8::timestamptz - pl.last_verified_at)) / 86400.0::float8),
+            0.0::float8
+        ) AS days
+    ) fr
+"#;
+
+/// The `Recommended` sort key: `-recommendation_score` (negated, so ascending
+/// keyset order is best-first like every other sort).
+///
+/// This is the documented score, term for term, with the weights bound as `$12..$16`
+/// and the freshness thresholds as `$17..$20`. Every sub-score is 0..1 and
+/// missing input scores a neutral 0.5 — never the worst value. `parking_test`
+/// asserts it against a Rust transcription of the same formula, row by row,
+/// across the freshness ladder's boundaries.
+const RECOMMENDED_SORT_KEY: &str = r#"-(
+                  $12::float8 * (1.0::float8 - LEAST(GREATEST(
+                      ST_Distance(pl.location, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography) / $3::float8,
+                      0.0::float8), 1.0::float8))
+                + $13::float8 * (CASE WHEN sec.yes > 0
+                      THEN LEAST(sec.yes::float8 / 8.0::float8, 1.0::float8)
+                      ELSE 0.5::float8 END)
+                + $14::float8 * COALESCE(pl.rating_avg::float8 / 5.0::float8, 0.5::float8)
+                + $15::float8 * (CASE
+                      WHEN pl.last_verified_at IS NULL THEN 0.5::float8
+                      WHEN fr.days < $17::float8 THEN 1.0::float8
+                      WHEN fr.days < $18::float8 THEN 0.75::float8
+                      WHEN fr.days < $19::float8 THEN 0.5::float8
+                      WHEN fr.days < $20::float8 THEN 0.25::float8
+                      ELSE 0.1::float8 END)
+                + $16::float8 * (CASE WHEN pl.last_verified_at IS NULL
+                      THEN 0.5::float8 ELSE 1.0::float8 END)
+              )"#;
+
+/// The ascending sort key for a sort, plus the joins that key needs. A sort
+/// that needs no per-row lookup gets none: an unused lateral would still be
+/// executed for every row the sort has to order.
+fn sort_key_sql(sort: Sort) -> (String, String) {
+    match sort {
+        // The GIST index can order on `<->` directly, which is what lets a
+        // page be read without touching every row in the radius.
+        Sort::Distance => (format!("(pl.location <-> {ORIGIN})::float8"), String::new()),
+        Sort::Security => ("-sec.yes::float8".to_string(), SECURITY_COUNT_JOIN.into()),
+        // No reviews → the middle of the scale, not the bottom.
+        Sort::Rating => (
+            "-COALESCE(pl.rating_avg, 2.5)::float8".to_string(),
+            String::new(),
+        ),
+        Sort::RecentlyVerified => (
+            "-COALESCE(EXTRACT(EPOCH FROM pl.last_verified_at), 0)::float8".to_string(),
+            String::new(),
+        ),
+        // The score needs both the confirmed-attribute count and the age in days.
+        Sort::Recommended => (
+            RECOMMENDED_SORT_KEY.to_string(),
+            format!("{SECURITY_COUNT_JOIN}{FRESHNESS_DAYS_JOIN}"),
+        ),
+    }
+}
+
 #[async_trait]
 impl bikenest_application::ParkingSearchReader for SqlxParkingSearchReader {
     async fn search(
@@ -105,15 +241,23 @@ impl bikenest_application::ParkingSearchReader for SqlxParkingSearchReader {
 }
 
 impl SqlxParkingSearchReader {
-    pub fn new(db: Db) -> Self {
-        Self { db }
+    /// `recommendation` and `freshness` are the operator's configured values:
+    /// they are bound into the `Recommended` sort key, so this reader — not the
+    /// use case above it — is where the recommendation score is applied.
+    pub fn new(db: Db, recommendation: RecommendationConfig, freshness: FreshnessConfig) -> Self {
+        Self {
+            db,
+            recommendation,
+            freshness,
+        }
     }
 
     /// The search, evaluated as of `now`.
     ///
-    /// `now` only feeds the "open now" flag and filter, which compare the
-    /// instant against each location's own wall clock. The trait method passes
-    /// the current time; tests pin it so the SQL and the domain rule can be
+    /// `now` feeds the "open now" filter and flag, which compare the instant
+    /// against each location's own wall clock, and the age in days behind the
+    /// recommendation score's freshness term. The trait method passes the
+    /// current time; tests pin it so the SQL and the domain rules can be
     /// compared at the same instant.
     pub async fn search_at(
         &self,
@@ -122,11 +266,6 @@ impl SqlxParkingSearchReader {
         apply_cursor: bool,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<SearchPage, ReaderError> {
-        if request.sort == bikenest_application::Sort::Recommended && apply_cursor {
-            return Err(ReaderError::Unexpected(
-                "recommended sort must not apply a SQL cursor".to_string(),
-            ));
-        }
         let cursor = if apply_cursor { request.cursor } else { None };
         let cost: Option<String> = request.filters.cost.map(|c: CostFilter| match c {
             CostFilter::Free => "free".to_string(),
@@ -150,122 +289,163 @@ impl SqlxParkingSearchReader {
         } else {
             Some(request.filters.security_all.clone())
         };
-        let sort = match request.sort {
-            bikenest_application::Sort::Recommended | bikenest_application::Sort::Distance => {
-                "distance"
-            }
-            bikenest_application::Sort::Security => "security",
-            bikenest_application::Sort::Rating => "rating",
-            bikenest_application::Sort::RecentlyVerified => "recently_verified",
-        };
 
-        let rows: Vec<SearchRow> = sqlx::query_as::<_, SearchRow>(r#"
-            WITH base AS (
-                SELECT
-                    pl.id,
-                    pl.name,
-                    pl.address,
-                    pl.parking_type,
-                    pl.cost_kind,
-                    pl.price_cents,
-                    pl.price_currency,
-                    pl.price_unit,
-                    COALESCE(pl.lat, 0) AS lat,
-                    COALESCE(pl.lon, 0) AS lon,
-                    pl.timezone,
-                    pl.rating_avg::float8 AS rating_avg,
-                    pl.rating_count,
-                    pl.last_verified_at,
-                    ST_Distance(pl.location, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography) AS distance_m,
-                    (
-                        SELECT count(*)::bigint FROM parking_security ps
-                        WHERE ps.location_id = pl.id AND ps.state = 1
-                    ) AS security_yes_count,
-                    (
-                        SELECT array_agg(ps.feature_code ORDER BY ps.feature_code) FROM parking_security ps
-                        WHERE ps.location_id = pl.id AND ps.state = 1
-                    ) AS security_yes_codes,
-                    EXISTS (
-                        SELECT 1 FROM opening_hours oh
-                        WHERE oh.location_id = pl.id
-                          AND (
-                                 (oh.day_of_week = lc.dow AND (
-                                      oh.all_day
-                                      OR (oh.opens_at <= lc.local_time AND lc.local_time < oh.closes_at)
-                                      OR (oh.closes_at <= oh.opens_at AND oh.opens_at <= lc.local_time)
-                                  ))
-                              OR (oh.day_of_week = lc.prev_dow
-                                  AND NOT oh.all_day
-                                  AND oh.closes_at <= oh.opens_at
-                                  AND lc.local_time < oh.closes_at)
-                          )
-                    ) AS is_open_now,
-                    (
-                        SELECT ph.storage_key FROM parking_photo ph
-                        WHERE ph.location_id = pl.id AND ph.moderation_state = 'APPROVED'
-                        ORDER BY ph.position, ph.id
-                        LIMIT 1
-                    ) AS photo_key
-                FROM parking_location pl
-                CROSS JOIN LATERAL (
-                    SELECT
-                        EXTRACT(ISODOW FROM l.local_ts)::smallint AS dow,
-                        EXTRACT(ISODOW FROM l.local_ts - interval '1 day')::smallint AS prev_dow,
-                        l.local_ts::time AS local_time
-                    FROM (SELECT $12::timestamptz AT TIME ZONE pl.timezone AS local_ts) l
-                ) lc
-                WHERE pl.moderation_state = 'ACTIVE'
-                  AND ST_DWithin(pl.location, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography, $3)
-                  AND ($4::text IS NULL OR pl.cost_kind = $4)
-                  AND ($5::text[] IS NULL OR pl.parking_type = ANY($5))
-                  AND NOT EXISTS (
-                      SELECT 1 FROM unnest($7::text[]) AS wanted(code)
-                      WHERE NOT EXISTS (
-                          SELECT 1 FROM parking_security ps
-                          WHERE ps.location_id = pl.id
-                            AND ps.feature_code = wanted.code
-                            AND ps.state = 1
-                      )
-                  )
-            ),
-            matching AS (SELECT * FROM base WHERE $6 = false OR is_open_now),
-            total AS (SELECT count(*)::bigint AS n FROM matching),
-            keyed AS (
-                SELECT b.*, (SELECT n FROM total) AS total,
-                    CASE
-                        WHEN $8 = 'security' THEN -b.security_yes_count::float8
-                        WHEN $8 = 'rating' THEN -COALESCE(b.rating_avg, 2.5)
-                        WHEN $8 = 'recently_verified' THEN -COALESCE(EXTRACT(EPOCH FROM b.last_verified_at), 0)::float8
-                        ELSE b.distance_m
-                    END AS sort_key
-                FROM matching b
-            )
-            SELECT id, name, address, parking_type, cost_kind, price_cents, price_currency,
-                   price_unit, lat, lon, timezone, rating_avg, rating_count, last_verified_at,
-                   distance_m, security_yes_count, security_yes_codes, is_open_now, photo_key,
-                   total, sort_key
-            FROM keyed
-            WHERE ($9::float8 IS NULL OR (sort_key, id) > ($9::float8, $10::int8))
-            ORDER BY sort_key ASC, id ASC
-            LIMIT $11
-            "#).bind(request.origin.lat()).bind(request.origin.lon()).bind(f64::from(request.radius_m)).bind(cost).bind(types as Option<Vec<String>>).bind(request.filters.open_now).bind(security_all as Option<Vec<String>>).bind(sort).bind(cursor.map(|c| c.v)).bind(cursor.map(|c| c.id)).bind(limit as i64).bind(now)
-        .fetch_all(self.db.pool())
-        .await
-        .map_err(|e| reader_err("search.search_at", e))?;
-
-        let total = rows.first().and_then(|r| r.total).unwrap_or(0);
-        let items: Vec<ParkingSummary> =
-            rows.into_iter().map(summary_of).collect::<Result<_, _>>()?;
+        let total = self
+            .count(request, &cost, &types, &security_all, now)
+            .await?;
+        let items = self
+            .page(request, &cost, &types, &security_all, now, cursor, limit)
+            .await?;
         Ok(SearchPage {
             items,
             total,
             next_cursor: None,
         })
     }
+
+    /// Statement (a): how many locations match, with no decoration at all.
+    ///
+    /// Independent of the page, so it is right even when the page is empty
+    /// (a cursor past the end, or a page size larger than the result set).
+    async fn count(
+        &self,
+        request: &SearchRequest,
+        cost: &Option<String>,
+        types: &Option<Vec<String>>,
+        security_all: &Option<Vec<String>>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<i64, ReaderError> {
+        let sql = format!(
+            r#"
+            SELECT count(*)::bigint AS n
+            FROM parking_location pl
+            WHERE {FILTERS}
+            "#
+        );
+        let total: (i64,) = sqlx::query_as(&sql)
+            .bind(request.origin.lat())
+            .bind(request.origin.lon())
+            .bind(f64::from(request.radius_m))
+            .bind(cost.clone())
+            .bind(types.clone())
+            .bind(request.filters.open_now)
+            .bind(security_all.clone())
+            .bind(now)
+            .fetch_one(self.db.pool())
+            .await
+            .map_err(|e| reader_err("search.count", e))?;
+        Ok(total.0)
+    }
+
+    /// Statement (b): the keyset page.
+    ///
+    /// The CTE picks ids by sort key — cheap columns, one lateral count for
+    /// the two sorts that need it — and is `MATERIALIZED` so the planner
+    /// cannot inline it back into the decoration below and re-run the laterals
+    /// per radius row. Everything expensive (the codes array, the open-now
+    /// flag, the primary photo) then runs once per row on the page.
+    #[allow(clippy::too_many_arguments)]
+    async fn page(
+        &self,
+        request: &SearchRequest,
+        cost: &Option<String>,
+        types: &Option<Vec<String>>,
+        security_all: &Option<Vec<String>>,
+        now: chrono::DateTime<chrono::Utc>,
+        cursor: Option<bikenest_application::Cursor>,
+        limit: usize,
+    ) -> Result<Vec<ParkingSummary>, ReaderError> {
+        let (sort_key, sort_key_joins) = sort_key_sql(request.sort);
+        let sql = format!(
+            r#"
+            WITH candidates AS MATERIALIZED (
+                SELECT c.id, c.sort_key
+                FROM (
+                    SELECT pl.id AS id, {sort_key} AS sort_key
+                    FROM parking_location pl
+                    {sort_key_joins}
+                    WHERE {FILTERS}
+                ) c
+                WHERE ($9::float8 IS NULL OR (c.sort_key, c.id) > ($9::float8, $10::int8))
+                ORDER BY c.sort_key ASC, c.id ASC
+                LIMIT $11
+            )
+            SELECT
+                pl.id,
+                pl.name,
+                pl.address,
+                pl.parking_type,
+                pl.cost_kind,
+                pl.price_cents,
+                pl.price_currency,
+                pl.price_unit,
+                COALESCE(pl.lat, 0) AS lat,
+                COALESCE(pl.lon, 0) AS lon,
+                pl.timezone,
+                pl.rating_avg::float8 AS rating_avg,
+                pl.rating_count,
+                pl.last_verified_at,
+                ST_Distance(pl.location, {ORIGIN}) AS distance_m,
+                codes.security_yes_codes,
+                bikenest_is_open_at(pl.id, pl.timezone, $8) AS is_open_now,
+                photo.storage_key AS photo_key,
+                c.sort_key
+            FROM candidates c
+            JOIN parking_location pl ON pl.id = c.id
+            LEFT JOIN LATERAL (
+                SELECT array_agg(ps.feature_code ORDER BY ps.feature_code) AS security_yes_codes
+                FROM parking_security ps
+                WHERE ps.location_id = pl.id AND ps.state = 1
+            ) codes ON true
+            LEFT JOIN LATERAL (
+                SELECT ph.storage_key FROM parking_photo ph
+                WHERE ph.location_id = pl.id AND ph.moderation_state = 'APPROVED'
+                ORDER BY ph.position, ph.id
+                LIMIT 1
+            ) photo ON true
+            ORDER BY c.sort_key ASC, c.id ASC
+            "#
+        );
+
+        let mut query = sqlx::query_as::<_, SearchRow>(&sql)
+            .bind(request.origin.lat())
+            .bind(request.origin.lon())
+            .bind(f64::from(request.radius_m))
+            .bind(cost.clone())
+            .bind(types.clone())
+            .bind(request.filters.open_now)
+            .bind(security_all.clone())
+            .bind(now)
+            .bind(cursor.map(|c| c.v))
+            .bind(cursor.map(|c| c.id))
+            .bind(limit as i64);
+        // The weights and thresholds appear in the SQL only for the sort that
+        // scores, so they are only bound for that sort: Postgres rejects a
+        // bind list longer than the statement's parameter list.
+        if request.sort == Sort::Recommended {
+            let w = &self.recommendation;
+            let t = &self.freshness.thresholds;
+            query = query
+                .bind(w.w_distance)
+                .bind(w.w_security)
+                .bind(w.w_rating)
+                .bind(w.w_freshness)
+                .bind(w.w_verification)
+                .bind(t.fresh_days as f64)
+                .bind(t.recent_days as f64)
+                .bind(t.aging_days as f64)
+                .bind(t.stale_days as f64);
+        }
+        let rows: Vec<SearchRow> = query
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| reader_err("search.page", e))?;
+        rows.into_iter().map(summary_of).collect()
+    }
 }
 
 /// Classify + log the sqlx error, then map it onto [`ReaderError`]. Shared by
-/// every read-only repository. `context` names the operation, e.g. `"search.search"`.
+/// every read-only repository. `context` names the operation, e.g. `"search.page"`.
 pub(crate) fn reader_err(context: &'static str, e: sqlx::Error) -> ReaderError {
     crate::db_error::classify_and_log(context, e).into()
 }

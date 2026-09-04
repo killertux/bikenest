@@ -362,6 +362,10 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "The location service is temporarily unavailable. Try again in a moment.",
             "O serviço de localização está temporariamente indisponível. Tente novamente em instantes.",
         ),
+        "search.geocode_limited" => (
+            "Too many searches from your network right now. Try again in a few minutes.",
+            "Muitas buscas da sua rede agora. Tente de novo em alguns minutos.",
+        ),
         "search.next" => ("Next page", "Próxima página"),
 
         // --- parking card --------------------------------------------------

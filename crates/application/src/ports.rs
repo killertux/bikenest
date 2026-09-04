@@ -35,9 +35,6 @@ pub const DEFAULT_RADIUS_M: u32 = 1000;
 /// Page size defaults/limits (§32).
 pub const DEFAULT_PAGE_SIZE: usize = 20;
 pub const MAX_PAGE_SIZE: usize = 100;
-/// Hard cap on candidates fetched for the in-memory "recommended" sort
-/// (plans/m1-search-map.md §2); the total count is unaffected (SQL window).
-pub const RECOMMENDED_CANDIDATE_CAP: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sort {
@@ -231,8 +228,16 @@ impl SearchRequest {
         let mut types = filters.types.clone();
         types.sort_by_key(|t| t.as_code());
         types.dedup();
-        let mut security_all = filters.security_all.clone();
-        security_all.retain(|c| !c.trim().is_empty());
+        // Unknown codes are dropped, not matched: an unknown code can never be
+        // confirmed on any location, so keeping it would silently turn the
+        // whole search into "no results" — a stale or hand-edited URL degrades
+        // to the results it can still honour instead.
+        let mut security_all: Vec<String> = filters
+            .security_all
+            .iter()
+            .map(|c| c.trim().to_string())
+            .filter(|c| bikenest_domain::is_known_security_code(c))
+            .collect();
         security_all.sort();
         security_all.dedup();
         Self {
@@ -279,8 +284,9 @@ pub struct ParkingSummary {
     /// other sorts negate. The next-page cursor is built from this value,
     /// so it must never be recomputed in Rust: any rounding or unit mismatch
     /// with the SQL expression would make the keyset predicate skip or repeat
-    /// rows. `None` for summaries not produced by the search reader (the
-    /// `Recommended` sort paginates on its in-memory score instead).
+    /// rows. Only the distance sort's key is a distance — and even there it is
+    /// the sphere distance the GIST index orders on, not [`Self::distance_m`].
+    /// `None` for summaries not produced by the search reader.
     pub sort_key: Option<f64>,
 }
 
@@ -304,10 +310,11 @@ pub enum ReaderError {
 /// Port: keyset-paginated nearby search over `parking_location` (§31–§32).
 #[async_trait]
 pub trait ParkingSearchReader: Send + Sync {
-    /// Applies criteria (except `Recommended` sorting, which the use case
-    /// performs in the application layer over a capped candidate set).
-    /// Ignores `cursor` unless `cursor.sort == Sort::Distance` etc. — i.e.
-    /// applies it when it matches the SQL sort; the use case coordinates this.
+    /// Applies every criterion and every sort, `Recommended` included: the
+    /// reader owns the sort key, so all five sorts paginate through the same
+    /// keyset predicate and nothing is re-ranked after the page is read.
+    /// `apply_cursor` gates the keyset predicate; the use case only sets it
+    /// once it has checked that the cursor was minted for this sort.
     async fn search(
         &self,
         request: &SearchRequest,

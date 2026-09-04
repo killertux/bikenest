@@ -410,9 +410,10 @@ pub trait ContributionHistoryReader: Send + Sync {
 // Recommendation explanation (§105)
 // ---------------------------------------------------------------------------
 
-/// Build the "recommended because…" reasons for a single summary row. Shares the
-/// sub-score logic with [`recommendation_score`], so the explanation and the
-/// numeric sort never disagree. Only **positive** factors are surfaced;
+/// Build the "recommended because…" reasons for a single summary row. Mirrors
+/// the sub-scores of the `Recommended` sort key (computed in SQL by the search
+/// reader, weighted by [`crate::RecommendationConfig`]), so the explanation and
+/// the numeric sort never disagree. Only **positive** factors are surfaced;
 /// missing/neutral data → the factor is omitted (never a fabricated claim).
 #[allow(clippy::too_many_arguments)]
 pub fn recommendation_reasons(

@@ -31,16 +31,16 @@ use bikenest_domain::{
 };
 use bikenest_infrastructure::probe::SqlxDatabaseProbe;
 use bikenest_infrastructure::{
-    Argon2PasswordHasher, Config, ConfigError, Db, FakeOAuthProvider, InlineEmailQueue,
-    JobEmailQueue, LocalImageProcessor, MapConfig, OfflineTimezoneResolver, RealTokenGenerator,
-    S3ObjectStorage, SharedObjectStorage, SharedRateLimiter, SqlxAccountRepository,
-    SqlxAnonymizationRepository, SqlxAuditLog, SqlxAuditLogReader, SqlxContributionHistoryReader,
-    SqlxExportRepository, SqlxFavoriteRepository, SqlxModerationRepository,
-    SqlxParkingContributionRepository, SqlxParkingDetailsReader, SqlxParkingPhotoReader,
-    SqlxParkingSearchReader, SqlxPhotoRepository, SqlxPolicyReader, SqlxPrivacyRequestRepository,
-    SqlxReportRepository, SqlxReviewPhotosReader, SqlxReviewRepository, SqlxSessionStore,
-    SqlxTokenStore, SqlxVerificationRepository, SystemClock, email_from_config,
-    geocoder_from_config, rate_limiter_from_config,
+    Argon2PasswordHasher, CachingGeocoder, Config, ConfigError, Db, FEATURED_ORIGIN,
+    FakeOAuthProvider, GeocodeLimits, InlineEmailQueue, JobEmailQueue, LocalImageProcessor,
+    MapConfig, OfflineTimezoneResolver, RealTokenGenerator, S3ObjectStorage, SharedGeocoder,
+    SharedObjectStorage, SharedRateLimiter, SqlxAccountRepository, SqlxAnonymizationRepository,
+    SqlxAuditLog, SqlxAuditLogReader, SqlxContributionHistoryReader, SqlxExportRepository,
+    SqlxFavoriteRepository, SqlxModerationRepository, SqlxParkingContributionRepository,
+    SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader, SqlxPhotoRepository,
+    SqlxPolicyReader, SqlxPrivacyRequestRepository, SqlxReportRepository, SqlxReviewPhotosReader,
+    SqlxReviewRepository, SqlxSessionStore, SqlxTokenStore, SqlxVerificationRepository,
+    SystemClock, email_from_config, geocoder_from_config, rate_limiter_from_config,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -73,6 +73,14 @@ pub struct AppState {
     pub readiness: Arc<CheckReadiness<SqlxDatabaseProbe>>,
     pub db: Db,
     pub search: Arc<SearchParking>,
+    /// The very geocoder the search use case calls, so `/search` can ask
+    /// whether a destination is already resolved before spending any of the
+    /// caller's geocode budget on it.
+    pub geocoder: Arc<CachingGeocoder>,
+    /// Shared limiter store, for the per-IP geocode budget.
+    pub rate_limiter: Arc<dyn RateLimiter>,
+    /// That budget's size and window.
+    pub geocode_limits: GeocodeLimits,
     pub details: Arc<GetParkingDetails>,
     /* Configured freshness thresholds, used for display categorization so the
     cards honour the same tunable value as the search/detail services. */
@@ -159,11 +167,17 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
     let google_oauth_enabled = config.google_oauth_enabled;
     let rate_limiter: Arc<dyn RateLimiter> = Arc::from(rate_limiter);
     let probe = SqlxDatabaseProbe::new(db.clone(), config.probe_timeout);
+    // One geocoder instance, wrapped in the in-process cache, shared by the
+    // use case and the handler: `/search` asks the cache whether a query is
+    // already resolved before it spends any of the caller's geocode budget.
+    let geocoder = Arc::new(CachingGeocoder::new(geocoder_from_config(&config.geocoder)));
     let search_uc = SearchParking::new(
-        geocoder_from_config(&config.geocoder),
-        Box::new(SqlxParkingSearchReader::new(db.clone())),
-        config.recommendation,
-        config.freshness,
+        Box::new(SharedGeocoder::new(geocoder.clone())),
+        Box::new(SqlxParkingSearchReader::new(
+            db.clone(),
+            config.recommendation,
+            config.freshness,
+        )),
     );
     let details = GetParkingDetails::new(
         Box::new(SqlxParkingDetailsReader::new(db.clone())),
@@ -245,6 +259,9 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         readiness: Arc::new(CheckReadiness::new(probe)),
         db: db.clone(),
         search: Arc::new(search_uc),
+        geocoder: geocoder.clone(),
+        rate_limiter: rate_limiter.clone(),
+        geocode_limits: config.geocode,
         details: Arc::new(details),
         freshness: config.freshness,
         photos: Arc::new(SqlxParkingPhotoReader::new(db.clone())),
@@ -553,7 +570,14 @@ async fn home(State(state): State<AppState>, locale: Locale, auth: Auth) -> Resp
     if let Ok((page, _)) = state
         .search
         .execute(SearchInput {
-            query: Some("Rua XV de Novembro".to_string()),
+            // Coordinates, not the landmark's name: the strip is a constant
+            // destination, and geocoding it on every home render was a
+            // billable provider call per view. With `lat`/`lon` set the use
+            // case never reaches the geocoder at all, and the
+            // recommended sort now honours `page_size` in SQL, so this asks
+            // the database for five rows rather than five hundred.
+            lat: Some(FEATURED_ORIGIN.0),
+            lon: Some(FEATURED_ORIGIN.1),
             radius_m: Some(1000),
             page_size: Some(4),
             ..Default::default()
@@ -672,11 +696,57 @@ fn urlencode(s: &str) -> String {
     out
 }
 
+/// A results page carrying nothing but a notice — no destination, no
+/// geocoder, or no budget left to call one.
+fn results_notice(tr: Translator, key: &str) -> ResultsData {
+    ResultsData {
+        destination_label: None,
+        total_label: String::new(),
+        items: Vec::new(),
+        cursor_url: None,
+        error: Some(tr.t(key).to_string()),
+        map_json: serde_json::json!({ "origin": null, "items": [] }).to_string(),
+    }
+}
+
+/// Would serving this search cost a geocode the provider actually bills?
+///
+/// No, when the request carries coordinates (they win over the query),
+/// when there is no query to resolve, or when the in-process cache already
+/// holds the answer. A cached destination is free, so it must not count
+/// against anyone's budget.
+fn geocode_is_billable(state: &AppState, input: &SearchInput) -> bool {
+    if input.lat.is_some() && input.lon.is_some() {
+        return false;
+    }
+    match input.query.as_deref().map(str::trim) {
+        Some(q) if !q.is_empty() => state.geocoder.peek(q).is_none(),
+        _ => false,
+    }
+}
+
+/// Is this network still inside its per-IP geocode budget?
+///
+/// A limiter error counts as *over* budget: `fail_open` (the default) is
+/// applied inside the limiter, so an error reaching here means the operator
+/// asked to refuse rather than let calls through unmetered.
+async fn geocode_within_budget(state: &AppState, ip: &str) -> bool {
+    let limits = state.geocode_limits;
+    matches!(
+        state
+            .rate_limiter
+            .check(&format!("geocode:ip:{ip}"), limits.per_ip, limits.window)
+            .await,
+        Ok(true)
+    )
+}
+
 /// P2 — search results (full page, or HTMX fragment when requested).
 async fn search(
     State(state): State<AppState>,
     locale: Locale,
     headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     auth: Auth,
     params: Query<SearchParams>,
 ) -> Response {
@@ -687,6 +757,20 @@ async fn search(
     let is_htmx = is_fragment_request(&headers);
     let input = params.to_input();
     let query_string = params.query_string();
+
+    // One view of `/search?q=…` can be one billable geocode, so a page that
+    // has to resolve free text is metered per IP before the use case runs.
+    if geocode_is_billable(&state, &input) && !geocode_within_budget(&state, &ip).await {
+        return render_search(
+            &state,
+            tr,
+            &auth,
+            &params,
+            results_notice(tr, "search.geocode_limited"),
+            is_htmx,
+            StatusCode::TOO_MANY_REQUESTS,
+        );
+    }
 
     let results = match state.search.execute(input).await {
         Ok((page, hit)) => {
@@ -706,27 +790,32 @@ async fn search(
             )
             .await
         }
-        Err(bikenest_application::SearchError::MissingDestination) => ResultsData {
-            destination_label: None,
-            total_label: String::new(),
-            items: Vec::new(),
-            cursor_url: None,
-            error: Some(tr.t("search.missing").to_string()),
-            map_json: serde_json::json!({ "origin": null, "items": [] }).to_string(),
-        },
+        Err(bikenest_application::SearchError::MissingDestination) => {
+            results_notice(tr, "search.missing")
+        }
         // Geocoder outage / rate-limit / bad token → graceful "can't reach the
         // geocoder" page, not a 500 (a hosted provider is a soft dependency).
-        Err(bikenest_application::SearchError::Geocode(_)) => ResultsData {
-            destination_label: None,
-            total_label: String::new(),
-            items: Vec::new(),
-            cursor_url: None,
-            error: Some(tr.t("search.geocode_unavailable").to_string()),
-            map_json: serde_json::json!({ "origin": null, "items": [] }).to_string(),
-        },
+        Err(bikenest_application::SearchError::Geocode(_)) => {
+            results_notice(tr, "search.geocode_unavailable")
+        }
         Err(_) => return internal_error(&headers, &state.map, &auth, tr),
     };
 
+    render_search(&state, tr, &auth, &params, results, is_htmx, StatusCode::OK)
+}
+
+/// Render a results page: the bare list for an htmx swap, the full document
+/// otherwise. Both spellings live at the same URL, chosen by the `HX-*`
+/// headers — hence the `Vary`, or a cache hands one to the wrong request.
+fn render_search(
+    state: &AppState,
+    tr: Translator,
+    auth: &Auth,
+    params: &Query<SearchParams>,
+    results: ResultsData,
+    is_htmx: bool,
+    status: StatusCode,
+) -> Response {
     let can_contribute = auth.user.as_ref().is_some_and(|u| u.is_verified);
     if is_htmx {
         let vm = SearchResultsVm {
@@ -736,13 +825,13 @@ async fn search(
             is_authenticated: auth.authenticated(),
             can_contribute,
         };
-        vary_fragment(render(vm, StatusCode::OK))
+        vary_fragment(render(vm, status))
     } else {
         let vm = SearchPageVm {
             layout: PageLayout::for_request(
                 tr.t("search.title").to_string(),
                 "search",
-                &auth,
+                auth,
                 &state.map,
             )
             .canonical(format!("{}/search", state.base_url.trim_end_matches('/')))
@@ -756,9 +845,7 @@ async fn search(
             is_authenticated: auth.authenticated(),
             can_contribute,
         };
-        // The same URL serves the fragment and the document, chosen by the
-        // HX-* headers — say so, or a cache hands one to the wrong request.
-        vary_fragment(render(vm, StatusCode::OK))
+        vary_fragment(render(vm, status))
     }
 }
 

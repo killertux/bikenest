@@ -333,6 +333,13 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             .collect()
     }
 
+    /// Near neighbours to compare a proposed location against.
+    ///
+    /// The `LIMIT 50` is a cap on how much name/address similarity work
+    /// happens in Rust, so the fifty rows have to be the fifty *nearest*: with
+    /// no `ORDER BY` they were fifty arbitrary rows, and the duplicate a
+    /// contributor was about to create could sit outside them. Ordering by
+    /// `<->` also lets the GIST index supply the rows already sorted.
     async fn duplicate_candidates(
         &self,
         point: GeoPoint,
@@ -350,6 +357,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             FROM parking_location
             WHERE moderation_state = 'ACTIVE'
               AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography, $3)
+            ORDER BY location <-> ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
             LIMIT 50
             "#).bind(point.lat()).bind(point.lon()).bind(f64::from(DUPLICATE_RADIUS_M))
         .fetch_all(self.db.pool())

@@ -64,7 +64,7 @@ pub use privacy::{
 pub use rate_limit::{RateLimitError, RateLimiter};
 pub use search::{
     DEFAULT_RECOMMENDATION_CONFIG, DetailsError, GetParkingDetails, ParkingDetailsView,
-    RecommendationConfig, SearchError, SearchParking, recommendation_score,
+    RecommendationConfig, SearchError, SearchParking,
 };
 pub use storage::{ObjectInfo, ObjectPage, ObjectStorage, PutObject, StorageError};
 pub use timezone::{TimezoneError, TimezoneResolver};

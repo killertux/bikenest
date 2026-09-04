@@ -77,7 +77,8 @@ Value objects and rules, no I/O. Notable concepts:
   with one tri-state value.
 - **`OpeningHours`** — wall-clock ranges per day-of-week stored in the
   location's IANA timezone (never converted to UTC), with an "open now" check
-  that is DST-correct.
+  that is DST-correct. `status_at` answers `Open | Closed | Unknown`; the
+  boolean form of the same rule lives in SQL (see "open now", below).
 - **`ModerationState`** (parking) — `Active | PendingReview | Flagged | Invalid | Removed`.
 - **`FreshnessCategory`** — `Never | Fresh | RecentlyVerified | Aging | Stale | VeryStale`,
   derived from the last-verified timestamp against configurable thresholds.
@@ -199,11 +200,27 @@ Versioned, forward-only migrations in `migrations/`:
 | `0012_privacy.sql` | privacy requests, exports, anonymization |
 | `0013_policies.sql` + `0014_policy_locale.sql` | versioned legal pages |
 | `0015_background_jobs.sql` | `background_job` queue |
+| `0016_report_dedupe.sql` | one open report per (target, reporter) |
+| `0017_indexes.sql` | FK/read-path indexes, narrowing CHECKs |
+| `0018_user_locale.sql` | per-account locale |
+| `0019_photo_key_and_audit_integrity.sql` | non-empty `storage_key`, append-only audit |
+| `0020_open_now_fn.sql` | `bikenest_is_open_at()` + confirmed-attribute index |
 
 Key modeling notes:
 
 - **Timestamps are UTC**; opening hours are wall-clock ranges in the location's
   timezone; "open now" is computed in that timezone.
+- **"Open now" is one implementation with two shapes.** The rule (same-day
+  ranges, all-day rows, and ranges that run past midnight counting on both
+  days) lives in SQL as `bikenest_is_open_at(location, timezone, instant)`
+  (migration `0020`), which the search query calls twice: once as the
+  `open_now` filter and once as each row's flag. The domain keeps
+  `OpeningHours::status_at` because the details page needs a *tri-state* — it
+  must say "hours unknown" rather than "closed", which a card's boolean cannot
+  express. `bikenest_is_open_at` is exactly `status_at(...) == Open`, and a
+  table-driven `#[db_test]` (`parking_test.rs`) holds the two together across
+  same-day boundaries, overnight ranges, all-day rows, a DST transition and
+  locations with no hours at all.
 - **`parking_revision`** is an immutable field-level history (JSONB after-state
   snapshots); **`parking_proposal`** holds sensitive changes pending moderation.
 - **Optimistic concurrency** via `version` on `parking_location`; conflicting

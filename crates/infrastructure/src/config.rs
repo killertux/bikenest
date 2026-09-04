@@ -171,6 +171,29 @@ pub struct RateLimiterConfig {
     pub fail_open: bool,
 }
 
+/// Per-IP budget for *billable* geocoding on `/search`.
+///
+/// A search that resolves a free-text destination is a paid third-party call,
+/// so one visitor reloading a page with a query on it can spend real
+/// money. `CachingGeocoder` absorbs the repeats; this bounds what a single
+/// network can spend on cache **misses**. Generous by design — it exists to
+/// stop abuse and runaway clients, not to ration normal use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GeocodeLimits {
+    /// Cache-missing geocodes allowed per IP per window.
+    pub per_ip: u32,
+    pub window: Duration,
+}
+
+impl Default for GeocodeLimits {
+    fn default() -> Self {
+        Self {
+            per_ip: 60,
+            window: Duration::from_secs(15 * 60),
+        }
+    }
+}
+
 /// S3-compatible object storage. `endpoint` is `None` for the standard AWS
 /// endpoint; development defaults to the compose MinIO.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -357,6 +380,8 @@ pub struct Config {
     pub geocoder: GeocoderConfig,
     /// Rate-limiter store.
     pub rate_limiter: RateLimiterConfig,
+    /// Per-IP budget for billable geocoding.
+    pub geocode: GeocodeLimits,
     /// Object storage.
     pub storage: S3Config,
     /// CSP origins.
@@ -434,6 +459,7 @@ impl Config {
             email: email_config(&env, dev)?,
             geocoder: geocoder_config(&env)?,
             rate_limiter: rate_limiter_config(&env),
+            geocode: geocode_limits(&env),
             storage: s3_config(&env, dev),
             security: security_config(&env),
             map: map_config(&env),
@@ -615,6 +641,7 @@ impl Config {
                 backend: RateLimiterBackend::InMemory,
                 fail_open: true,
             },
+            geocode: GeocodeLimits::default(),
             storage: S3Config {
                 endpoint: Some(DEV_S3_ENDPOINT.to_string()),
                 region: DEFAULT_S3_REGION.to_string(),
@@ -855,6 +882,18 @@ fn map_config(env: &EnvSource<'_>) -> MapConfig {
     )
 }
 
+/// Per-IP geocode budget, from env with the defaults above.
+fn geocode_limits(env: &EnvSource<'_>) -> GeocodeLimits {
+    let d = GeocodeLimits::default();
+    GeocodeLimits {
+        per_ip: env.u32("RATE_GEOCODE_PER_IP").unwrap_or(d.per_ip),
+        window: env
+            .u64("RATE_GEOCODE_WINDOW_SECS")
+            .map(Duration::from_secs)
+            .unwrap_or(d.window),
+    }
+}
+
 /// Recommendation weights, from env with the M1 defaults.
 fn recommendation_config(env: &EnvSource<'_>) -> RecommendationConfig {
     let rec = DEFAULT_RECOMMENDATION_CONFIG;
@@ -866,7 +905,6 @@ fn recommendation_config(env: &EnvSource<'_>) -> RecommendationConfig {
         w_verification: env
             .f64("REC_WEIGHT_VERIFICATION")
             .unwrap_or(rec.w_verification),
-        candidate_cap: env.usize("REC_CANDIDATE_CAP").unwrap_or(rec.candidate_cap),
     }
 }
 
@@ -1246,7 +1284,6 @@ mod tests {
         assert_eq!(got.w_rating, exp.w_rating);
         assert_eq!(got.w_freshness, exp.w_freshness);
         assert_eq!(got.w_verification, exp.w_verification);
-        assert_eq!(got.candidate_cap, exp.candidate_cap);
     }
 
     #[test]

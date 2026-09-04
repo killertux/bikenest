@@ -6256,3 +6256,78 @@ async fn with_the_worker_enabled_registration_queues_the_email(_tx: &mut TestTx)
         .unwrap();
     cleanup_user(EMAIL).await;
 }
+
+// ---------------------------------------------------------------------------
+// WP17: the per-IP geocode budget on /search
+// ---------------------------------------------------------------------------
+
+/// A router whose geocode budget is `per_ip` cache-missing searches. The
+/// limiter is in-memory and lives in this router's state, so every request
+/// made through this instance shares one bucket (`ClientIp` resolves to a
+/// single test peer when there is no `ConnectInfo`).
+async fn app_with_geocode_budget(per_ip: u32) -> axum::Router {
+    let config = bikenest_infrastructure::Config {
+        geocode: bikenest_infrastructure::GeocodeLimits {
+            per_ip,
+            window: std::time::Duration::from_secs(900),
+        },
+        ..test_config()
+    };
+    bikenest_web::app_router(std::sync::Arc::new(config), Db::from_pool(pool().await))
+        .expect("test config builds every provider")
+}
+
+/// Resolving a free-text destination is a billable third-party call, so one
+/// network cannot spend an unbounded number of them — but a destination the
+/// in-process cache can already answer costs the provider nothing and must
+/// therefore cost the caller nothing either.
+#[db_test]
+async fn free_text_searches_are_metered_but_cached_ones_are_free(_tx: &mut TestTx) {
+    let app = app_with_geocode_budget(2).await;
+
+    // Two fresh destinations: two provider calls, both within budget.
+    let (status, body) = get_c(&app, "/search?q=alpha+avenue", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.contains("Too many searches"));
+    let (status, _) = get_c(&app, "/search?q=beta+boulevard", None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A third one would be a third call: refused, with the notice, not a 500
+    // and not an empty page pretending nothing matched.
+    let (status, body) = get_c(&app, "/search?q=gamma+gardens", None).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        body.contains("Too many searches from your network right now"),
+        "the 429 explains itself: {body}"
+    );
+
+    // The first destination is cached now, so asking again reaches no
+    // provider — and is not charged against the exhausted budget.
+    let (status, body) = get_c(&app, "/search?q=alpha+avenue", None).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a cache hit does not consume the budget: {body}"
+    );
+    assert!(!body.contains("Too many searches"));
+
+    // Coordinates never reach the geocoder at all, so they are never
+    // metered either — including after the budget is spent.
+    let (status, _) = get_c(&app, "/search?lat=-25.4284&lon=-49.2733", None).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// The budget is spent per geocode, not per request: a search that carries no
+/// destination at all resolves nothing and must not be charged.
+#[db_test]
+async fn a_search_without_a_destination_is_not_metered(_tx: &mut TestTx) {
+    let app = app_with_geocode_budget(1).await;
+
+    for _ in 0..3 {
+        let (status, _) = get_c(&app, "/search", None).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    // The one geocode in the budget is still there to spend.
+    let (status, _) = get_c(&app, "/search?q=delta+drive", None).await;
+    assert_eq!(status, StatusCode::OK);
+}
