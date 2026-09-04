@@ -44,13 +44,14 @@ use crate::auth::{
     Auth, anon_csrf_token, clear_session_cookie, set_anon_csrf_cookie, set_session_cookie,
 };
 use crate::client_ip::ClientIp;
+use crate::htmx::{self, fragment_or_redirect, is_fragment_request, vary_fragment};
 use crate::i18n::{Locale, Translator};
 use crate::security::SecurityHeaders;
 use crate::view::{self, CardVm, ResultsData};
 use crate::{
     AboutPage, AccountDeletePage, AccountEmailPage, AccountExportPage, AccountPage,
     AccountPasswordPage, AccountPrivacyPage, AdminAuditPage, AdminPrivacyRequestsPage,
-    AdminUserContributionsPage, AdminUsersPage, ContributionsPage, DetailsPage, ErrorPage,
+    AdminUserContributionsPage, AdminUsersPage, ContributionsPage, DetailsPage,
     FavoritesPage, HomePage, LoginPage, ModerationActionResultVm, ModerationDashboardPage,
     ModerationPhotosPage, ModerationProposalsPage, ModerationReportsPage, PageLayout,
     ParkingEditPage, ParkingNewPage, PasswordResetNewPage, PasswordResetPage, PhotoVm, PolicyPage,
@@ -399,6 +400,12 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         // when auth short-circuits (e.g. a CSRF-403 without calling the inner
         // handler) the security/CSP headers are still applied. TraceLayer stays
         // outermost so it observes every response.
+        //
+        // `styled_errors` is innermost: it upgrades the plain-text failures the
+        // router and axum's own extractors emit (a 405, a malformed multipart
+        // boundary, a body over `DefaultBodyLimit`) into the styled page — or,
+        // for a real htmx fragment request, into a swap-safe fragment.
+        .layer(middleware::from_fn_with_state(state.clone(), styled_errors))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::auth_middleware,
@@ -615,7 +622,10 @@ async fn search(
     params: Query<SearchParams>,
 ) -> Response {
     let tr = Translator::new(locale);
-    let is_htmx = headers.contains_key("hx-request");
+    // Only a request htmx will swap into a real target may get the bare results
+    // list: a boosted navigation and a back/forward history replay both target
+    // `<body>`, and would make the fragment the entire document.
+    let is_htmx = is_fragment_request(&headers);
     let input = params.to_input();
     let query_string = params.query_string();
 
@@ -655,7 +665,7 @@ async fn search(
             error: Some(tr.t("search.geocode_unavailable").to_string()),
             map_json: serde_json::json!({ "origin": null, "items": [] }).to_string(),
         },
-        Err(_) => return internal_error(&state.map, tr),
+        Err(_) => return internal_error(&headers, &state.map, tr),
     };
 
     if is_htmx {
@@ -664,7 +674,7 @@ async fn search(
             results,
             oob: true,
         };
-        render(vm, StatusCode::OK)
+        vary_fragment(render(vm, StatusCode::OK))
     } else {
         let vm = SearchPageVm {
             layout: PageLayout::new(&state.map, tr.t("search.title").to_string(), "search")
@@ -678,11 +688,15 @@ async fn search(
             type_options: view::type_options(tr, Some(&params.parking_type)),
             oob: false,
         };
-        render(vm, StatusCode::OK)
+        // The same URL serves the fragment and the document, chosen by the
+        // HX-* headers — say so, or a cache hands one to the wrong request.
+        vary_fragment(render(vm, StatusCode::OK))
     }
 }
 
 /// Post-action confirmation flags on the details page (`?proposed=1`, `?edited=1`, …).
+/// The last four are the no-JS landing spots for the fragment endpoints: with
+/// scripting off those POSTs redirect here instead of answering with a partial.
 #[derive(Debug, Default, serde::Deserialize)]
 struct DetailsNotice {
     #[serde(default)]
@@ -693,6 +707,14 @@ struct DetailsNotice {
     proposed: Option<String>,
     #[serde(default)]
     reviewed: Option<String>,
+    #[serde(default)]
+    verified: Option<String>,
+    #[serde(default)]
+    parked: Option<String>,
+    #[serde(default)]
+    reported: Option<String>,
+    #[serde(default)]
+    photo: Option<String>,
 }
 
 /// One notice for the details page banner, newest/strongest action first.
@@ -705,6 +727,14 @@ fn details_notice(tr: Translator, q: &DetailsNotice) -> Option<String> {
         Some(tr.t("details.notice.reviewed").to_string())
     } else if q.added.is_some() {
         Some(tr.t("details.notice.added").to_string())
+    } else if q.verified.is_some() {
+        Some(tr.t("verification.saved").to_string())
+    } else if q.parked.is_some() {
+        Some(tr.t("parked.saved").to_string())
+    } else if q.reported.is_some() {
+        Some(tr.t("report.submitted").to_string())
+    } else if q.photo.is_some() {
+        Some(tr.t("photo.upload.success").to_string())
     } else {
         None
     }
@@ -715,6 +745,7 @@ async fn parking_details(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Query(q): Query<DetailsNotice>,
 ) -> Response {
@@ -729,7 +760,7 @@ async fn parking_details(
                 .map(|u| u.has_role(Role::Moderator) || u.has_role(Role::Admin))
                 .unwrap_or(false);
             if view.location.moderation_state() != ModerationState::Active && !is_moderator {
-                return not_found_page(&state.map, tr);
+                return not_found_page(&headers, &state.map, tr);
             }
             // Approved photos (P3 gallery). A read failure degrades to no
             // gallery rather than failing the page.
@@ -786,8 +817,8 @@ async fn parking_details(
             .notice(notice);
             render(page, StatusCode::OK)
         }
-        Ok(None) => not_found_page(&state.map, tr),
-        Err(_) => internal_error(&state.map, tr),
+        Ok(None) => not_found_page(&headers, &state.map, tr),
+        Err(_) => internal_error(&headers, &state.map, tr),
     }
 }
 
@@ -827,6 +858,30 @@ async fn media(
 // M4 photos (upload → validate → process → moderate → publish)
 // ---------------------------------------------------------------------------
 
+/// One htmx fragment endpoint's answer, for *any* caller.
+///
+/// htmx 4 puts `HX-Request` on boosted navigations and history replays too, and
+/// both swap `<body>` — so only a real fragment request may be answered with a
+/// partial. Everything else (no-JS submit, boosted form post, history replay)
+/// gets a whole document: a 303 to the page that now shows the new state on
+/// success (post/redirect/get), and the styled error page — at the same status —
+/// on failure. htmx 4 swaps 4xx/5xx bodies as well, so the failure fragment is a
+/// partial rather than a bare string.
+fn fragment_answer(
+    headers: &HeaderMap,
+    map: &MapConfig,
+    tr: Translator,
+    status: StatusCode,
+    message: &str,
+    redirect_to: &str,
+    fragment: impl FnOnce() -> Response,
+) -> Response {
+    if !is_fragment_request(headers) && !status.is_success() {
+        return crate::error_response(headers, map, tr, status, message.to_string());
+    }
+    fragment_or_redirect(headers, fragment(), redirect_to)
+}
+
 /// POST /parking/{id}/photo — a verified user uploads one photo (multipart:
 /// `photo` file + optional `alt`). Runs the same pipeline as the D1 attach and
 /// holds the upload in `PENDING_REVIEW` (§30/§80). Returns a swap-safe fragment.
@@ -836,12 +891,25 @@ async fn upload_photo(
     ClientIp(ip): ClientIp,
     auth: Auth,
     Path(id): Path<i64>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Response {
     let tr = Translator::new(locale);
     let user = match auth.require_verified() {
         Ok(u) => u,
         Err(resp) => return resp,
+    };
+    let back = format!("/parking/{id}?photo=pending");
+    let bad_request = |message: &str| {
+        photo_upload_result(
+            &headers,
+            &state.map,
+            tr,
+            "error",
+            message,
+            StatusCode::BAD_REQUEST,
+            &back,
+        )
     };
 
     let mut photo_bytes: Option<Vec<u8>> = None;
@@ -850,26 +918,12 @@ async fn upload_photo(
         let field = match multipart.next_field().await {
             Ok(Some(f)) => f,
             Ok(None) => break,
-            Err(_) => {
-                return photo_upload_result(
-                    tr,
-                    "error",
-                    tr.t("photo.error.internal"),
-                    StatusCode::BAD_REQUEST,
-                );
-            }
+            Err(_) => return bad_request(tr.t("photo.error.internal")),
         };
         match field.name().unwrap_or("") {
             "photo" => match field.bytes().await {
                 Ok(b) => photo_bytes = Some(b.to_vec()),
-                Err(_) => {
-                    return photo_upload_result(
-                        tr,
-                        "error",
-                        tr.t("photo.error.internal"),
-                        StatusCode::BAD_REQUEST,
-                    );
-                }
+                Err(_) => return bad_request(tr.t("photo.error.internal")),
             },
             "alt" => {
                 if let Ok(text) = field.text().await {
@@ -884,30 +938,73 @@ async fn upload_photo(
     }
 
     let Some(bytes) = photo_bytes else {
-        return photo_upload_result(
-            tr,
-            "error",
-            tr.t("photo.error.internal"),
-            StatusCode::BAD_REQUEST,
-        );
+        return bad_request(tr.t("photo.error.internal"));
     };
 
     let target = PhotoTarget::Parking(id);
-    match state
+    let (state_name, message, status) = match state
         .photo
         .upload_photo(user, &ip, target, &bytes, alt.as_deref())
         .await
     {
-        Ok(_) => photo_upload_result(tr, "success", tr.t("photo.upload.success"), StatusCode::OK),
+        Ok(_) => (
+            "success",
+            tr.t("photo.upload.success").to_string(),
+            StatusCode::OK,
+        ),
         Err(e) => {
             let (status, message) = photo_error(tr, &e);
-            photo_upload_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    photo_upload_result(
+        &headers,
+        &state.map,
+        tr,
+        state_name,
+        &message,
+        status,
+        &back,
+    )
+}
+
+/// The `?done=…` flag a moderation action redirects a whole-document request
+/// back to its queue with. The value names the action, not the message key, so
+/// the URL never carries catalog internals.
+#[derive(Debug, Default, serde::Deserialize)]
+struct ModerationNotice {
+    #[serde(default)]
+    done: String,
+}
+
+/// The queue banner for a `?done=…` flag, or nothing for an unknown value.
+fn moderation_notice(tr: Translator, q: &ModerationNotice) -> Option<String> {
+    let key = match q.done.as_str() {
+        "approved" => "moderation.approved",
+        "rejected" => "moderation.rejected",
+        "photo_hidden" => "moderation.photo_hidden",
+        "photo_restored" => "moderation.photo_restored",
+        "claimed" => "report.claimed",
+        "resolved" => "report.resolved_msg",
+        "dismissed" => "report.dismissed_msg",
+        "proposal_approved" => "proposal.approved",
+        "proposal_rejected" => "proposal.rejected",
+        "review_hidden" => "review.hidden",
+        "review_restored" => "review.restored",
+        "parking_invalidated" => "parking.invalidated",
+        "parking_restored" => "parking.restored",
+        _ => return None,
+    };
+    Some(tr.t(key).to_string())
 }
 
 /// GET /moderation/photos — the M2 photo moderation queue (MODERATOR/ADMIN).
-async fn moderation_photos(State(state): State<AppState>, locale: Locale, auth: Auth) -> Response {
+async fn moderation_photos(
+    State(state): State<AppState>,
+    locale: Locale,
+    auth: Auth,
+    Query(q): Query<ModerationNotice>,
+) -> Response {
     let tr = Translator::new(locale);
     let user = match auth.require_moderator() {
         Ok(u) => u,
@@ -933,7 +1030,7 @@ async fn moderation_photos(State(state): State<AppState>, locale: Locale, auth: 
             ),
             tr,
             items,
-            notice: None,
+            notice: moderation_notice(tr, &q),
         },
         StatusCode::OK,
     )
@@ -944,11 +1041,17 @@ fn parse_photo_kind(s: &str) -> Option<PhotoKind> {
     PhotoKind::from_code(s)
 }
 
+/// The photo queue a moderation action returns a whole-document request to.
+fn photo_queue_url(done: &str) -> String {
+    format!("/moderation/photos?done={done}")
+}
+
 /// POST /moderation/photos/{kind}/{id}/approve (HTMX).
 async fn moderation_photo_approve(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path((kind, id)): Path<(String, i64)>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -956,16 +1059,30 @@ async fn moderation_photo_approve(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    let back = photo_queue_url("approved");
     let Some(kind) = parse_photo_kind(&kind) else {
-        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+        return photo_upload_result(
+            &headers,
+            &state.map,
+            tr,
+            "error",
+            tr.t("moderation.invalid"),
+            StatusCode::BAD_REQUEST,
+            &back,
+        );
     };
-    match state.photo.approve_photo(user, kind, id).await {
-        Ok(()) => photo_upload_result(tr, "success", tr.t("moderation.approved"), StatusCode::OK),
+    let (name, message, status) = match state.photo.approve_photo(user, kind, id).await {
+        Ok(()) => (
+            "success",
+            tr.t("moderation.approved").to_string(),
+            StatusCode::OK,
+        ),
         Err(e) => {
             let (status, message) = photo_error(tr, &e);
-            photo_upload_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    photo_upload_result(&headers, &state.map, tr, name, &message, status, &back)
 }
 
 /// POST /moderation/photos/{kind}/{id}/reject (HTMX).
@@ -973,6 +1090,7 @@ async fn moderation_photo_reject(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path((kind, id)): Path<(String, i64)>,
     Form(form): Form<RejectReasonForm>,
 ) -> Response {
@@ -981,16 +1099,31 @@ async fn moderation_photo_reject(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    let back = photo_queue_url("rejected");
     let Some(kind) = parse_photo_kind(&kind) else {
-        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+        return photo_upload_result(
+            &headers,
+            &state.map,
+            tr,
+            "error",
+            tr.t("moderation.invalid"),
+            StatusCode::BAD_REQUEST,
+            &back,
+        );
     };
-    match state.photo.reject_photo(user, kind, id, &form.reason).await {
-        Ok(()) => photo_upload_result(tr, "success", tr.t("moderation.rejected"), StatusCode::OK),
+    let (name, message, status) = match state.photo.reject_photo(user, kind, id, &form.reason).await
+    {
+        Ok(()) => (
+            "success",
+            tr.t("moderation.rejected").to_string(),
+            StatusCode::OK,
+        ),
         Err(e) => {
             let (status, message) = photo_error(tr, &e);
-            photo_upload_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    photo_upload_result(&headers, &state.map, tr, name, &message, status, &back)
 }
 
 /// POST /moderation/photos/{kind}/{id}/hide (HTMX) — flips an approved photo to `HIDDEN` (§44).
@@ -998,6 +1131,7 @@ async fn moderation_photo_hide(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path((kind, id)): Path<(String, i64)>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -1005,21 +1139,30 @@ async fn moderation_photo_hide(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    let back = photo_queue_url("photo_hidden");
     let Some(kind) = parse_photo_kind(&kind) else {
-        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
-    };
-    match state.moderation.hide_photo(user, kind, id).await {
-        Ok(()) => moderation_result(
+        return moderation_result(
+            &headers,
+            &state.map,
             tr,
+            "error",
+            tr.t("moderation.invalid"),
+            StatusCode::BAD_REQUEST,
+            &back,
+        );
+    };
+    let (name, message, status) = match state.moderation.hide_photo(user, kind, id).await {
+        Ok(()) => (
             "success",
-            tr.t("moderation.photo_hidden"),
+            tr.t("moderation.photo_hidden").to_string(),
             StatusCode::OK,
         ),
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
-            moderation_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    moderation_result(&headers, &state.map, tr, name, &message, status, &back)
 }
 
 /// POST /moderation/photos/{kind}/{id}/restore (HTMX) — flips a hidden photo back to `APPROVED` (§44).
@@ -1027,6 +1170,7 @@ async fn moderation_photo_restore(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path((kind, id)): Path<(String, i64)>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -1034,42 +1178,57 @@ async fn moderation_photo_restore(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    let back = photo_queue_url("photo_restored");
     let Some(kind) = parse_photo_kind(&kind) else {
-        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
-    };
-    match state.moderation.restore_photo(user, kind, id).await {
-        Ok(()) => moderation_result(
+        return moderation_result(
+            &headers,
+            &state.map,
             tr,
+            "error",
+            tr.t("moderation.invalid"),
+            StatusCode::BAD_REQUEST,
+            &back,
+        );
+    };
+    let (name, message, status) = match state.moderation.restore_photo(user, kind, id).await {
+        Ok(()) => (
             "success",
-            tr.t("moderation.photo_restored"),
+            tr.t("moderation.photo_restored").to_string(),
             StatusCode::OK,
         ),
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
-            moderation_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    moderation_result(&headers, &state.map, tr, name, &message, status, &back)
 }
 
 // ---------------------------------------------------------------------------
 // M5 moderation & reporting handlers
 // ---------------------------------------------------------------------------
 
-/// Render a swap-safe moderation-action toast.
+/// Render a swap-safe moderation-action toast (or, for a whole-document
+/// request, redirect back to the queue / show the styled error page).
 fn moderation_result(
+    headers: &HeaderMap,
+    map: &MapConfig,
     tr: Translator,
     state: &'static str,
     message: &str,
     status: StatusCode,
+    redirect_to: &str,
 ) -> Response {
-    render(
-        ModerationActionResultVm {
-            tr,
-            state,
-            message: message.to_string(),
-        },
-        status,
-    )
+    fragment_answer(headers, map, tr, status, message, redirect_to, || {
+        render(
+            ModerationActionResultVm {
+                tr,
+                state,
+                message: message.to_string(),
+            },
+            status,
+        )
+    })
 }
 
 /// Map a [`ModerationError`] to a non-leaking status + friendly message.
@@ -1097,19 +1256,24 @@ fn moderation_error_message(tr: Translator, e: &ModerationError) -> (StatusCode,
 }
 
 fn report_result(
+    headers: &HeaderMap,
+    map: &MapConfig,
     tr: Translator,
     state: &'static str,
     message: &str,
     status: StatusCode,
+    redirect_to: &str,
 ) -> Response {
-    render(
-        ReportResultVm {
-            tr,
-            state,
-            message: message.to_string(),
-        },
-        status,
-    )
+    fragment_answer(headers, map, tr, status, message, redirect_to, || {
+        render(
+            ReportResultVm {
+                tr,
+                state,
+                message: message.to_string(),
+            },
+            status,
+        )
+    })
 }
 
 /// POST /reports — a user reports content (authenticated; not necessarily verified).
@@ -1123,6 +1287,24 @@ struct ReportForm {
     reason: String,
     #[serde(default)]
     description: String,
+    /// The page the modal was opened from. A report can target a review or a
+    /// photo, whose parking id the form does not otherwise carry, so the page
+    /// states where a no-JS submit should land. Validated as a local path.
+    #[serde(default)]
+    page: String,
+}
+
+/// Where a whole-document report submit lands: the page the modal was opened
+/// from, else the reported spot, else home. Never a caller-controlled origin.
+fn report_return_url(form: &ReportForm) -> String {
+    if let Some(local) = htmx::safe_local_path(&form.page) {
+        let sep = if local.contains('?') { '&' } else { '?' };
+        return format!("{local}{sep}reported=1");
+    }
+    if form.target_type == "parking" && form.target_id > 0 {
+        return format!("/parking/{}?reported=1", form.target_id);
+    }
+    "/".to_string()
 }
 
 async fn report_submit(
@@ -1130,6 +1312,7 @@ async fn report_submit(
     locale: Locale,
     ClientIp(ip): ClientIp,
     auth: Auth,
+    headers: HeaderMap,
     Form(form): Form<ReportForm>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -1137,20 +1320,27 @@ async fn report_submit(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    let back = report_return_url(&form);
     if form.target_id <= 0 {
         return report_result(
+            &headers,
+            &state.map,
             tr,
             "error",
             tr.t("moderation.invalid"),
             StatusCode::BAD_REQUEST,
+            &back,
         );
     }
     let Ok(target_type) = ReportTargetType::from_code(&form.target_type) else {
         return report_result(
+            &headers,
+            &state.map,
             tr,
             "error",
             tr.t("report.error.invalid_reason"),
             StatusCode::BAD_REQUEST,
+            &back,
         );
     };
     let description = if form.description.trim().is_empty() {
@@ -1158,7 +1348,7 @@ async fn report_submit(
     } else {
         Some(form.description.clone())
     };
-    match state
+    let (name, message, status) = match state
         .moderation
         .submit_report(
             user,
@@ -1172,13 +1362,18 @@ async fn report_submit(
     {
         Ok(_) => {
             tracing::info!("report submitted"); // §86 (no PII)
-            report_result(tr, "success", tr.t("report.submitted"), StatusCode::OK)
+            (
+                "success",
+                tr.t("report.submitted").to_string(),
+                StatusCode::OK,
+            )
         }
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
-            report_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    report_result(&headers, &state.map, tr, name, &message, status, &back)
 }
 
 /// GET /moderation — the M1 moderation dashboard (counts + links).
@@ -1241,6 +1436,9 @@ async fn moderation_dashboard(
 struct ReportFilterQuery {
     #[serde(default)]
     state: String,
+    /// Set by a moderation action redirecting a whole-document request back here.
+    #[serde(default)]
+    done: String,
 }
 
 async fn moderation_reports(
@@ -1279,10 +1477,15 @@ async fn moderation_reports(
             state_filter: q.state,
             items,
             viewer_id: user.id.0,
-            notice: None,
+            notice: moderation_notice(tr, &ModerationNotice { done: q.done }),
         },
         StatusCode::OK,
     )
+}
+
+/// The reports queue a moderation action returns a whole-document request to.
+fn reports_queue_url(done: &str) -> String {
+    format!("/moderation/reports?done={done}")
 }
 
 /// POST /moderation/reports/{id}/claim — claim an open report.
@@ -1290,6 +1493,7 @@ async fn moderation_report_claim(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -1297,13 +1501,22 @@ async fn moderation_report_claim(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    match state.moderation.claim_report(user, id).await {
-        Ok(()) => moderation_result(tr, "success", tr.t("report.claimed"), StatusCode::OK),
+    let (name, message, status) = match state.moderation.claim_report(user, id).await {
+        Ok(()) => ("success", tr.t("report.claimed").to_string(), StatusCode::OK),
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
-            moderation_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    moderation_result(
+        &headers,
+        &state.map,
+        tr,
+        name,
+        &message,
+        status,
+        &reports_queue_url("claimed"),
+    )
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -1317,6 +1530,7 @@ async fn moderation_report_resolve(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<ResolutionForm>,
 ) -> Response {
@@ -1325,20 +1539,33 @@ async fn moderation_report_resolve(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    match state
+    let (name, message, status) = match state
         .moderation
         .resolve_report(user, id, ReportOutcome::Resolved, &form.note)
         .await
     {
         Ok(()) => {
             tracing::info!("report resolved"); // §86 (no PII)
-            moderation_result(tr, "success", tr.t("report.resolved_msg"), StatusCode::OK)
+            (
+                "success",
+                tr.t("report.resolved_msg").to_string(),
+                StatusCode::OK,
+            )
         }
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
-            moderation_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    moderation_result(
+        &headers,
+        &state.map,
+        tr,
+        name,
+        &message,
+        status,
+        &reports_queue_url("resolved"),
+    )
 }
 
 /// POST /moderation/reports/{id}/dismiss — dismiss a claimed report (HTMX).
@@ -1346,6 +1573,7 @@ async fn moderation_report_dismiss(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<ResolutionForm>,
 ) -> Response {
@@ -1354,17 +1582,30 @@ async fn moderation_report_dismiss(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    match state
+    let (name, message, status) = match state
         .moderation
         .resolve_report(user, id, ReportOutcome::Dismissed, &form.note)
         .await
     {
-        Ok(()) => moderation_result(tr, "success", tr.t("report.dismissed_msg"), StatusCode::OK),
+        Ok(()) => (
+            "success",
+            tr.t("report.dismissed_msg").to_string(),
+            StatusCode::OK,
+        ),
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
-            moderation_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    moderation_result(
+        &headers,
+        &state.map,
+        tr,
+        name,
+        &message,
+        status,
+        &reports_queue_url("dismissed"),
+    )
 }
 
 /// GET /moderation/proposals — the M4 proposal review queue.
@@ -1372,6 +1613,7 @@ async fn moderation_proposals(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    Query(q): Query<ModerationNotice>,
 ) -> Response {
     let tr = Translator::new(locale);
     let user = match auth.require_moderator() {
@@ -1396,10 +1638,15 @@ async fn moderation_proposals(
             ),
             tr,
             items,
-            notice: None,
+            notice: moderation_notice(tr, &q),
         },
         StatusCode::OK,
     )
+}
+
+/// The proposals queue a moderation action returns a whole-document request to.
+fn proposals_queue_url(done: &str) -> String {
+    format!("/moderation/proposals?done={done}")
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -1487,6 +1734,7 @@ async fn moderation_proposal_approve(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<ApproveProposalForm>,
 ) -> Response {
@@ -1495,26 +1743,30 @@ async fn moderation_proposal_approve(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    let back = proposals_queue_url("proposal_approved");
+    let fail = |e: &ModerationError| {
+        let (status, message) = moderation_error_message(tr, e);
+        moderation_result(&headers, &state.map, tr, "error", &message, status, &back)
+    };
     let proposal = match state.moderation.get_proposal(user, id).await {
         Ok(Some(p)) => p,
-        _ => {
-            let (status, message) = moderation_error_message(tr, &ModerationError::NotFound);
-            return moderation_result(tr, "error", &message, status);
-        }
+        _ => return fail(&ModerationError::NotFound),
     };
     let applied = match proposal_application(&proposal, &form) {
         Ok(a) => a,
-        Err(e) => {
-            let (status, message) = moderation_error_message(tr, &e);
-            return moderation_result(tr, "error", &message, status);
-        }
+        Err(e) => return fail(&e),
     };
     match state.moderation.approve_proposal(user, id, applied).await {
-        Ok(()) => moderation_result(tr, "success", tr.t("proposal.approved"), StatusCode::OK),
-        Err(e) => {
-            let (status, message) = moderation_error_message(tr, &e);
-            moderation_result(tr, "error", &message, status)
-        }
+        Ok(()) => moderation_result(
+            &headers,
+            &state.map,
+            tr,
+            "success",
+            tr.t("proposal.approved"),
+            StatusCode::OK,
+            &back,
+        ),
+        Err(e) => fail(&e),
     }
 }
 
@@ -1523,6 +1775,7 @@ async fn moderation_proposal_reject(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<RejectReasonForm>,
 ) -> Response {
@@ -1531,17 +1784,30 @@ async fn moderation_proposal_reject(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    match state
+    let (name, message, status) = match state
         .moderation
         .reject_proposal(user, id, &form.reason)
         .await
     {
-        Ok(()) => moderation_result(tr, "success", tr.t("proposal.rejected"), StatusCode::OK),
+        Ok(()) => (
+            "success",
+            tr.t("proposal.rejected").to_string(),
+            StatusCode::OK,
+        ),
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
-            moderation_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    moderation_result(
+        &headers,
+        &state.map,
+        tr,
+        name,
+        &message,
+        status,
+        &proposals_queue_url("proposal_rejected"),
+    )
 }
 
 /// POST /moderation/reviews/{id}/hide — hide a review.
@@ -1549,6 +1815,7 @@ async fn moderation_review_hide(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -1556,13 +1823,22 @@ async fn moderation_review_hide(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    match state.moderation.hide_review(user, id).await {
-        Ok(()) => moderation_result(tr, "success", tr.t("review.hidden"), StatusCode::OK),
+    let (name, message, status) = match state.moderation.hide_review(user, id).await {
+        Ok(()) => ("success", tr.t("review.hidden").to_string(), StatusCode::OK),
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
-            moderation_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    moderation_result(
+        &headers,
+        &state.map,
+        tr,
+        name,
+        &message,
+        status,
+        &reports_queue_url("review_hidden"),
+    )
 }
 
 /// POST /moderation/reviews/{id}/restore — restore a hidden review.
@@ -1570,6 +1846,7 @@ async fn moderation_review_restore(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -1577,13 +1854,22 @@ async fn moderation_review_restore(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    match state.moderation.restore_review(user, id).await {
-        Ok(()) => moderation_result(tr, "success", tr.t("review.restored"), StatusCode::OK),
+    let (name, message, status) = match state.moderation.restore_review(user, id).await {
+        Ok(()) => ("success", tr.t("review.restored").to_string(), StatusCode::OK),
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
-            moderation_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    moderation_result(
+        &headers,
+        &state.map,
+        tr,
+        name,
+        &message,
+        status,
+        &reports_queue_url("review_restored"),
+    )
 }
 
 /// POST /moderation/parking/{id}/invalidate — invalidate a location.
@@ -1591,6 +1877,7 @@ async fn moderation_parking_invalidate(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -1598,13 +1885,26 @@ async fn moderation_parking_invalidate(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    match state.moderation.invalidate_parking(user, id).await {
-        Ok(()) => moderation_result(tr, "success", tr.t("parking.invalidated"), StatusCode::OK),
+    let (name, message, status) = match state.moderation.invalidate_parking(user, id).await {
+        Ok(()) => (
+            "success",
+            tr.t("parking.invalidated").to_string(),
+            StatusCode::OK,
+        ),
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
-            moderation_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    moderation_result(
+        &headers,
+        &state.map,
+        tr,
+        name,
+        &message,
+        status,
+        &reports_queue_url("parking_invalidated"),
+    )
 }
 
 /// POST /moderation/parking/{id}/restore — restore an invalid/removed location.
@@ -1612,6 +1912,7 @@ async fn moderation_parking_restore(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -1619,13 +1920,26 @@ async fn moderation_parking_restore(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    match state.moderation.restore_parking(user, id).await {
-        Ok(()) => moderation_result(tr, "success", tr.t("parking.restored"), StatusCode::OK),
+    let (name, message, status) = match state.moderation.restore_parking(user, id).await {
+        Ok(()) => (
+            "success",
+            tr.t("parking.restored").to_string(),
+            StatusCode::OK,
+        ),
         Err(e) => {
             let (status, message) = moderation_error_message(tr, &e);
-            moderation_result(tr, "error", &message, status)
+            ("error", message, status)
         }
-    }
+    };
+    moderation_result(
+        &headers,
+        &state.map,
+        tr,
+        name,
+        &message,
+        status,
+        &reports_queue_url("parking_restored"),
+    )
 }
 
 /// POST /admin/users/{id}/suspend — ADMIN-only; revokes sessions + audits.
@@ -1794,19 +2108,24 @@ struct RejectReasonForm {
 }
 
 fn photo_upload_result(
+    headers: &HeaderMap,
+    map: &MapConfig,
     tr: Translator,
     state: &'static str,
     message: &str,
     status: StatusCode,
+    redirect_to: &str,
 ) -> Response {
-    render(
-        crate::PhotoUploadResultVm {
-            tr,
-            state,
-            message: message.to_string(),
-        },
-        status,
-    )
+    fragment_answer(headers, map, tr, status, message, redirect_to, || {
+        render(
+            crate::PhotoUploadResultVm {
+                tr,
+                state,
+                message: message.to_string(),
+            },
+            status,
+        )
+    })
 }
 
 /// Map a [`PhotoError`] to a non-leaking status + friendly message.
@@ -1858,8 +2177,9 @@ async fn set_lang(
     headers: HeaderMap,
 ) -> Response {
     // Return the user to where they were: explicit `next`, else the page htmx
-    // reports (boosted request), else the Referer — all reduced to a local,
-    // single-slash path (open-redirect guard).
+    // reports (`HX-Current-URL`), else the Referer — all reduced through the one
+    // open-redirect guard, which also rejects the `\` a browser may normalise
+    // into a second `/` (`/\evil.com`).
     let from_header = |name: &str| -> Option<String> {
         let raw = headers.get(name)?.to_str().ok()?;
         // Strip scheme + host to keep only the local path (+ query).
@@ -1869,16 +2189,13 @@ async fn set_lang(
                 .map(|j| &raw[i + 3 + j..])
                 .unwrap_or("/")
         });
-        let path = path.unwrap_or(raw);
-        (path.starts_with('/') && !path.starts_with("//")).then(|| path.to_string())
+        htmx::safe_local_path(path.unwrap_or(raw)).map(str::to_string)
     };
-    let next = if params.next.starts_with('/') && !params.next.starts_with("//") {
-        params.next.clone()
-    } else {
-        from_header("hx-current-url")
-            .or_else(|| from_header("referer"))
-            .unwrap_or_else(|| "/".to_string())
-    };
+    let next = htmx::safe_local_path(&params.next)
+        .map(str::to_string)
+        .or_else(|| from_header(htmx::HX_CURRENT_URL))
+        .or_else(|| from_header("referer"))
+        .unwrap_or_else(|| "/".to_string());
     let Some(locale) = Locale::from_code(&code) else {
         return axum::response::Redirect::to(&next).into_response();
     };
@@ -2021,6 +2338,9 @@ struct LoginNotices {
     resend: Option<String>,
     #[serde(default)]
     oauth: Option<String>,
+    /// Where the gate that bounced the user wanted them to end up.
+    #[serde(default)]
+    next: String,
 }
 
 /// Build the notice shown on the login page from a query-string flag.
@@ -2046,6 +2366,18 @@ struct LoginForm {
     email: String,
     #[serde(default)]
     password: String,
+    /// Carried across the round trip by the hidden field on the login form.
+    #[serde(default)]
+    next: String,
+}
+
+/// Where a login lands. `next` comes from the user (a query parameter, then a
+/// form field), so it is reduced to a safe local path or dropped — `/account`
+/// is the default and the only answer for `//evil.com` or `/\evil.com`.
+fn login_destination(next: &str) -> String {
+    htmx::safe_local_path(next)
+        .unwrap_or("/account")
+        .to_string()
 }
 
 async fn login_page(
@@ -2055,7 +2387,7 @@ async fn login_page(
     Query(q): Query<LoginNotices>,
 ) -> Response {
     if auth.authenticated() {
-        return axum::response::Redirect::to("/account").into_response();
+        return axum::response::Redirect::to(&login_destination(&q.next)).into_response();
     }
     let tr = Translator::new(locale);
     let token = anon_csrf_token();
@@ -2067,6 +2399,7 @@ async fn login_page(
             email: String::new(),
             notice: login_notice(tr, &q),
             error: None,
+            next: htmx::safe_local_path(&q.next).unwrap_or("").to_string(),
             google_enabled: state.google_oauth_enabled,
         },
         &token,
@@ -2078,14 +2411,25 @@ async fn login_post(
     locale: Locale,
     ClientIp(ip): ClientIp,
     auth: Auth,
+    Query(q): Query<LoginNotices>,
     Form(form): Form<LoginForm>,
 ) -> Response {
+    // The form field wins (it survives a failed attempt); the query parameter
+    // is the fallback for a link straight to `/login?next=…`.
+    let next = if form.next.is_empty() {
+        q.next.clone()
+    } else {
+        form.next.clone()
+    };
     if auth.authenticated() {
-        return axum::response::Redirect::to("/account").into_response();
+        return axum::response::Redirect::to(&login_destination(&next)).into_response();
     }
     let tr = Translator::new(locale);
     match state.auth.login(&ip, &form.email, &form.password).await {
-        Ok(outcome) => redirect_with_cookie("/account", &set_session_cookie(&outcome.session)),
+        Ok(outcome) => redirect_with_cookie(
+            &login_destination(&next),
+            &set_session_cookie(&outcome.session),
+        ),
         // One generic message for bad credentials AND suspended/deleted (§45).
         // The submitted email is NOT echoed back, so the failure response is
         // byte-identical whether or not the account exists — and it still
@@ -2105,6 +2449,7 @@ async fn login_post(
                     email: String::new(),
                     notice: None,
                     error: Some(tr.t("auth.error.invalid_credentials").to_string()),
+                    next: htmx::safe_local_path(&next).unwrap_or("").to_string(),
                     google_enabled: state.google_oauth_enabled,
                 },
                 &token,
@@ -2203,6 +2548,7 @@ async fn verify_resend(
                     email: String::new(),
                     notice: None,
                     error: Some(auth_error_message(tr, &err)),
+                    next: String::new(),
                     google_enabled: state.google_oauth_enabled,
                 },
                 &t,
@@ -3142,48 +3488,124 @@ fn render_anon<T: Template>(page: T, token: &str) -> Response {
     resp
 }
 
+/// A translated failure page. Like every other error path this respects the
+/// request's shape: a real htmx fragment request gets
+/// `partials/fragment_error.html` (it is swapped into a live target, so a whole
+/// document would land inside it), anything else gets the styled `error.html`.
 fn error_page(
+    headers: &HeaderMap,
     map: &MapConfig,
     tr: Translator,
     status: StatusCode,
-    title_key: &str,
     body_key: &str,
 ) -> Response {
-    let page = ErrorPage {
-        layout: PageLayout::new(map, format!("{} — BikeNest", tr.t(title_key)), ""),
-        tr,
-        status: status.as_u16(),
-        message: tr.t(body_key).to_string(),
-    };
-    match page.render() {
-        Ok(html) => (status, Html(html)).into_response(),
-        Err(_) => (status, tr.t(body_key)).into_response(),
-    }
+    crate::error_response(headers, map, tr, status, tr.t(body_key).to_string())
 }
 
-fn internal_error(map: &MapConfig, tr: Translator) -> Response {
+fn internal_error(headers: &HeaderMap, map: &MapConfig, tr: Translator) -> Response {
     error_page(
+        headers,
         map,
         tr,
         StatusCode::INTERNAL_SERVER_ERROR,
-        "error.500.title",
         "error.500.body",
     )
 }
 
-fn not_found_page(map: &MapConfig, tr: Translator) -> Response {
-    error_page(
-        map,
-        tr,
-        StatusCode::NOT_FOUND,
-        "error.404.title",
-        "error.404.body",
-    )
+fn not_found_page(headers: &HeaderMap, map: &MapConfig, tr: Translator) -> Response {
+    error_page(headers, map, tr, StatusCode::NOT_FOUND, "error.404.body")
 }
 
-/// Router fallback (E1). Resolves locale from the request for a translated 404.
-async fn not_found(State(state): State<AppState>, locale: Locale) -> Response {
-    not_found_page(&state.map, Translator::new(locale))
+/// Router fallback (E1). A 404 is reachable by every kind of request — a typed
+/// URL, a boosted link, a stale htmx fragment poll — so it answers each in its
+/// own shape rather than always emitting a whole document.
+async fn not_found(State(state): State<AppState>, locale: Locale, headers: HeaderMap) -> Response {
+    not_found_page(&headers, &state.map, Translator::new(locale))
+}
+
+/// Paths whose plain-text bodies are the contract, not a leaked failure: the
+/// probes, the media redirector and the static file service.
+fn skips_styled_errors(path: &str) -> bool {
+    path == "/healthz"
+        || path == "/readyz"
+        || path == "/robots.txt"
+        || path == "/sitemap.xml"
+        || path.starts_with("/media/")
+        || path.starts_with("/static/")
+}
+
+/// True when the caller would understand an HTML answer (no `Accept` at all,
+/// or one that admits `text/html` / `*/*`).
+fn accepts_html(headers: &HeaderMap) -> bool {
+    match headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()) {
+        None => true,
+        Some(a) => a.contains("text/html") || a.contains("*/*"),
+    }
+}
+
+/// A translated sentence for a status the router (rather than a handler)
+/// produced, so the user never sees axum's English rejection text.
+fn status_message(tr: Translator, status: StatusCode) -> String {
+    let key = match status {
+        StatusCode::UNAUTHORIZED => "error.login_required",
+        StatusCode::FORBIDDEN => "error.forbidden",
+        StatusCode::NOT_FOUND => "error.404.body",
+        StatusCode::METHOD_NOT_ALLOWED => "error.method_not_allowed",
+        StatusCode::CONFLICT => "error.conflict",
+        StatusCode::PAYLOAD_TOO_LARGE => "error.too_large",
+        StatusCode::TOO_MANY_REQUESTS => "error.too_many",
+        StatusCode::SERVICE_UNAVAILABLE => "error.unavailable",
+        s if s.is_server_error() => "error.500.body",
+        _ => "error.bad_request",
+    };
+    tr.t(key).to_string()
+}
+
+/// Last line of defence for E1/E2: any failing response that is still bare text
+/// (axum's extractor rejections, the router's 405, a stray literal) is re-rendered
+/// as the styled error page — or as `partials/fragment_error.html` when htmx
+/// asked for a fragment, because htmx 4 swaps 4xx/5xx bodies too.
+async fn styled_errors(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let path = req.uri().path().to_string();
+    let headers = req.headers().clone();
+    let res = next.run(req).await;
+
+    if res.status().is_success() || res.status().is_redirection() {
+        return res;
+    }
+    if skips_styled_errors(&path) || !accepts_html(&headers) {
+        return res;
+    }
+    let is_plain = match res.headers().get(header::CONTENT_TYPE) {
+        None => true,
+        Some(ct) => ct
+            .to_str()
+            .is_ok_and(|ct| ct.starts_with("text/plain") || ct.starts_with("application/octet")),
+    };
+    if !is_plain {
+        return res;
+    }
+    let status = res.status();
+    let tr = Translator::new(Locale::from_headers(&headers));
+    let mut styled = crate::error_response(
+        &headers,
+        &state.map,
+        tr,
+        status,
+        status_message(tr, status),
+    );
+    // Keep whatever the inner response set (`Allow` on a 405, `Set-Cookie`, …);
+    // only the body and its content type are replaced.
+    for (name, value) in res.headers() {
+        if name != header::CONTENT_TYPE && name != header::CONTENT_LENGTH {
+            styled.headers_mut().append(name, value.clone());
+        }
+    }
+    styled
 }
 
 // ---------------------------------------------------------------------------
@@ -3681,6 +4103,7 @@ async fn parking_edit_page(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -3688,13 +4111,13 @@ async fn parking_edit_page(
         return resp;
     }
     let Some(view) = state.details.execute(id).await.ok().flatten() else {
-        return not_found_page(&state.map, tr);
+        return not_found_page(&headers, &state.map, tr);
     };
     // A location moderation took down accepts no contributions, so the form
     // (and the sensitive-change proposals it hosts) is gone for everyone —
     // moderators included, since the write path refuses them too.
     if view.location.moderation_state() != ModerationState::Active {
-        return not_found_page(&state.map, tr);
+        return not_found_page(&headers, &state.map, tr);
     }
     let loc = &view.location;
     // Pre-fill every reversible field so editing one doesn't silently reset
@@ -3717,6 +4140,7 @@ async fn parking_edit_post(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<EditParkingForm>,
 ) -> Response {
@@ -3732,7 +4156,7 @@ async fn parking_edit_post(
     // can detect a version conflict against the latest values).
     let current = match state.details.execute(id).await {
         Ok(Some(v)) => v.location,
-        _ => return not_found_page(&state.map, tr),
+        _ => return not_found_page(&headers, &state.map, tr),
     };
     let current_hours = current.hours().clone();
     let edit = match edit_from_form(&form, &current_hours) {
@@ -3748,7 +4172,7 @@ async fn parking_edit_post(
         Err(ContributionError::VersionConflict) => {
             // §100: reload the latest values and tell the user.
             let Some(view) = state.details.execute(id).await.ok().flatten() else {
-                return not_found_page(&state.map, tr);
+                return not_found_page(&headers, &state.map, tr);
             };
             let loc = view.location;
             render(
@@ -3773,7 +4197,7 @@ async fn parking_edit_post(
             tr.t("contribution.error.rate_limited").to_string(),
         ),
         // Same answer as the GET above: there is nothing here to edit.
-        Err(ContributionError::LocationNotActive) => not_found_page(&state.map, tr),
+        Err(ContributionError::LocationNotActive) => not_found_page(&headers, &state.map, tr),
         Err(e) => contribution_edit_error(&state.map, tr, auth, id, &form, &e),
     }
 }
@@ -3867,6 +4291,7 @@ async fn parking_proposal_post(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<ProposalForm>,
 ) -> Response {
@@ -3903,7 +4328,7 @@ async fn parking_proposal_post(
         // The proposal forms live on the edit page, which 404s for a
         // taken-down location; a direct POST gets the same answer rather than
         // a redirect to a page that would itself 404.
-        Err(ContributionError::LocationNotActive) => not_found_page(&state.map, tr),
+        Err(ContributionError::LocationNotActive) => not_found_page(&headers, &state.map, tr),
         Err(_) => {
             axum::response::Redirect::to(&format!("/parking/{id}?proposal_error=1")).into_response()
         }
@@ -4165,6 +4590,7 @@ async fn parking_verify_post(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<VerifyForm>,
 ) -> Response {
@@ -4172,6 +4598,12 @@ async fn parking_verify_post(
     let user = match auth.require_verified() {
         Ok(u) => u,
         Err(resp) => return resp,
+    };
+    let ctx = VerifyCtx {
+        headers: &headers,
+        map: &state.map,
+        tr,
+        back: format!("/parking/{id}?verified=1"),
     };
     // Validate the submitted kind/result/attribute (§39) rather than silently
     // coercing unknown inputs into StillExists/Correct.
@@ -4181,11 +4613,11 @@ async fn parking_verify_post(
                 "correct" => bikenest_domain::AttributeResult::Correct,
                 "incorrect" => bikenest_domain::AttributeResult::Incorrect,
                 _ => {
-                    return verify_bad_request(tr);
+                    return verify_bad_request(&ctx);
                 }
             };
             if !is_known_attribute_code(&form.attribute_code) {
-                return verify_bad_request(tr);
+                return verify_bad_request(&ctx);
             }
             NewVerification::Attribute {
                 location_id: id,
@@ -4203,7 +4635,7 @@ async fn parking_verify_post(
                 "still_exists" => ExistenceResult::StillExists,
                 "no_longer_exists" => ExistenceResult::NoLongerExists,
                 "info_changed" => ExistenceResult::InfoChanged,
-                _ => return verify_bad_request(tr),
+                _ => return verify_bad_request(&ctx),
             };
             NewVerification::Existence {
                 location_id: id,
@@ -4211,28 +4643,52 @@ async fn parking_verify_post(
                 result,
             }
         }
-        _ => return verify_bad_request(tr),
+        _ => return verify_bad_request(&ctx),
     };
     match state.contributions.record_verification(user, &signal).await {
-        Ok(()) => render(
-            crate::VerificationResultVm {
-                tr,
-                state: "success",
-                label: tr.t("verification.saved").to_string(),
-            },
-            StatusCode::OK,
-        ),
-        Err(e) => verification_error(tr, &e),
+        Ok(()) => verification_saved(&ctx, tr.t("verification.saved")),
+        Err(e) => verification_error(&ctx, &e),
     }
 }
 
-fn verify_bad_request(tr: Translator) -> Response {
-    render(
-        crate::VerificationResultVm {
-            tr,
-            state: "error",
-            label: tr.t("contribution.error.invalid").to_string(),
-        },
+/// What the small P3 verification fragments need to answer both callers: the
+/// request's htmx headers, the map config for the styled error page, and the
+/// page a whole-document request is redirected back to.
+struct VerifyCtx<'a> {
+    headers: &'a HeaderMap,
+    map: &'a MapConfig,
+    tr: Translator,
+    back: String,
+}
+
+fn verification_result(
+    ctx: &VerifyCtx<'_>,
+    state: &'static str,
+    label: &str,
+    status: StatusCode,
+) -> Response {
+    let tr = ctx.tr;
+    fragment_answer(ctx.headers, ctx.map, tr, status, label, &ctx.back, || {
+        render(
+            crate::VerificationResultVm {
+                tr,
+                state,
+                label: label.to_string(),
+            },
+            status,
+        )
+    })
+}
+
+fn verification_saved(ctx: &VerifyCtx<'_>, label: &str) -> Response {
+    verification_result(ctx, "success", label, StatusCode::OK)
+}
+
+fn verify_bad_request(ctx: &VerifyCtx<'_>) -> Response {
+    verification_result(
+        ctx,
+        "error",
+        ctx.tr.t("contribution.error.invalid"),
         StatusCode::BAD_REQUEST,
     )
 }
@@ -4240,13 +4696,11 @@ fn verify_bad_request(tr: Translator) -> Response {
 /// Error state of the verification fragment. A lost race (409) and an
 /// unreachable database (503) say so; every other variant keeps the generic
 /// message and the 400 these endpoints have always returned.
-fn verification_error(tr: Translator, e: &ContributionError) -> Response {
-    render(
-        crate::VerificationResultVm {
-            tr,
-            state: "error",
-            label: contribution_fragment_message(tr, e),
-        },
+fn verification_error(ctx: &VerifyCtx<'_>, e: &ContributionError) -> Response {
+    verification_result(
+        ctx,
+        "error",
+        &contribution_fragment_message(ctx.tr, e),
         contribution_error_status(e, StatusCode::BAD_REQUEST),
     )
 }
@@ -4267,6 +4721,7 @@ async fn parking_parked_here_post(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -4274,20 +4729,19 @@ async fn parking_parked_here_post(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    let ctx = VerifyCtx {
+        headers: &headers,
+        map: &state.map,
+        tr,
+        back: format!("/parking/{id}?parked=1"),
+    };
     let signal = NewVerification::ParkedHere {
         location_id: id,
         user_id: user.id,
     };
     match state.contributions.record_verification(user, &signal).await {
-        Ok(()) => render(
-            crate::VerificationResultVm {
-                tr,
-                state: "success",
-                label: tr.t("parked.saved").to_string(),
-            },
-            StatusCode::OK,
-        ),
-        Err(e) => verification_error(tr, &e),
+        Ok(()) => verification_saved(&ctx, tr.t("parked.saved")),
+        Err(e) => verification_error(&ctx, &e),
     }
 }
 
@@ -4295,6 +4749,7 @@ async fn parking_favorite_post(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -4302,26 +4757,40 @@ async fn parking_favorite_post(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    // The success response *is* the button, so a whole-document caller (no JS,
+    // or a boosted submit) is sent back to the page, which re-renders it in the
+    // new state — no notice flag needed.
+    let back = format!("/parking/{id}");
     match state.contributions.toggle_favorite(user.id, id).await {
-        Ok(is_favorited) => render(
-            crate::FavoriteButtonVm {
-                tr,
-                id,
-                is_favorited,
-                csrf: auth.csrf_value(),
-            },
-            StatusCode::OK,
+        Ok(is_favorited) => fragment_or_redirect(
+            &headers,
+            render(
+                crate::FavoriteButtonVm {
+                    tr,
+                    id,
+                    is_favorited,
+                    csrf: auth.csrf_value(),
+                },
+                StatusCode::OK,
+            ),
+            &back,
         ),
-        // The success response is the button itself, so the error swap needs a
-        // fragment of its own. 409/503 for the mapper's variants; everything
-        // else keeps the 500 it returned before, now with translated copy.
-        Err(e) => render(
-            crate::FragmentErrorVm {
-                tr,
-                message: contribution_fragment_message(tr, &e),
-            },
-            contribution_error_status(&e, StatusCode::INTERNAL_SERVER_ERROR),
-        ),
+        // The error swap needs a fragment of its own. 409/503 for the mapper's
+        // variants; everything else keeps the 500 it returned before, now with
+        // translated copy.
+        Err(e) => {
+            let message = contribution_fragment_message(tr, &e);
+            let status = contribution_error_status(&e, StatusCode::INTERNAL_SERVER_ERROR);
+            fragment_answer(&headers, &state.map, tr, status, &message, &back, || {
+                render(
+                    crate::FragmentErrorVm {
+                        tr,
+                        message: message.clone(),
+                    },
+                    status,
+                )
+            })
+        }
     }
 }
 

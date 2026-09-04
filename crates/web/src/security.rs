@@ -15,10 +15,12 @@
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderValue, Request};
+use axum::http::{HeaderValue, Request, header};
 use axum::middleware::Next;
 use axum::response::Response;
 use bikenest_infrastructure::SecurityConfig;
+
+use crate::htmx;
 
 /// Config-driven security-header policy for the running instance.
 #[derive(Debug, Clone)]
@@ -124,7 +126,36 @@ pub async fn security_headers(
             HeaderValue::from_static("noindex, nofollow"),
         );
     }
+    add_vary(&mut res);
     res
+}
+
+/// Every HTML response is negotiated: the locale comes from `Accept-Language`
+/// (and the `lang` cookie), the rendering from the session cookie. Say so, or a
+/// shared cache serves one visitor's page to another.
+///
+/// Fragment endpoints have already appended [`htmx::VARY_FRAGMENT`], which is a
+/// superset — appending the short list again would only duplicate names.
+fn add_vary(res: &mut Response) {
+    let is_html = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("text/html"));
+    if !is_html {
+        return;
+    }
+    let already_varies_by_htmx = res
+        .headers()
+        .get_all(header::VARY)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.to_ascii_lowercase().contains("hx-request"));
+    if already_varies_by_htmx {
+        return;
+    }
+    res.headers_mut()
+        .append(header::VARY, HeaderValue::from_static(htmx::VARY_HTML));
 }
 
 /// Private (account/admin/moderation) paths — never indexable.

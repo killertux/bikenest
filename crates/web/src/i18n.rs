@@ -520,6 +520,35 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "about.cta.button" => ("Search parking", "Buscar vagas"),
 
         // --- errors --------------------------------------------------------
+        "error.title" => ("Error", "Erro"),
+        "error.bad_request" => (
+            "We could not read that request. Please try again.",
+            "Não conseguimos ler essa requisição. Tente novamente.",
+        ),
+        "error.login_required" => (
+            "Log in to continue.",
+            "Entre na sua conta para continuar.",
+        ),
+        "error.forbidden" => (
+            "You do not have permission to do that.",
+            "Você não tem permissão para fazer isso.",
+        ),
+        "error.csrf" => (
+            "Your session expired or this form is stale. Reload the page and try again.",
+            "Sua sessão expirou ou este formulário está desatualizado. Recarregue a página e tente de novo.",
+        ),
+        "error.method_not_allowed" => (
+            "That action is not available here.",
+            "Essa ação não está disponível aqui.",
+        ),
+        "error.too_large" => (
+            "That upload is too large.",
+            "Esse envio é grande demais.",
+        ),
+        "error.too_many" => (
+            "Too many requests. Try again in a moment.",
+            "Muitas requisições. Tente novamente em instantes.",
+        ),
         "error.404.title" => ("Page not found", "Página não encontrada"),
         "error.404.body" => (
             "The page you are looking for does not exist.",

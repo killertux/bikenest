@@ -2,13 +2,15 @@
  * results). The server stays the source of truth: results arrive as HTML; this
  * file only mirrors them into markers (P2).
  *
- * Written to be idempotent so it is safe under hx-boost (whole-body swaps) and
- * HTMX result-fragment swaps: the map is created once and reused; markers are
- * re-rendered from the current #search-data on every (re)load. */
+ * Written to be idempotent because it runs again after every swap: whole-body
+ * swaps (base.html sets `hx-boost:inherited` on <body>, so links and forms are
+ * boosted) and the `/search` results-fragment swap. The map is created once and
+ * reused; markers are re-rendered from the current #search-data on every
+ * (re)load. */
 (function () {
   "use strict";
 
-  /* Ledger #3: the style URL and (Mapbox) access token come from the server via
+  /* The style URL and (Mapbox) access token come from the server via
    * <body data-map-style-url / data-map-access-token>. Default: MapLibre demo tiles
    * so the map still renders before MAP_STYLE_URL is configured. */
   var bodyCfg = document.body ? document.body.dataset : {};
@@ -124,8 +126,9 @@
     }
   }
 
-  // Bind delegated + HTMX listeners exactly once (survives script re-execution
-  // under hx-boost).
+  // Bind delegated + HTMX listeners exactly once. A boosted navigation swaps
+  // <body> and re-runs this file, so the guard is what stops the handlers from
+  // stacking up.
   if (!window.__bnSearchBound) {
     window.__bnSearchBound = true;
     document.addEventListener("click", function (e) {

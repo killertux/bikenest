@@ -12,6 +12,10 @@
     {% endif %}
     <form action="/login" method="post" class="mt-6 space-y-4">
       <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+      {# Where the gate that bounced the user wanted them to land. Already
+         reduced to a safe local path server-side; a failed attempt re-renders
+         it so the destination survives the round trip. #}
+      {% if !next.is_empty() %}<input type="hidden" name="next" value="{{ next }}" />{% endif %}
       <div>
         <label for="email" class="mb-1 block text-sm font-medium">{{ tr.t("auth.email") }}</label>
         <input id="email" name="email" type="email" value="{{ email }}" required autocomplete="email" class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />

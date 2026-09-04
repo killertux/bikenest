@@ -124,9 +124,17 @@ document.addEventListener('alpine:init', function () {
         this.open = true;
       },
       close: function () { this.open = false; },
-      submitClose: function () {
-        var self = this;
-        setTimeout(function () { self.open = false; }, 600);
+      /* htmx 4 fires `htmx:after:request` once the response body has been read
+       * and before the swap, with the whole request context on
+       * `detail.ctx` (see `#issueRequest` in web/static/vendor/htmx.js:
+       * `ctx.response = {raw, status, headers}`). Close only on a 2xx: a
+       * refused report (409 duplicate, 429 rate limit, 403) is swapped into
+       * `#report-modal-feedback` inside the modal, and closing on submit would
+       * have thrown that message away. */
+      afterRequest: function (e) {
+        var status = e.detail && e.detail.ctx && e.detail.ctx.response
+          ? e.detail.ctx.response.status : 0;
+        if (status >= 200 && status < 300) this.open = false;
       },
     };
   });

@@ -32,7 +32,12 @@
   <link rel="stylesheet" href="/static/css/map.css">
   {% block head %}{% endblock %}
 </head>
-<body class="bg-bg font-body text-fg" hx-boost="true"
+{# htmx 4 has `config.implicitInheritance = false`, so a plain `hx-boost` on
+   <body> applies to <body> alone and every link/form below it stayed unboosted.
+   The `:inherited` suffix is what `#attributeValue` walks up to
+   (`closest('[hx-boost\:inherited]')`), so this is the attribute that actually
+   boosts the document's links and forms. #}
+<body class="bg-bg font-body text-fg" hx-boost:inherited="true"
       data-map-style-url="{{ layout.map_style_url }}"
       data-map-access-token="{{ layout.map_access_token }}">
   <a href="#content" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-surface focus:px-4 focus:py-2 focus:text-fg">{{ tr.t("a11y.skip") }}</a>
@@ -118,9 +123,13 @@
     </div>
   </footer>
 
-  <!-- Load order matters: htmx, then the Alpine-compat extension, then Alpine
-       (deferred) — so Alpine re-initializes correctly after hx-boost / HTMX
-       swaps (four.htmx.org/extensions/hx-alpine-compat). -->
+  <!-- Load order matters. hx-alpine-compat registers itself through
+       `htmx.registerExtension` at parse time, so it must run after htmx.js and
+       before Alpine (deferred) — it hands the morph the old node's Alpine data
+       stack, which is what keeps component state (open menu, open modal) alive
+       across the whole-body swaps `hx-boost:inherited` now performs. htmx 4
+       gates registration only on `config.extensions` (default ""), so no
+       `hx-ext` attribute is needed: the extension is global once loaded. -->
   <script src="/static/vendor/htmx.js"></script>
   <script src="/static/vendor/hx-alpine-compat.js"></script>
   <!-- app.js registers the Alpine CSP-build components; it must load (and register

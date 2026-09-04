@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod client_ip;
+pub mod htmx;
 pub mod http;
 pub mod i18n;
 pub mod markdown;
@@ -91,6 +92,56 @@ pub struct ErrorPage {
     pub tr: Translator,
     pub status: u16,
     pub message: String,
+}
+
+/// One translated failure, rendered the way the caller can use it: a real
+/// fragment request gets `partials/fragment_error.html` (it is swapped into a
+/// live target), everything else gets the styled `pages/error.html` document.
+/// Both keep `status` — htmx 4 swaps 4xx/5xx bodies (only `config.noSwap`
+/// (204/304) is skipped), so an error body must be swap-safe, not a bare
+/// string that lands inside a button.
+pub fn error_response(
+    headers: &axum::http::HeaderMap,
+    map: &MapConfig,
+    tr: Translator,
+    status: axum::http::StatusCode,
+    message: String,
+) -> axum::response::Response {
+    use askama::Template as _;
+    use axum::response::{Html, IntoResponse};
+
+    let html = if htmx::is_fragment_request(headers) {
+        FragmentErrorVm {
+            tr,
+            message: message.clone(),
+        }
+        .render()
+    } else {
+        // Keep the two titles a visitor (and a search engine) actually sees on
+        // the pages they land on; everything else is a generic "Error".
+        let title_key = match status.as_u16() {
+            404 => "error.404.title",
+            s if s >= 500 => "error.500.title",
+            _ => "error.title",
+        };
+        ErrorPage {
+            layout: PageLayout::new(map, format!("{} — BikeNest", tr.t(title_key)), ""),
+            tr,
+            status: status.as_u16(),
+            message: message.clone(),
+        }
+        .render()
+    };
+    let mut resp = match html {
+        Ok(body) => (status, Html(body)).into_response(),
+        // A template failure is a bug; the message still reaches the user.
+        Err(_) => (status, message).into_response(),
+    };
+    resp.headers_mut().append(
+        axum::http::header::VARY,
+        axum::http::HeaderValue::from_static(htmx::VARY_FRAGMENT),
+    );
+    resp
 }
 
 /// P1 — home / landing.
@@ -420,6 +471,10 @@ pub struct LoginPage {
     pub email: String,
     pub notice: Option<String>,
     pub error: Option<String>,
+    /// Where to send the user after a successful login — already reduced to a
+    /// safe local path (`htmx::safe_local_path`), empty when there is none.
+    /// Rendered as a hidden field so the no-JS round trip keeps it.
+    pub next: String,
     /// Google sign-in feature flag: when false the link is replaced by a
     /// disabled "coming soon" button (product decision: disabled until a real
     /// OAuth provider exists).
@@ -792,3 +847,85 @@ pub struct ModerationActionResultVm {
 }
 
 pub use http::{RouterDeps, app_router, app_router_with};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue, StatusCode};
+    use bikenest_infrastructure::MapConfig;
+    use i18n::Locale;
+
+    fn map() -> MapConfig {
+        MapConfig {
+            style_url: String::new(),
+            access_token: String::new(),
+        }
+    }
+
+    async fn body_of(resp: axum::response::Response) -> String {
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        String::from_utf8_lossy(&bytes).to_string()
+    }
+
+    /// The 500 branch `search` / `parking_details` take when the read side
+    /// fails: a fragment request must not receive a whole document.
+    #[tokio::test]
+    async fn error_response_renders_a_fragment_for_a_fragment_request() {
+        let mut headers = HeaderMap::new();
+        headers.insert(htmx::HX_REQUEST, HeaderValue::from_static("true"));
+        let tr = i18n::Translator::new(Locale::En);
+        let resp = error_response(
+            &headers,
+            &map(),
+            tr,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            tr.t("error.500.body").to_string(),
+        );
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            resp.headers()
+                .get_all(axum::http::header::VARY)
+                .iter()
+                .count(),
+            1
+        );
+        let body = body_of(resp).await;
+        assert!(body.contains(r#"role="alert""#), "{body}");
+        assert!(!body.contains("<html"), "not a document: {body}");
+    }
+
+    #[tokio::test]
+    async fn error_response_renders_the_page_for_a_document_request() {
+        let tr = i18n::Translator::new(Locale::En);
+        let resp = error_response(
+            &HeaderMap::new(),
+            &map(),
+            tr,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            tr.t("error.500.body").to_string(),
+        );
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_of(resp).await;
+        assert!(body.contains("<!DOCTYPE"), "a whole document: {body}");
+        assert!(body.contains("500"), "the status is on the page");
+        assert!(body.contains("Something went wrong"), "the 500 title/body");
+    }
+
+    /// A boosted navigation carries `HX-Request` but swaps `<body>`.
+    #[tokio::test]
+    async fn error_response_gives_a_boosted_request_the_page() {
+        let mut headers = HeaderMap::new();
+        headers.insert(htmx::HX_REQUEST, HeaderValue::from_static("true"));
+        headers.insert(htmx::HX_BOOSTED, HeaderValue::from_static("true"));
+        let tr = i18n::Translator::new(Locale::En);
+        let resp = error_response(
+            &headers,
+            &map(),
+            tr,
+            StatusCode::NOT_FOUND,
+            tr.t("error.404.body").to_string(),
+        );
+        let body = body_of(resp).await;
+        assert!(body.contains("<!DOCTYPE"), "a whole document: {body}");
+    }
+}

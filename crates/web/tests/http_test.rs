@@ -639,11 +639,38 @@ async fn anon_csrf(app: &axum::Router, page_uri: &str) -> Option<(String, String
     Some((cookie_line, token))
 }
 
+/// The headers htmx 4 puts on a request whose target is a real element (see
+/// `#createCoreHeaders` + the `HX-Request-Type` assignment in
+/// web/static/vendor/htmx.js). WP10: the fragment endpoints answer a request
+/// *without* them with a 303 to the page, so every test that asserts on a
+/// partial has to send them.
+const HX_FRAGMENT: &[(&str, &str)] = &[("HX-Request", "true"), ("HX-Request-Type", "partial")];
+
 async fn post_form(
     app: &axum::Router,
     uri: &str,
     fields: &[(&str, &str)],
     cookie: Option<&str>,
+) -> (StatusCode, String, Option<String>) {
+    post_form_h(app, uri, fields, cookie, &[]).await
+}
+
+/// [`post_form`] as htmx issues it for a fragment swap.
+async fn post_form_hx(
+    app: &axum::Router,
+    uri: &str,
+    fields: &[(&str, &str)],
+    cookie: Option<&str>,
+) -> (StatusCode, String, Option<String>) {
+    post_form_h(app, uri, fields, cookie, HX_FRAGMENT).await
+}
+
+async fn post_form_h(
+    app: &axum::Router,
+    uri: &str,
+    fields: &[(&str, &str)],
+    cookie: Option<&str>,
+    extra_headers: &[(&str, &str)],
 ) -> (StatusCode, String, Option<String>) {
     let mut all_fields: Vec<(String, String)> = fields
         .iter()
@@ -670,6 +697,9 @@ async fn post_form(
         .uri(uri)
         .header("content-type", "application/x-www-form-urlencoded")
         .header("Accept-Language", "en");
+    for (k, v) in extra_headers {
+        b = b.header(*k, *v);
+    }
     if let Some(c) = req_cookie {
         b = b.header("cookie", c);
     }
@@ -1526,7 +1556,7 @@ async fn favorite_toggle_and_list_work_for_authenticated_user(
     let (s, page) = get_c(&app, &format!("/parking/{loc_id}"), Some(&cookie)).await;
     assert_eq!(s, StatusCode::OK);
     let csrf = extract_csrf(&page);
-    let (s, _, _) = post_form(
+    let (s, _, _) = post_form_hx(
         &app,
         &format!("/parking/{loc_id}/favorite"),
         &[("csrf", &csrf)],
@@ -2055,6 +2085,28 @@ async fn post_multipart(
     cookie: &str,
     csrf: Option<&str>,
 ) -> (StatusCode, String) {
+    post_multipart_h(app, uri, body, cookie, csrf, &[]).await
+}
+
+/// [`post_multipart`] as htmx issues it for a fragment swap.
+async fn post_multipart_hx(
+    app: &axum::Router,
+    uri: &str,
+    body: Vec<u8>,
+    cookie: &str,
+    csrf: Option<&str>,
+) -> (StatusCode, String) {
+    post_multipart_h(app, uri, body, cookie, csrf, HX_FRAGMENT).await
+}
+
+async fn post_multipart_h(
+    app: &axum::Router,
+    uri: &str,
+    body: Vec<u8>,
+    cookie: &str,
+    csrf: Option<&str>,
+    extra_headers: &[(&str, &str)],
+) -> (StatusCode, String) {
     let mut b = Request::builder()
         .method("POST")
         .uri(uri)
@@ -2065,6 +2117,9 @@ async fn post_multipart(
             "multipart/form-data; boundary=----bikenestphoto",
         )
         .header("cookie", cookie);
+    for (k, v) in extra_headers {
+        b = b.header(*k, *v);
+    }
     if let Some(c) = csrf {
         b = b.header("X-CSRF-Token", c);
     }
@@ -2194,7 +2249,7 @@ async fn photo_upload_requires_verified(tx: &mut bikenest_test_support::TestTx) 
 
     let (ctype, body) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
     let _ = ctype;
-    let (s, _) = post_multipart(
+    let (s, _) = post_multipart_hx(
         &app,
         &format!("/parking/{loc}/photo"),
         body,
@@ -2243,7 +2298,7 @@ async fn verified_upload_enters_queue_not_gallery(tx: &mut bikenest_test_support
     let csrf = extract_csrf(&page);
 
     let (_, body) = multipart_upload(&tiny_jpeg(), Some("A first photo"), "----bikenestphoto");
-    let (s, _) = post_multipart(
+    let (s, _) = post_multipart_hx(
         &app,
         &format!("/parking/{loc}/photo"),
         body,
@@ -2293,7 +2348,7 @@ async fn moderation_routes_require_moderator_role(tx: &mut bikenest_test_support
     let cookie = verified_cookie(&app, &email, "photo-nonmod@example.com").await;
     let (s, _) = get_c(&app, "/moderation/photos", Some(&cookie)).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "non-moderator cannot open queue");
-    let (s, _, _) = post_form(
+    let (s, _, _) = post_form_hx(
         &app,
         "/moderation/photos/parking/1/approve",
         &[("csrf", "bogus")],
@@ -2332,7 +2387,7 @@ async fn moderator_approve_publishes_to_gallery(tx: &mut bikenest_test_support::
     let (s, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
     assert_eq!(s, StatusCode::OK);
     let mcs = extract_csrf(&queue);
-    let (s, _, _) = post_form(
+    let (s, _, _) = post_form_hx(
         &app,
         &format!("/moderation/photos/parking/{id}/approve"),
         &[("csrf", &mcs)],
@@ -2389,7 +2444,7 @@ async fn moderator_reject_deletes_object_and_hides(tx: &mut bikenest_test_suppor
     let mod_cookie = moderator_cookie(&app, &email, "photo-reject-mod@example.com").await;
     let (_, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
     let mcs = extract_csrf(&queue);
-    let (s, _, _) = post_form(
+    let (s, _, _) = post_form_hx(
         &app,
         &format!("/moderation/photos/parking/{id}/reject"),
         &[("csrf", &mcs), ("reason", "unclear image")],
@@ -2434,7 +2489,7 @@ async fn moderation_queue_hides_uploader_identity(tx: &mut bikenest_test_support
     let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
     let csrf = extract_csrf(&page);
     let (_, body) = multipart_upload(&tiny_jpeg(), Some("ident photo"), "----bikenestphoto");
-    post_multipart(
+    post_multipart_hx(
         &app,
         &format!("/parking/{loc}/photo"),
         body,
@@ -2470,7 +2525,7 @@ async fn served_derivative_has_no_exif(tx: &mut bikenest_test_support::TestTx) {
     let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
     let csrf = extract_csrf(&page);
     let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
-    post_multipart(
+    post_multipart_hx(
         &app,
         &format!("/parking/{loc}/photo"),
         body,
@@ -2535,7 +2590,7 @@ async fn photo_upload_is_rate_limited(tx: &mut bikenest_test_support::TestTx) {
     let jpeg = tiny_jpeg();
     for _ in 0..10 {
         let (_, body) = multipart_upload(&jpeg, None, "----bikenestphoto");
-        let (s, _) = post_multipart(
+        let (s, _) = post_multipart_hx(
             &app,
             &format!("/parking/{loc}/photo"),
             body,
@@ -2546,7 +2601,7 @@ async fn photo_upload_is_rate_limited(tx: &mut bikenest_test_support::TestTx) {
         assert_eq!(s, StatusCode::OK, "day-1 upload allowed: {s}");
     }
     let (_, body) = multipart_upload(&jpeg, None, "----bikenestphoto");
-    let (s, _) = post_multipart(
+    let (s, _) = post_multipart_hx(
         &app,
         &format!("/parking/{loc}/photo"),
         body,
@@ -2627,7 +2682,7 @@ async fn photo_upload_alt_too_long_is_bad_request(tx: &mut bikenest_test_support
     let csrf = extract_csrf(&page);
     let long_alt = "a".repeat(501);
     let (_, body) = multipart_upload(&tiny_jpeg(), Some(&long_alt), "----bikenestphoto");
-    let (s, _) = post_multipart(
+    let (s, _) = post_multipart_hx(
         &app,
         &format!("/parking/{loc}/photo"),
         body,
@@ -2701,7 +2756,7 @@ async fn report_review_flow_claim_resolve_hides_and_audits(tx: &mut bikenest_tes
     let reporter = unverified_cookie(&app, REPORTER).await;
     let (_, rep_page) = get_c(&app, &format!("/parking/{loc}"), Some(&reporter)).await;
     let csrf = extract_csrf(&rep_page);
-    let (s, _, _) = post_form(
+    let (s, _, _) = post_form_hx(
         &app,
         "/reports",
         &[
@@ -2736,7 +2791,7 @@ async fn report_review_flow_claim_resolve_hides_and_audits(tx: &mut bikenest_tes
     let mod_cookie = moderator_cookie(&app, &email, MOD).await;
     let (_, mod_page) = get_c(&app, "/moderation/reports?state=OPEN", Some(&mod_cookie)).await;
     let mcsrf = extract_csrf(&mod_page);
-    let (s, _, _) = post_form(
+    let (s, _, _) = post_form_hx(
         &app,
         &format!("/moderation/reports/{report_id}/claim"),
         &[("csrf", &mcsrf)],
@@ -2744,7 +2799,7 @@ async fn report_review_flow_claim_resolve_hides_and_audits(tx: &mut bikenest_tes
     )
     .await;
     assert_eq!(s, StatusCode::OK, "claim: {s}");
-    let (s, _, _) = post_form(
+    let (s, _, _) = post_form_hx(
         &app,
         &format!("/moderation/reports/{report_id}/resolve"),
         &[("csrf", &mcsrf), ("note", "spam review")],
@@ -2811,7 +2866,7 @@ async fn moderator_cannot_resolve_own_report(tx: &mut bikenest_test_support::Tes
     let csrf = extract_csrf(&mod_page);
 
     // The moderator submits a report, then tries to resolve it themselves.
-    let (s, _, _) = post_form(
+    let (s, _, _) = post_form_hx(
         &app,
         "/reports",
         &[
@@ -2829,14 +2884,14 @@ async fn moderator_cannot_resolve_own_report(tx: &mut bikenest_test_support::Tes
     // Claim → allowed, but self-resolve → CONFLICT/self-resolve error.
     let (_, mod_page2) = get_c(&app, "/moderation/reports?state=OPEN", Some(&mod_cookie)).await;
     let mcsrf = extract_csrf(&mod_page2);
-    post_form(
+    post_form_hx(
         &app,
         &format!("/moderation/reports/{report_id}/claim"),
         &[("csrf", &mcsrf)],
         Some(&mod_cookie),
     )
     .await;
-    let (s, body, _) = post_form(
+    let (s, body, _) = post_form_hx(
         &app,
         &format!("/moderation/reports/{report_id}/resolve"),
         &[("csrf", &mcsrf), ("note", "x")],
@@ -2882,7 +2937,7 @@ async fn invalidate_parking_public_404_moderator_banner_and_restore(
     let mod_cookie = moderator_cookie(&app, &email, MOD).await;
     let (_, mod_page) = get_c(&app, "/moderation", Some(&mod_cookie)).await;
     let mcsrf = extract_csrf(&mod_page);
-    let (s, _, _) = post_form(
+    let (s, _, _) = post_form_hx(
         &app,
         &format!("/moderation/parking/{loc}/invalidate"),
         &[("csrf", &mcsrf)],
@@ -2912,7 +2967,7 @@ async fn invalidate_parking_public_404_moderator_banner_and_restore(
     // Restore brings it back (grab a fresh CSRF from the dashboard).
     let (_, mod_page2) = get_c(&app, "/moderation", Some(&mod_cookie)).await;
     let mcsrf2 = extract_csrf(&mod_page2);
-    let (s, _, _) = post_form(
+    let (s, _, _) = post_form_hx(
         &app,
         &format!("/moderation/parking/{loc}/restore"),
         &[("csrf", &mcsrf2)],
@@ -3177,7 +3232,7 @@ async fn approved_review_photo_renders_on_p3(tx: &mut bikenest_test_support::Tes
     let mod_cookie = moderator_cookie(&app, &email, MOD).await;
     let (_, mod_page) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
     let mcsrf = extract_csrf(&mod_page);
-    let (s, _, _) = post_form(
+    let (s, _, _) = post_form_hx(
         &app,
         &format!("/moderation/photos/review/{rp_id}/approve"),
         &[("csrf", &mcsrf)],
@@ -3426,7 +3481,7 @@ async fn contribution_routes_refuse_a_location_that_is_not_active(
 
     // A verification while the spot is still ACTIVE, so `last_verified_at` has
     // a value a later `still_exists` could reset.
-    let (s, _, _) = post_form(
+    let (s, _, _) = post_form_hx(
         &app,
         &format!("/parking/{id}/verify"),
         &[
@@ -3525,7 +3580,7 @@ async fn contribution_routes_refuse_a_location_that_is_not_active(
         );
 
         // A favorite is still a favorite — toggling it stays available.
-        let (s, _, _) = post_form(
+        let (s, _, _) = post_form_hx(
             &app,
             &format!("/parking/{id}/favorite"),
             &[("csrf", &csrf)],
@@ -3577,10 +3632,10 @@ async fn duplicate_report_is_refused_with_a_conflict(tx: &mut bikenest_test_supp
         ("reason", "duplicate"),
         ("description", "already listed"),
     ];
-    let (s, _, _) = post_form(&app, "/reports", &fields, Some(&cookie)).await;
+    let (s, _, _) = post_form_hx(&app, "/reports", &fields, Some(&cookie)).await;
     assert_eq!(s, StatusCode::OK, "first report accepted");
 
-    let (s, body, _) = post_form(&app, "/reports", &fields, Some(&cookie)).await;
+    let (s, body, _) = post_form_hx(&app, "/reports", &fields, Some(&cookie)).await;
     assert_eq!(s, StatusCode::CONFLICT, "second identical report refused");
     assert!(
         body.contains("You already reported this"),
@@ -3603,4 +3658,940 @@ async fn duplicate_report_is_refused_with_a_conflict(tx: &mut bikenest_test_supp
         .await
         .unwrap();
     cleanup_user_contributions(EMAIL).await;
+}
+
+// ---------------------------------------------------------------------------
+// WP10: htmx response discipline
+//
+// htmx 4 sends `HX-Request: true` on every request it issues, including boosted
+// navigations and back/forward history replays — both of which swap `<body>`.
+// Only a request htmx will swap into a real target may be answered with a
+// partial; everything else must get a whole document.
+// ---------------------------------------------------------------------------
+
+/// A request with an arbitrary header set; returns status, headers and body.
+async fn request_h(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    cookie: Option<&str>,
+    headers: &[(&str, &str)],
+) -> (StatusCode, HeaderMap, String) {
+    let mut b = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("Accept-Language", "en");
+    for (k, v) in headers {
+        b = b.header(*k, *v);
+    }
+    if let Some(c) = cookie {
+        b = b.header("cookie", c);
+    }
+    let res = app
+        .clone()
+        .oneshot(b.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let head = res.headers().clone();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, head, String::from_utf8_lossy(&body).to_string())
+}
+
+/// Whether a response body is a whole page rather than a fragment.
+fn is_document(body: &str) -> bool {
+    body.contains("<!DOCTYPE") && body.contains("<header")
+}
+
+fn location_of(headers: &HeaderMap) -> String {
+    headers
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Every `Vary` value on the response, joined — the header may appear more than
+/// once (each layer appends its own names).
+fn vary_of(headers: &HeaderMap) -> String {
+    headers
+        .get_all("vary")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(", ")
+        .to_ascii_lowercase()
+}
+
+// --- /search: fragment only for a real fragment request --------------------
+
+#[db_test]
+async fn search_answers_a_fragment_request_with_the_results_list(_tx: &mut TestTx) {
+    let app = test_app().await;
+    let (s, head, body) = request_h(&app, "GET", "/search?q=x", None, HX_FRAGMENT).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(!is_document(&body), "fragment must not be a whole page");
+    let vary = vary_of(&head);
+    assert!(vary.contains("hx-request"), "vary: {vary}");
+    assert!(vary.contains("hx-request-type"), "vary: {vary}");
+    assert!(vary.contains("hx-boosted"), "vary: {vary}");
+}
+
+#[db_test]
+async fn search_answers_a_history_restore_with_a_whole_document(_tx: &mut TestTx) {
+    // `#restoreHistory` replays the page targeting `document.body`, so a
+    // fragment here would *become* the document.
+    let app = test_app().await;
+    let (s, _, body) = request_h(
+        &app,
+        "GET",
+        "/search?q=x",
+        None,
+        &[
+            ("HX-Request", "true"),
+            ("HX-History-Restore-Request", "true"),
+        ],
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(body.contains("<header"), "history restore must get the page");
+}
+
+#[db_test]
+async fn search_answers_a_boosted_request_with_a_whole_document(_tx: &mut TestTx) {
+    let app = test_app().await;
+    let (s, _, body) = request_h(
+        &app,
+        "GET",
+        "/search?q=x",
+        None,
+        &[
+            ("HX-Request", "true"),
+            ("HX-Boosted", "true"),
+            ("HX-Request-Type", "full"),
+        ],
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(body.contains("<header"), "boosted nav must get the page");
+}
+
+#[db_test]
+async fn search_without_htmx_headers_is_the_full_page(_tx: &mut TestTx) {
+    let (s, body) = get("/search?q=x").await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(is_document(&body));
+}
+
+// --- Vary on ordinary HTML pages -------------------------------------------
+
+#[db_test]
+async fn html_pages_vary_by_locale_and_session(_tx: &mut TestTx) {
+    let headers = get_headers("/").await;
+    let vary = vary_of(&headers);
+    assert!(vary.contains("accept-language"), "vary: {vary}");
+    assert!(vary.contains("cookie"), "vary: {vary}");
+}
+
+// --- P3 fragment endpoints: partial for htmx, 303 for everyone else --------
+
+#[db_test]
+async fn p3_fragment_endpoints_redirect_a_whole_document_request(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp10-p3@example.com";
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+    let (_, form) = get_c(&app, "/parking/new", Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+    let id = add_location(&app, &cookie, &csrf, "WP10 P3 Target", &[]).await;
+
+    // favorite — the success response *is* the button.
+    let (s, body, _) = post_form_hx(
+        &app,
+        &format!("/parking/{id}/favorite"),
+        &[("csrf", &csrf)],
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "htmx favorite");
+    assert!(body.contains(r#"id="favorite-button""#), "the button: {body}");
+    assert!(!is_document(&body), "fragment, not a page");
+
+    let (s, _, _) = post_form(
+        &app,
+        &format!("/parking/{id}/favorite"),
+        &[("csrf", &csrf)],
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "no-JS favorite redirects");
+
+    // parked-here.
+    let (s, body, _) = post_form_hx(
+        &app,
+        &format!("/parking/{id}/parked-here"),
+        &[("csrf", &csrf)],
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "htmx parked-here");
+    assert!(!is_document(&body), "fragment, not a page: {body}");
+
+    let (s, _, cookie_hdr) = post_form(
+        &app,
+        &format!("/parking/{id}/parked-here"),
+        &[("csrf", &csrf)],
+        Some(&cookie),
+    )
+    .await;
+    let _ = cookie_hdr;
+    assert_eq!(s, StatusCode::SEE_OTHER, "no-JS parked-here redirects");
+
+    // verify.
+    let (s, _, _) = post_form(
+        &app,
+        &format!("/parking/{id}/verify"),
+        &[
+            ("csrf", &csrf),
+            ("kind", "existence"),
+            ("result", "still_exists"),
+        ],
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "no-JS verify redirects");
+
+    // report.
+    let (s, _, _) = post_form(
+        &app,
+        "/reports",
+        &[
+            ("csrf", &csrf),
+            ("target_type", "parking"),
+            ("target_id", &id.to_string()),
+            ("reason", "duplicate"),
+            ("description", "no-JS report"),
+            ("page", &format!("/parking/{id}")),
+        ],
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "no-JS report redirects");
+
+    // photo upload (multipart; the token rides `?csrf=` as the form's action does).
+    let (_, body) = post_multipart(
+        &app,
+        &format!("/parking/{id}/photo?csrf={csrf}"),
+        multipart_upload(&tiny_jpeg(), None, "----bikenestphoto").1,
+        &cookie,
+        None,
+    )
+    .await;
+    let _ = body;
+
+    let _ = tx;
+    sqlx::query("DELETE FROM report WHERE target_type = 'parking' AND target_id = $1")
+        .bind(id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    cleanup_user_contributions(EMAIL).await;
+}
+
+#[db_test]
+async fn p3_fragment_endpoints_send_a_no_js_caller_to_the_page(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp10-p3-loc@example.com";
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+    let (_, form) = get_c(&app, "/parking/new", Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+    let id = add_location(&app, &cookie, &csrf, "WP10 Redirect Target", &[]).await;
+
+    // Every redirect target is the page that now shows the new state.
+    for (uri, fields, want) in [
+        (
+            format!("/parking/{id}/verify"),
+            vec![
+                ("csrf", csrf.clone()),
+                ("kind", "existence".to_string()),
+                ("result", "still_exists".to_string()),
+            ],
+            format!("/parking/{id}?verified=1"),
+        ),
+        (
+            format!("/parking/{id}/parked-here"),
+            vec![("csrf", csrf.clone())],
+            format!("/parking/{id}?parked=1"),
+        ),
+        (
+            format!("/parking/{id}/favorite"),
+            vec![("csrf", csrf.clone())],
+            format!("/parking/{id}"),
+        ),
+    ] {
+        let refs: Vec<(&str, &str)> = fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let app2 = app.clone();
+        let (s, _, _) = post_form(&app2, &uri, &refs, Some(&cookie)).await;
+        assert_eq!(s, StatusCode::SEE_OTHER, "{uri}");
+        // The Location is asserted through a second call that reads headers.
+        let (_, head, _) = {
+            let body = refs
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, urlencode(v)))
+                .collect::<Vec<_>>()
+                .join("&");
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(&uri)
+                        .header("content-type", "application/x-www-form-urlencoded")
+                        .header("Accept-Language", "en")
+                        .header("cookie", &cookie)
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let st = res.status();
+            let h = res.headers().clone();
+            (st, h, ())
+        };
+        assert_eq!(location_of(&head), want, "{uri} lands on the page");
+    }
+
+    let _ = tx;
+    cleanup_user_contributions(EMAIL).await;
+}
+
+// --- Moderation fragment endpoints -----------------------------------------
+
+#[db_test]
+async fn moderation_fragment_endpoints_redirect_to_their_queue(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let (app, email) = auth_app().await;
+    const UPLOADER: &str = "wp10-uploader@example.com";
+    const MOD: &str = "wp10-mod@example.com";
+    let loc = fixture_location(tx, "wp10-mod-queue", "WP10 Moderation Queue").await;
+
+    let uploader = verified_cookie(&app, &email, UPLOADER).await;
+    let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
+    let ucsrf = extract_csrf(&page);
+    let (s, _) = post_multipart_hx(
+        &app,
+        &format!("/parking/{loc}/photo"),
+        multipart_upload(&tiny_jpeg(), None, "----bikenestphoto").1,
+        &uploader,
+        Some(&ucsrf),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "upload queued");
+    let (photo_id,): (i64,) =
+        sqlx::query_as("SELECT id FROM parking_photo WHERE location_id = $1 ORDER BY id DESC LIMIT 1")
+            .bind(loc)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+
+    let mod_cookie = moderator_cookie(&app, &email, MOD).await;
+    let (_, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
+    let mcsrf = extract_csrf(&queue);
+
+    // htmx gets the toast fragment…
+    let (s, body, _) = post_form_hx(
+        &app,
+        &format!("/moderation/photos/parking/{photo_id}/approve"),
+        &[("csrf", &mcsrf)],
+        Some(&mod_cookie),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "htmx approve");
+    assert!(!is_document(&body), "toast, not a page: {body}");
+
+    // …a whole-document caller gets sent back to the queue with a notice.
+    let (s, head, _) = post_form_raw(
+        &app,
+        &format!("/moderation/photos/parking/{photo_id}/hide"),
+        &[("csrf", mcsrf.as_str())],
+        &mod_cookie,
+    )
+    .await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "no-JS hide redirects");
+    assert_eq!(location_of(&head), "/moderation/photos?done=photo_hidden");
+
+    let (s, head, _) = post_form_raw(
+        &app,
+        &format!("/moderation/photos/parking/{photo_id}/restore"),
+        &[("csrf", mcsrf.as_str())],
+        &mod_cookie,
+    )
+    .await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "no-JS restore redirects");
+    assert_eq!(location_of(&head), "/moderation/photos?done=photo_restored");
+    // The queue renders the notice the redirect asked for.
+    let (_, banner) = get_c(
+        &app,
+        "/moderation/photos?done=photo_restored",
+        Some(&mod_cookie),
+    )
+    .await;
+    assert!(
+        banner.contains("Photo restored") || banner.contains("restored"),
+        "queue shows the notice"
+    );
+
+    // Reports: submit → claim → resolve, each redirecting a no-JS caller.
+    let reporter = unverified_cookie(&app, "wp10-reporter@example.com").await;
+    let (_, rpage) = get_c(&app, &format!("/parking/{loc}"), Some(&reporter)).await;
+    let rcsrf = extract_csrf(&rpage);
+    let (s, head, _) = post_form_raw(
+        &app,
+        "/reports",
+        &[
+            ("csrf", rcsrf.as_str()),
+            ("target_type", "parking"),
+            ("target_id", &loc.to_string()),
+            ("reason", "spam"),
+            ("page", &format!("/parking/{loc}")),
+        ],
+        &reporter,
+    )
+    .await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "no-JS report redirects");
+    assert_eq!(location_of(&head), format!("/parking/{loc}?reported=1"));
+    let report_id = last_report_id("wp10-reporter@example.com", "parking", loc).await;
+
+    let (s, head, _) = post_form_raw(
+        &app,
+        &format!("/moderation/reports/{report_id}/claim"),
+        &[("csrf", mcsrf.as_str())],
+        &mod_cookie,
+    )
+    .await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "no-JS claim redirects");
+    assert_eq!(location_of(&head), "/moderation/reports?done=claimed");
+
+    let (s, head, _) = post_form_raw(
+        &app,
+        &format!("/moderation/reports/{report_id}/dismiss"),
+        &[("csrf", mcsrf.as_str()), ("note", "not spam")],
+        &mod_cookie,
+    )
+    .await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "no-JS dismiss redirects");
+    assert_eq!(location_of(&head), "/moderation/reports?done=dismissed");
+
+    sqlx::query("DELETE FROM report WHERE id = $1")
+        .bind(report_id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+    cleanup_user_contributions(UPLOADER).await;
+    cleanup_user_contributions(MOD).await;
+    cleanup_user_contributions("wp10-reporter@example.com").await;
+}
+
+/// A urlencoded POST that returns the raw response headers (for `Location`).
+async fn post_form_raw(
+    app: &axum::Router,
+    uri: &str,
+    fields: &[(&str, &str)],
+    cookie: &str,
+) -> (StatusCode, HeaderMap, String) {
+    let body = fields
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, urlencode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Accept-Language", "en")
+                .header("cookie", cookie)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let head = res.headers().clone();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, head, String::from_utf8_lossy(&body).to_string())
+}
+
+// --- Session expiry on a fragment POST -------------------------------------
+
+#[db_test]
+async fn anonymous_fragment_post_gets_401_and_hx_redirect(_tx: &mut TestTx) {
+    // htmx follows a 302/303 transparently and would swap the whole login page
+    // into `#favorite-button`, so the gate answers with `HX-Redirect` instead.
+    let (app, _) = auth_app().await;
+    let (cookie_line, token) = anon_csrf(&app, "/login").await.expect("anon csrf pair");
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/parking/1/favorite")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Accept-Language", "en")
+                .header("HX-Request", "true")
+                .header("HX-Request-Type", "partial")
+                .header("cookie", &cookie_line)
+                .body(Body::from(format!("csrf={token}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let redirect = res
+        .headers()
+        .get("hx-redirect")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        redirect.starts_with("/login?next="),
+        "hx-redirect: {redirect}"
+    );
+}
+
+#[db_test]
+async fn anonymous_plain_post_redirects_to_login_with_next(_tx: &mut TestTx) {
+    // The POST path is an action, not a page: `next` is the page it came from.
+    let (app, _) = auth_app().await;
+    let (cookie_line, token) = anon_csrf(&app, "/login").await.expect("anon csrf pair");
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/parking/7/favorite")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Accept-Language", "en")
+                .header("cookie", &cookie_line)
+                .body(Body::from(format!("csrf={token}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location_of(res.headers()), "/login?next=/parking/7");
+}
+
+#[db_test]
+async fn anonymous_page_request_carries_its_own_path_as_next(_tx: &mut TestTx) {
+    let (app, _) = auth_app().await;
+    let (s, head, _) = request_h(&app, "GET", "/account/favorites", None, &[]).await;
+    assert_eq!(s, StatusCode::SEE_OTHER);
+    assert_eq!(location_of(&head), "/login?next=/account/favorites");
+}
+
+// --- `next` after login -----------------------------------------------------
+
+#[db_test]
+async fn login_honours_a_local_next(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp10-next@example.com";
+    let _ = verified_cookie(&app, &email, EMAIL).await;
+
+    let (_, head, _) = {
+        let (cookie_line, token) = anon_csrf(&app, "/login").await.expect("anon csrf");
+        let body = format!(
+            "email={}&password=password123&csrf={}&next={}",
+            urlencode(EMAIL),
+            token,
+            urlencode("/parking/7?x=1")
+        );
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("Accept-Language", "en")
+                    .header("cookie", &cookie_line)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        (res.status(), res.headers().clone(), ())
+    };
+    assert_eq!(location_of(&head), "/parking/7?x=1");
+
+    let _ = tx;
+    cleanup_user_contributions(EMAIL).await;
+}
+
+#[db_test]
+async fn login_refuses_an_off_site_next(tx: &mut bikenest_test_support::TestTx) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp10-next-evil@example.com";
+    let _ = verified_cookie(&app, &email, EMAIL).await;
+
+    for evil in ["//evil.com", r"/\evil.com", "https://evil.com", "javascript:x"] {
+        let (cookie_line, token) = anon_csrf(&app, "/login").await.expect("anon csrf");
+        let body = format!(
+            "email={}&password=password123&csrf={}&next={}",
+            urlencode(EMAIL),
+            token,
+            urlencode(evil)
+        );
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("Accept-Language", "en")
+                    .header("cookie", &cookie_line)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            location_of(res.headers()),
+            "/account",
+            "`next={evil}` must not leave the origin"
+        );
+    }
+
+    let _ = tx;
+    cleanup_user_contributions(EMAIL).await;
+}
+
+#[db_test]
+async fn login_page_renders_a_valid_next_as_a_hidden_field(_tx: &mut TestTx) {
+    let (app, _) = auth_app().await;
+    let (_, page) = get_c(&app, "/login?next=%2Fparking%2F7", None).await;
+    assert!(
+        page.contains(r#"name="next" value="/parking/7""#),
+        "hidden next field: {page}"
+    );
+    let (_, page) = get_c(&app, "/login?next=%2F%5Cevil.com", None).await;
+    assert!(!page.contains(r#"name="next""#), "rejected next is dropped");
+}
+
+// --- CSRF: safe methods, token sources, multipart ---------------------------
+
+#[db_test]
+async fn head_requests_are_safe_and_not_csrf_checked(_tx: &mut TestTx) {
+    // axum answers HEAD with the GET route; the middleware used to treat it as
+    // state-changing and 403 every HEAD.
+    let (app, _) = auth_app().await;
+    let (s, _, _) = request_h(&app, "HEAD", "/login", None, &[]).await;
+    assert_eq!(s, StatusCode::OK, "HEAD /login");
+    let (s, _, _) = request_h(&app, "HEAD", "/", None, &[]).await;
+    assert_eq!(s, StatusCode::OK, "HEAD /");
+}
+
+#[db_test]
+async fn multipart_review_accepts_the_token_from_the_query(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    // The middleware must not drain a multipart body (the handler's `Multipart`
+    // extractor needs it), so the form carries the token on its action.
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp10-review-csrf@example.com";
+    let loc = fixture_location(tx, "wp10-review-csrf", "WP10 Review CSRF").await;
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+    let (_, form) = get_c(&app, &format!("/parking/{loc}/review"), Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+
+    let (s, _) = post_multipart(
+        &app,
+        &format!("/parking/{loc}/review?csrf={csrf}"),
+        multipart_review("4", "Query-string token, no header.", "----bikenestphoto"),
+        &cookie,
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::SEE_OTHER, "review accepted via ?csrf=");
+
+    cleanup_user_contributions(EMAIL).await;
+}
+
+#[db_test]
+async fn multipart_review_without_any_token_is_the_styled_error_page(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp10-review-nocsrf@example.com";
+    let loc = fixture_location(tx, "wp10-review-nocsrf", "WP10 Review NoCSRF").await;
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+
+    let (s, body) = post_multipart(
+        &app,
+        &format!("/parking/{loc}/review"),
+        multipart_review("4", "No token anywhere.", "----bikenestphoto"),
+        &cookie,
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    assert!(is_document(&body), "styled page, not a bare string: {body}");
+    assert!(!body.trim().eq("Forbidden"), "not the raw literal");
+    assert!(body.contains("403"), "the status is on the page");
+
+    cleanup_user_contributions(EMAIL).await;
+}
+
+#[db_test]
+async fn an_axum_rejection_is_rendered_as_the_styled_error_page(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    // A urlencoded body to a multipart endpoint: axum's `Multipart` rejects it
+    // with plain English text, which used to reach the user verbatim.
+    let (app, email) = auth_app().await;
+    const EMAIL: &str = "wp10-rejection@example.com";
+    let loc = fixture_location(tx, "wp10-rejection", "WP10 Rejection").await;
+    let cookie = verified_cookie(&app, &email, EMAIL).await;
+    let (_, form) = get_c(&app, &format!("/parking/{loc}/review"), Some(&cookie)).await;
+    let csrf = extract_csrf(&form);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/parking/{loc}/review"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Accept-Language", "en")
+                .header("cookie", &cookie)
+                .body(Body::from(format!("csrf={csrf}&rating=4&body=hello")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let ctype = res
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8_lossy(&body).to_string();
+    assert!(status.is_client_error(), "status: {status}");
+    assert!(ctype.starts_with("text/html"), "content-type: {ctype}");
+    assert!(is_document(&body), "styled page: {body}");
+
+    cleanup_user_contributions(EMAIL).await;
+}
+
+#[db_test]
+async fn plain_text_endpoints_keep_their_plain_bodies(_tx: &mut TestTx) {
+    // The styled-error fallback must not touch the probes.
+    let (s, body) = get("/healthz").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body.trim(), "ok");
+}
+
+// --- Template hygiene -------------------------------------------------------
+
+fn read_template(rel: &str) -> String {
+    let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates")).join(rel);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+#[test]
+fn the_favorite_button_is_defined_exactly_once() {
+    let templates_dir =
+        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../templates"));
+    let mut hits = Vec::new();
+    let mut stack = vec![templates_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(contents) = std::fs::read_to_string(&path) {
+                for _ in contents.matches(r#"id="favorite-button""#) {
+                    hits.push(path.display().to_string());
+                }
+            }
+        }
+    }
+    assert_eq!(
+        hits.len(),
+        1,
+        "the favorite control must live in one partial only: {hits:?}"
+    );
+    assert!(hits[0].ends_with("partials/favorite_button.html"), "{hits:?}");
+}
+
+#[test]
+fn the_favorite_button_guards_against_a_double_click() {
+    let partial = read_template("partials/favorite_button.html");
+    assert!(partial.contains(r#"hx-disable="this""#), "{partial}");
+    assert!(partial.contains(r#"hx-sync="this:drop""#), "{partial}");
+}
+
+#[test]
+fn the_layout_boosts_through_the_inherited_attribute() {
+    // htmx 4 defaults `implicitInheritance` to false: a bare `hx-boost` on
+    // <body> boosts nothing below it.
+    let base = read_template("layouts/base.html");
+    assert!(base.contains(r#"hx-boost:inherited="true""#), "{base}");
+    assert!(
+        !base.contains(r#"hx-boost="true""#),
+        "the inert plain attribute must be gone"
+    );
+}
+
+#[test]
+fn the_review_form_posts_plainly_with_the_token_in_the_query() {
+    let form = read_template("pages/review_form.html");
+    assert!(
+        !form.contains(r#"hx-post=""#),
+        "an hx-post with no target would swap the redirect's destination into the form"
+    );
+    assert!(form.contains("?csrf={{ layout.csrf }}"), "{form}");
+    assert!(form.contains(r#"enctype="multipart/form-data""#), "{form}");
+}
+
+#[test]
+fn the_report_modal_targets_a_container_inside_itself() {
+    let page = read_template("pages/parking_details.html");
+    assert!(
+        page.contains(r##"hx-target="#report-modal-feedback""##),
+        "feedback must land inside the modal"
+    );
+    assert!(
+        page.contains(r#"id="report-modal-feedback""#),
+        "the target must exist"
+    );
+    assert!(
+        !page.contains("hx-swap-oob"),
+        "the inert out-of-band marker on a live target is gone"
+    );
+    assert!(
+        !page.contains("submitClose"),
+        "the modal no longer closes on a timer regardless of outcome"
+    );
+    assert!(
+        page.contains(r#"@htmx:after:request="afterRequest""#),
+        "the modal closes from the response status"
+    );
+    assert!(
+        page.contains("@keydown.escape.window"),
+        "escape closes the modal (parity with the lightbox)"
+    );
+}
+
+// --- Error pages honour the request shape too -------------------------------
+
+#[db_test]
+async fn a_404_for_a_fragment_request_is_a_fragment(_tx: &mut TestTx) {
+    // A stale htmx control polling a route that no longer exists must not get a
+    // whole document swapped into its target.
+    let app = test_app().await;
+    let (s, head, body) = request_h(&app, "GET", "/nonexistent", None, HX_FRAGMENT).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert!(body.contains(r#"role="alert""#), "fragment_error: {body}");
+    assert!(!body.contains("<html"), "must not be a document: {body}");
+    let vary = vary_of(&head);
+    assert!(vary.contains("hx-request"), "vary: {vary}");
+}
+
+#[db_test]
+async fn a_404_for_a_whole_document_request_is_the_styled_page(_tx: &mut TestTx) {
+    let (s, body) = get("/nonexistent").await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert!(is_document(&body), "styled error page: {body}");
+    assert!(body.contains("404"), "the status is on the page");
+}
+
+#[db_test]
+async fn a_404_for_a_boosted_request_is_the_styled_page(_tx: &mut TestTx) {
+    // A boosted link swaps <body>, so it needs the whole document even though
+    // it carries `HX-Request: true`.
+    let app = test_app().await;
+    let (s, _, body) = request_h(
+        &app,
+        "GET",
+        "/nonexistent",
+        None,
+        &[
+            ("HX-Request", "true"),
+            ("HX-Boosted", "true"),
+            ("HX-Request-Type", "full"),
+        ],
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert!(is_document(&body), "styled error page: {body}");
+}
+
+#[db_test]
+async fn a_missing_parking_page_answers_in_the_requests_shape(
+    tx: &mut bikenest_test_support::TestTx,
+) {
+    // `parking_details` used to emit a whole document for every caller.
+    let app = test_app().await;
+    let (s, _, body) = request_h(&app, "GET", "/parking/0", None, HX_FRAGMENT).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert!(body.contains(r#"role="alert""#), "fragment_error: {body}");
+    assert!(!body.contains("<html"), "must not be a document: {body}");
+
+    let (s, body) = get("/parking/0").await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert!(is_document(&body), "styled error page: {body}");
+    let _ = tx;
+}
+
+#[db_test]
+async fn the_anonymous_htmx_401_carries_exactly_one_vary(_tx: &mut TestTx) {
+    let (app, _) = auth_app().await;
+    let (cookie_line, token) = anon_csrf(&app, "/login").await.expect("anon csrf pair");
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/parking/1/favorite")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("Accept-Language", "en")
+                .header("HX-Request", "true")
+                .header("HX-Request-Type", "partial")
+                .header("cookie", &cookie_line)
+                .body(Body::from(format!("csrf={token}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        res.headers()
+            .get_all(axum::http::header::VARY)
+            .iter()
+            .count(),
+        1,
+        "the styled-error fallback must skip an already-rendered response"
+    );
+    assert!(
+        res.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .starts_with("text/html"),
+        "the gate renders its own body"
+    );
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8_lossy(&body).to_string();
+    assert!(body.contains(r#"role="alert""#), "fragment_error: {body}");
+    assert!(!body.contains("<html"), "must not be a document: {body}");
 }
