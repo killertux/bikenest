@@ -101,6 +101,7 @@ impl Worker {
                 .repo
                 .fail(
                     job.id,
+                    &self.id,
                     &format!("no handler registered for kind '{}'", job.kind),
                 )
                 .await;
@@ -116,12 +117,12 @@ impl Worker {
             Ok(()) => {
                 match next_run_at(job.schedule.as_ref(), now) {
                     Ok(next) => {
-                        let _ = self.repo.finish_success(job.id, next, now).await;
+                        let _ = self.repo.finish_success(job.id, &self.id, next, now).await;
                         tracing::info!("job succeeded (recurring={})", next.is_some());
                     }
                     // Invalid schedule → permanent (dead-letter) rather than retry.
                     Err(e) => {
-                        let _ = self.repo.fail(job.id, &e.to_string()).await;
+                        let _ = self.repo.fail(job.id, &self.id, &e.to_string()).await;
                         tracing::warn!(error = %e, "invalid schedule; dead-lettering");
                     }
                 }
@@ -130,7 +131,7 @@ impl Worker {
                 if job.attempts < job.max_attempts {
                     let delay_ms = backoff_ms(job.attempts, self.config.backoff_base_ms);
                     let run_at = now + chrono::Duration::milliseconds(delay_ms as i64);
-                    let _ = self.repo.retry(job.id, &e, run_at).await;
+                    let _ = self.repo.retry(job.id, &self.id, &e, run_at).await;
                     tracing::info!(
                         attempt = job.attempts,
                         backoff_ms = delay_ms,
@@ -138,12 +139,12 @@ impl Worker {
                         "job failed; will retry"
                     );
                 } else {
-                    let _ = self.repo.fail(job.id, &e).await;
+                    let _ = self.repo.fail(job.id, &self.id, &e).await;
                     tracing::warn!(error = %e, "job exhausted attempts; dead-lettered");
                 }
             }
             Err(JobError::Permanent(e)) => {
-                let _ = self.repo.fail(job.id, &e).await;
+                let _ = self.repo.fail(job.id, &self.id, &e).await;
                 tracing::warn!(error = %e, "job failed permanently; dead-lettered");
             }
         }

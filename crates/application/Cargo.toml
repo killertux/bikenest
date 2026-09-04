@@ -3,6 +3,9 @@ name = "bikenest-application"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait = "0.1"
 base64 = "0.22"

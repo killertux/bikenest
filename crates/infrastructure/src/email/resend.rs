@@ -14,8 +14,14 @@ pub struct ResendEmailProvider {
 
 impl ResendEmailProvider {
     pub fn new(api_key: impl Into<String>, from: impl Into<String>) -> Self {
+        // 10s timeout: an email send runs inline behind a user action (register,
+        // resend, password reset); don't let a slow Resend response hang it.
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("reqwest client");
         Self {
-            client: Client::new(),
+            client,
             api_key: api_key.into(),
             from: from.into(),
         }

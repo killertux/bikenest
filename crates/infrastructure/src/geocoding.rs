@@ -106,13 +106,24 @@ fn encode_path_segment(s: &str) -> String {
     out
 }
 
-/// Build the Mapbox forward-geocoding URL for a query.
-fn mapbox_url(endpoint: &str, token: &str, query: &str, limit: u32) -> String {
+/// Build the Mapbox forward-geocoding URL for a query. Deliberately excludes
+/// the access token: it is attached separately via the request builder's
+/// `.query(...)` so it never appears in a URL we might log or format into an
+/// error message (`reqwest::Error`'s `Display` embeds the full request URL).
+fn mapbox_url(endpoint: &str, query: &str, limit: u32) -> String {
+    format!("{}/{}.json?limit={limit}", endpoint, encode_path_segment(query))
+}
+
+/// Summarize a `reqwest::Error` for logs/error messages using only structured
+/// facts (HTTP status, timeout, connect-failure) — never the error's own
+/// `Display`/`{:?}`, which embeds the full request URL and would leak the
+/// Mapbox access token carried as a query parameter.
+fn describe_reqwest_error(e: &reqwest::Error) -> String {
     format!(
-        "{}/{}.json?access_token={}&limit={limit}",
-        endpoint,
-        encode_path_segment(query),
-        token
+        "status={:?} timeout={} connect={}",
+        e.status().map(|s| s.as_u16()),
+        e.is_timeout(),
+        e.is_connect()
     )
 }
 
@@ -187,25 +198,27 @@ impl Geocoder for MapboxGeocoder {
         if q.is_empty() {
             return Ok(None);
         }
-        let url = mapbox_url(&self.endpoint, &self.token, q, 1);
+        let url = mapbox_url(&self.endpoint, q, 1);
         let bytes = self
             .client
             .get(&url)
+            .query(&[("access_token", &self.token)])
             .send()
             .await
             .map_err(|e| {
-                tracing::warn!(error = %e, "Mapbox request failed");
+                tracing::warn!(mapbox_error = %describe_reqwest_error(&e), "Mapbox request failed");
                 GeocodeError::Unavailable
             })?
             .error_for_status()
             .map_err(|e| {
-                tracing::warn!(error = %e, "Mapbox returned a non-success status");
-                GeocodeError::Unexpected(format!("Mapbox status: {e}"))
+                let desc = describe_reqwest_error(&e);
+                tracing::warn!(mapbox_error = %desc, "Mapbox returned a non-success status");
+                GeocodeError::Unexpected(format!("Mapbox status: {desc}"))
             })?
             .bytes()
             .await
             .map_err(|e| {
-                tracing::warn!(error = %e, "Mapbox body read failed");
+                tracing::warn!(mapbox_error = %describe_reqwest_error(&e), "Mapbox body read failed");
                 GeocodeError::Unavailable
             })?;
         parse_mapbox_response(&bytes)
@@ -335,10 +348,68 @@ mod tests {
 
     #[test]
     fn builds_mapbox_url() {
-        let url = mapbox_url(MAPBOX_ENDPOINT, "tok", "Rua XV, 1", 1);
+        let url = mapbox_url(MAPBOX_ENDPOINT, "Rua XV, 1", 1);
         assert_eq!(
             url,
-            "https://api.mapbox.com/geocoding/v5/mapbox.places/Rua%20XV%2C%201.json?access_token=tok&limit=1"
+            "https://api.mapbox.com/geocoding/v5/mapbox.places/Rua%20XV%2C%201.json?limit=1"
+        );
+        assert!(
+            !url.contains("access_token"),
+            "the token must never be part of the formatted URL"
+        );
+    }
+
+    // --- error mapping never leaks the access token -------------------------
+
+    #[tokio::test]
+    async fn describe_reqwest_error_never_contains_the_token() {
+        // Nothing listens on this loopback port, so the request fails fast with
+        // a connect error — and `reqwest::Error`'s own Display embeds the full
+        // request URL (and thus the token carried in its query string), which
+        // is exactly what `describe_reqwest_error` must never reproduce.
+        let token = "super-secret-mapbox-token";
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(200))
+            .build()
+            .unwrap();
+        let err = client
+            .get(format!("http://127.0.0.1:1/geocode?access_token={token}"))
+            .send()
+            .await
+            .expect_err("connecting to a closed port must fail");
+        assert!(
+            format!("{err}").contains(token),
+            "sanity check: reqwest's own Display does leak the token"
+        );
+        let described = describe_reqwest_error(&err);
+        assert!(
+            !described.contains(token),
+            "error summary must never contain the token: {described}"
+        );
+    }
+
+    #[tokio::test]
+    async fn geocode_error_never_leaks_the_token() {
+        let token = "super-secret-mapbox-token";
+        // Nothing listens on this loopback port: every request is a fast
+        // connect failure, and the URL passed to `.get()` would carry the
+        // token if `mapbox_url` still embedded it.
+        let geo = MapboxGeocoder {
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_millis(200))
+                .build()
+                .unwrap(),
+            token: token.to_string(),
+            endpoint: "http://127.0.0.1:1".to_string(),
+        };
+        let err = geo
+            .geocode("Rua XV de Novembro")
+            .await
+            .expect_err("connecting to a closed port must fail");
+        let rendered = format!("{err:?}");
+        assert!(
+            !rendered.contains(token),
+            "GeocodeError must never contain the token: {rendered}"
         );
     }
 

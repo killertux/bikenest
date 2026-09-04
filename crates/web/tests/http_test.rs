@@ -128,25 +128,12 @@ async fn csp_is_strict_no_unsafe_eval(_tx: &mut TestTx) {
     assert!(csp.contains("frame-ancestors 'none'"), "csp: {csp}");
 }
 
-#[db_test]
-async fn csp_img_src_includes_configured_media_host(_tx: &mut TestTx) {
-    // Photos are served from direct S3/MinIO presigned URLs; the CSP `img-src`
-    // must allow the configured object-storage origin(s) or the browser blocks
-    // every photo. Env mutation is scoped to this one request; no other test
-    // reads or asserts on `CSP_MEDIA_HOSTS`.
-    unsafe { std::env::set_var("CSP_MEDIA_HOSTS", "http://localhost:9000") };
-    let headers = get_headers("/").await;
-    unsafe { std::env::remove_var("CSP_MEDIA_HOSTS") };
-    let csp = headers["content-security-policy"].to_str().unwrap();
-    let img_src = csp
-        .split(';')
-        .find(|d| d.trim_start().starts_with("img-src"))
-        .unwrap_or_else(|| panic!("no img-src directive in csp: {csp}"));
-    assert!(
-        img_src.contains("http://localhost:9000"),
-        "img-src: {img_src}"
-    );
-}
+// `img-src` honoring `CSP_MEDIA_HOSTS` is covered by
+// `security::tests::csp_img_src_includes_media_hosts` (crates/web/src/security.rs),
+// which builds `SecurityHeaders` directly instead of mutating the process
+// environment for the duration of a live request (now that workspace lints —
+// including `unsafe_code = "forbid"` — are enforced on this crate, an
+// unguarded `std::env::set_var`/`remove_var` pair no longer compiles here).
 
 #[db_test]
 async fn hsts_absent_in_dev_without_tls(_tx: &mut TestTx) {
@@ -739,6 +726,40 @@ async fn register_verify_login_account_logout(tx: &mut bikenest_test_support::Te
 }
 
 #[db_test]
+async fn resend_verification_from_account_page_succeeds(tx: &mut bikenest_test_support::TestTx) {
+    let (app, _email) = auth_app().await;
+    const EMAIL: &str = "resend-account@example.com";
+    let cookie = unverified_cookie(&app, EMAIL).await;
+
+    let (_, account_body) = get_c(&app, "/account", Some(&cookie)).await;
+    assert!(
+        account_body.contains("Verify your email to contribute"),
+        "unverified banner present"
+    );
+    let csrf = extract_csrf(&account_body);
+    assert!(!csrf.is_empty(), "account page embeds the CSRF token");
+
+    // The account-page resend form now carries the session's CSRF token
+    // (previously missing, which made this authenticated POST fail CSRF with
+    // 403 instead of succeeding like the anonymous /verify-email form).
+    let (s, _, _) = post_form(
+        &app,
+        "/verify-email/resend",
+        &[("csrf", &csrf), ("email", EMAIL)],
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::SEE_OTHER,
+        "resend-verification POST from /account must succeed, not 403"
+    );
+
+    let _ = tx;
+    cleanup_user_contributions(EMAIL).await;
+}
+
+#[db_test]
 async fn privacy_public_pages_gating_and_export_flow(tx: &mut bikenest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "privacy-web@example.com";
@@ -827,13 +848,19 @@ async fn privacy_public_pages_gating_and_export_flow(tx: &mut bikenest_test_supp
         "redirect carries the export link"
     );
 
-    // The C7 page renders the export status (Ready).
+    // The C7 page renders the export status (Ready) and — the id now comes
+    // from the path, not a query param that was never set — the single-use
+    // download link.
     let (s, body) = get_c(&app, &loc, Some(&cookie)).await;
     assert_eq!(s, StatusCode::OK);
     assert!(body.contains("Ready") || body.contains("Downloaded") || body.contains("Expired"));
+    let (export_path, query) = loc.split_once('?').unwrap_or((&loc, ""));
+    assert!(
+        body.contains(&format!("{export_path}/download")),
+        "export page must render the download link: {body}"
+    );
 
     // The single-use download returns JSON with attachment headers.
-    let (export_path, query) = loc.split_once('?').unwrap_or((&loc, ""));
     let download_uri = format!("{export_path}/download?{query}");
     let res = app
         .clone()

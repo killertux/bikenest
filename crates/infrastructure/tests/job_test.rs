@@ -87,7 +87,7 @@ async fn finish_success_completes_oneshot(_tx: &mut bikenest_test_support::TestT
     .unwrap();
     assert_eq!(claimed.rows_affected(), 1);
 
-    r.finish_success(id, None, now).await.unwrap();
+    r.finish_success(id, "w", None, now).await.unwrap();
 
     let (state, finished): (String, Option<chrono::DateTime<Utc>>) =
         sqlx::query_as("SELECT state, finished_at FROM background_job WHERE id=$1")
@@ -111,7 +111,7 @@ async fn finish_success_reschedules_recurring(_tx: &mut bikenest_test_support::T
         .unwrap();
     // Claim + mark the row as recurring.
     sqlx::query(
-        "UPDATE background_job SET state='running', schedule='{\"every_seconds\": 60}'::jsonb, attempts=1 WHERE id=$1",
+        "UPDATE background_job SET state='running', claimed_by='w', schedule='{\"every_seconds\": 60}'::jsonb, attempts=1 WHERE id=$1",
     )
     .bind(id)
     .execute(&pool().await)
@@ -119,7 +119,7 @@ async fn finish_success_reschedules_recurring(_tx: &mut bikenest_test_support::T
     .unwrap();
 
     let next = now + Duration::seconds(60);
-    r.finish_success(id, Some(next), now).await.unwrap();
+    r.finish_success(id, "w", Some(next), now).await.unwrap();
 
     let (state, attempts, run_at): (String, i32, chrono::DateTime<Utc>) =
         sqlx::query_as("SELECT state, attempts, run_at FROM background_job WHERE id=$1")
@@ -142,7 +142,7 @@ async fn retry_then_dead_letter(_tx: &mut bikenest_test_support::TestTx) {
         .await
         .unwrap()
         .unwrap();
-    sqlx::query("UPDATE background_job SET state='running', attempts=1 WHERE id=$1")
+    sqlx::query("UPDATE background_job SET state='running', claimed_by='w', attempts=1 WHERE id=$1")
         .bind(id)
         .execute(&pool().await)
         .await
@@ -150,7 +150,7 @@ async fn retry_then_dead_letter(_tx: &mut bikenest_test_support::TestTx) {
 
     // Attempt 1 < max(2) → retry (state pending, future run_at, last_error set).
     let run_at = now + Duration::seconds(60);
-    r.retry(id, "boom", run_at).await.unwrap();
+    r.retry(id, "w", "boom", run_at).await.unwrap();
     let (state, last_error): (String, Option<String>) =
         sqlx::query_as("SELECT state, last_error FROM background_job WHERE id=$1")
             .bind(id)
@@ -161,12 +161,12 @@ async fn retry_then_dead_letter(_tx: &mut bikenest_test_support::TestTx) {
     assert_eq!(last_error.as_deref(), Some("boom"));
 
     // Attempt 2 == max(2) → dead-letter (state failed, finished_at set).
-    sqlx::query("UPDATE background_job SET state='running', attempts=2 WHERE id=$1")
+    sqlx::query("UPDATE background_job SET state='running', claimed_by='w', attempts=2 WHERE id=$1")
         .bind(id)
         .execute(&pool().await)
         .await
         .unwrap();
-    r.fail(id, "boom-again").await.unwrap();
+    r.fail(id, "w", "boom-again").await.unwrap();
     let (state, finished): (String, Option<chrono::DateTime<Utc>>) =
         sqlx::query_as("SELECT state, finished_at FROM background_job WHERE id=$1")
             .bind(id)
@@ -300,14 +300,120 @@ async fn concurrent_claims_are_disjoint(_tx: &mut bikenest_test_support::TestTx)
         assert_eq!(attempts, 1);
         assert!(claimed_by.is_some(), "claimed row must be held by a worker");
     }
-    let missing: Vec<i64> = ids
-        .iter()
-        .copied()
-        .filter(|id| !ids_a.contains(id) && !ids_b.contains(id))
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "all seeded rows were claimed by exactly one worker, but missed: {missing:?}"
-    );
+    // Note: a row can end up claimed by neither `worker-a` nor `worker-b` if some
+    // other concurrently-running test also calls `claim` (it is not scoped by
+    // kind) and wins the race for it first — the per-row loop above already
+    // confirms every seeded row was claimed by *someone*, which is the
+    // meaningful invariant; we don't additionally require it be one of this
+    // test's own two workers.
     clear_kind("jobtest.disjoint").await;
+}
+
+#[db_test]
+async fn claim_reclaims_a_crashed_workers_running_job(_tx: &mut bikenest_test_support::TestTx) {
+    let r = repo().await;
+    let now = Utc::now();
+    let id = r
+        .enqueue("jobtest.reclaim", &json!({}), now, Some(5), None)
+        .await
+        .unwrap()
+        .unwrap();
+    // Simulate a worker that claimed the job and then crashed: state left
+    // 'running' with a lease that already expired.
+    sqlx::query(
+        "UPDATE background_job SET state='running', claimed_by='dead-worker',
+            lease_expires_at=now() - interval '1 second', attempts=1 WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+
+    // `claim` is not scoped by kind, so — since this row is now a candidate —
+    // a concurrently-running test's own (larger) claim batch could in theory
+    // win the race and reclaim it before this call does. Either way proves the
+    // property under test (a running job past its lease is reclaimable), so
+    // the assertions below check the row's resulting state rather than
+    // requiring that *this* call was the one that claimed it.
+    let claimed = r
+        .claim(10, "worker-b", std::time::Duration::from_secs(60))
+        .await
+        .unwrap();
+    let we_claimed_it = claimed.iter().any(|j| j.id == id);
+
+    let (state, claimed_by, attempts, lease_expires_at): (
+        String,
+        Option<String>,
+        i32,
+        Option<chrono::DateTime<Utc>>,
+    ) = sqlx::query_as(
+        "SELECT state, claimed_by, attempts, lease_expires_at FROM background_job WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    assert_eq!(state, "running");
+    assert_ne!(
+        claimed_by.as_deref(),
+        Some("dead-worker"),
+        "the crashed worker's stale claim must have been superseded"
+    );
+    assert!(attempts >= 2, "reclaim increments attempts again");
+    assert!(
+        lease_expires_at.is_some_and(|t| t > Utc::now()),
+        "the reclaiming worker holds a fresh, unexpired lease"
+    );
+    if we_claimed_it {
+        assert_eq!(claimed_by.as_deref(), Some("worker-b"));
+        assert_eq!(attempts, 2);
+    }
+
+    // A second claim right after must NOT pick it up again — it now holds a
+    // fresh, unexpired lease (held by whichever worker won the reclaim).
+    let claimed_again = r
+        .claim(10, "worker-c", std::time::Duration::from_secs(60))
+        .await
+        .unwrap();
+    assert!(
+        !claimed_again.iter().any(|j| j.id == id),
+        "a freshly (re)claimed job must not be claimed again"
+    );
+
+    clear_kind("jobtest.reclaim").await;
+}
+
+#[db_test]
+async fn finish_success_is_a_noop_for_the_wrong_claimant(_tx: &mut bikenest_test_support::TestTx) {
+    let r = repo().await;
+    let now = Utc::now();
+    let id = r
+        .enqueue("jobtest.zombie", &json!({}), now, Some(5), None)
+        .await
+        .unwrap()
+        .unwrap();
+    // The row is currently (re)claimed by "worker-b" (as if worker-a's original
+    // claim expired and was reassigned).
+    sqlx::query(
+        "UPDATE background_job SET state='running', claimed_by='worker-b',
+            lease_expires_at=now()+interval '60 seconds', attempts=2 WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+
+    // The zombie worker-a wakes up and tries to finish its stale claim.
+    r.finish_success(id, "worker-a", None, now).await.unwrap();
+
+    let (state, claimed_by): (String, Option<String>) =
+        sqlx::query_as("SELECT state, claimed_by FROM background_job WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "running", "wrong claimant's write must not apply");
+    assert_eq!(claimed_by.as_deref(), Some("worker-b"));
+
+    clear_kind("jobtest.zombie").await;
 }

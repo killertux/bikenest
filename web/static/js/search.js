@@ -33,6 +33,16 @@
     }
   }
 
+  /* Server-rendered translations, read from #map's data-* attributes (set by
+   * search.html via i18n) so the map has no hard-coded English. */
+  function readLabels(mapEl) {
+    var ds = (mapEl && mapEl.dataset) || {};
+    return {
+      destination: ds.labelDestination || "Destination",
+      onMap: ds.labelOnMap || "{n} on map",
+    };
+  }
+
   function select(id) {
     document.querySelectorAll("[data-parking-id]").forEach(function (card) {
       card.classList.toggle("selected", Number(card.dataset.parkingId) === id);
@@ -47,7 +57,7 @@
     if (card) card.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
-  function renderMarkers(map, st, data) {
+  function renderMarkers(map, st, data, labels) {
     Object.keys(st.markers).forEach(function (id) {
       st.markers[id].remove();
     });
@@ -59,7 +69,7 @@
     if (data.origin && data.origin.lat != null) {
       var destEl = document.createElement("div");
       destEl.className = "marker marker-destination";
-      destEl.title = data.origin.label || "Destination";
+      destEl.title = data.origin.label || labels.destination;
       st.dest = new maplibregl.Marker(destEl)
         .setLngLat([data.origin.lon, data.origin.lat])
         .addTo(map);
@@ -84,6 +94,7 @@
     if (!mapEl || !window.maplibregl) return;
 
     var st = state(mapEl);
+    var labels = readLabels(mapEl);
     var center = CENTER_FALLBACK;
     var zoom = 13;
     if (data.origin && data.origin.lat != null) {
@@ -100,14 +111,17 @@
       st.map.addControl(new maplibregl.GeolocateControl());
       var recenter = document.getElementById("recenter");
       if (recenter) recenter.addEventListener("click", function () { st.map.flyTo({ center: center, zoom: zoom }); });
-      st.map.on("load", function () { renderMarkers(st.map, st, readData() || data); });
+      st.map.on("load", function () { renderMarkers(st.map, st, readData() || data, labels); });
     } else {
       st.map.jumpTo({ center: center, zoom: zoom });
-      renderMarkers(st.map, st, data);
+      renderMarkers(st.map, st, data, labels);
     }
 
     var countEl = document.getElementById("map-count");
-    if (countEl) countEl.textContent = (data.items || []).length + " on map";
+    if (countEl) {
+      var n = (data.items || []).length;
+      countEl.textContent = labels.onMap.replace("{n}", n);
+    }
   }
 
   // Bind delegated + HTMX listeners exactly once (survives script re-execution

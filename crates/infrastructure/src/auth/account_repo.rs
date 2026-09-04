@@ -66,10 +66,10 @@ impl AccountRepository for SqlxAccountRepository {
             r#"
             SELECT id, email, display_name, account_state, email_verified_at
             FROM users
-            WHERE email = $1
+            WHERE lower(email) = $1
             "#,
         )
-        .bind(email.as_str())
+        .bind(email.as_str().to_lowercase())
         .fetch_optional(self.db.pool())
         .await
         .map_err(|_| AuthError::Internal)?;

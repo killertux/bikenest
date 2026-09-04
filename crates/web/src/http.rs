@@ -2845,7 +2845,6 @@ async fn account_privacy_request_post(
 #[derive(Debug, Default, serde::Deserialize)]
 struct ExportQuery {
     token: Option<String>,
-    id: Option<i64>,
     #[serde(default)]
     error: Option<String>,
 }
@@ -2855,6 +2854,7 @@ async fn account_export(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    Path(id): Path<i64>,
     Query(q): Query<ExportQuery>,
 ) -> Response {
     let tr = Translator::new(locale);
@@ -2866,11 +2866,7 @@ async fn account_export(
     let items: Vec<view::ExportVm> = exports
         .iter()
         .map(|e| {
-            let token = if Some(e.id) == q.id {
-                q.token.clone()
-            } else {
-                None
-            };
+            let token = if e.id == id { q.token.clone() } else { None };
             view::export_vm(tr, e, token)
         })
         .collect();

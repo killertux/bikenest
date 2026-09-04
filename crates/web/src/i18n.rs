@@ -287,6 +287,8 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Numbered pins match the list",
             "Os pinos numerados batem com a lista",
         ),
+        "map.destination" => ("Destination", "Destino"),
+        "map.on_map" => ("{n} on map", "{n} no mapa"),
         "search.sort.label" => ("Sort", "Ordenar"),
         "search.sort.recommended" => ("Recommended", "Recomendados"),
         "search.sort.distance" => ("Distance", "Distância"),
@@ -588,6 +590,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Choose a strong new password.",
             "Escolha uma nova senha forte.",
         ),
+        "password.set_submit" => ("Save new password", "Salvar nova senha"),
 
         // --- auth: notices / errors ---------------------------------------
         "auth.registered" => (

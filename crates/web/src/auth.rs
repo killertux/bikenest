@@ -137,7 +137,7 @@ pub fn clear_session_cookie() -> String {
 /// means a cross-site POST won't carry it, so it can't be validated — the CSRF
 /// defense for pre-session requests (login/register/reset).
 pub fn set_anon_csrf_cookie(token: &str) -> String {
-    format!("{ANON_CSRF_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600")
+    format!("{ANON_CSRF_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=3600")
 }
 
 /// A fresh random token for an anonymous page, set both as the `csrf` cookie

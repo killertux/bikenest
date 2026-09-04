@@ -2,9 +2,14 @@
 //!
 //! The claim query uses `FOR UPDATE SKIP LOCKED` so multiple in-process workers
 //! (or instances) pull disjoint jobs without blocking. Attempts are incremented
-//! at claim so a crash-then-reclaim still burns budget and cannot loop forever;
-//! a worker that dies mid-run leaves the job leasable until `lease_expires_at`,
-//! after which another worker re-claims it (at-least-once).
+//! at claim so a crash-then-reclaim still burns budget and cannot loop forever.
+//! A worker that dies mid-run leaves its job `state = 'running'` with a lease
+//! that keeps counting down; once `lease_expires_at` is in the past, `claim`
+//! treats that row exactly like a fresh `pending` one and reclaims it
+//! (at-least-once). Every post-claim update (`finish_success`, `retry`, `fail`)
+//! is scoped to `claimed_by = <the calling worker>`, so if the original
+//! (zombie) worker wakes up after its lease has already been reassigned, its
+//! stale write is a no-op instead of clobbering the new claim.
 
 use crate::Db;
 use bikenest_application::JobPayload;
@@ -83,9 +88,8 @@ impl SqlxJobRepository {
             r#"
             WITH candidate AS (
                 SELECT id FROM background_job
-                WHERE state = 'pending'
+                WHERE (state = 'pending' OR (state = 'running' AND lease_expires_at < now()))
                   AND run_at <= now()
-                  AND (lease_expires_at IS NULL OR lease_expires_at < now())
                 ORDER BY run_at, id
                 FOR UPDATE SKIP LOCKED
                 LIMIT $1
@@ -136,10 +140,13 @@ impl SqlxJobRepository {
 
     /// Mark a job successful. `next_run_at = Some(t)` reschedules a *recurring*
     /// job (`state` back to `pending`, attempts cleared); `None` completes a
-    /// one-shot job (`state = 'succeeded'`). `finished_at` records the last-success time.
+    /// one-shot job (`state = 'succeeded'`). `finished_at` records the last-success
+    /// time. Scoped to `claimed_by = worker_id` so a zombie worker that wakes up
+    /// after its lease was reclaimed cannot stomp on the new claim.
     pub async fn finish_success(
         &self,
         id: i64,
+        worker_id: &str,
         next_run_at: Option<DateTime<Utc>>,
         finished_at: DateTime<Utc>,
     ) -> Result<(), JobRepoError> {
@@ -150,12 +157,13 @@ impl SqlxJobRepository {
                 SET state = 'pending', attempts = 0, run_at = $2,
                     claimed_by = NULL, lease_expires_at = NULL, heartbeat_at = NULL,
                     started_at = NULL, last_error = NULL, finished_at = $3, updated_at = now()
-                WHERE id = $1
+                WHERE id = $1 AND claimed_by = $4
                 "#,
             )
             .bind(id)
             .bind(next)
             .bind(finished_at)
+            .bind(worker_id)
             .execute(self.db.pool())
             .await
             .map_err(JobRepoError::Db)?;
@@ -166,11 +174,12 @@ impl SqlxJobRepository {
                 SET state = 'succeeded', finished_at = $2,
                     claimed_by = NULL, lease_expires_at = NULL, heartbeat_at = NULL,
                     started_at = NULL, updated_at = now()
-                WHERE id = $1
+                WHERE id = $1 AND claimed_by = $3
                 "#,
             )
             .bind(id)
             .bind(finished_at)
+            .bind(worker_id)
             .execute(self.db.pool())
             .await
             .map_err(JobRepoError::Db)?;
@@ -178,10 +187,12 @@ impl SqlxJobRepository {
         Ok(())
     }
 
-    /// Requeue a transient failure at `run_at`, recording `error`.
+    /// Requeue a transient failure at `run_at`, recording `error`. Scoped to
+    /// `claimed_by = worker_id` (see [`Self::finish_success`]).
     pub async fn retry(
         &self,
         id: i64,
+        worker_id: &str,
         error: &str,
         run_at: DateTime<Utc>,
     ) -> Result<(), JobRepoError> {
@@ -191,12 +202,13 @@ impl SqlxJobRepository {
             SET state = 'pending', run_at = $2, last_error = $3,
                 claimed_by = NULL, lease_expires_at = NULL, heartbeat_at = NULL,
                 started_at = NULL, updated_at = now()
-            WHERE id = $1
+            WHERE id = $1 AND claimed_by = $4
             "#,
         )
         .bind(id)
         .bind(run_at)
         .bind(error)
+        .bind(worker_id)
         .execute(self.db.pool())
         .await
         .map_err(JobRepoError::Db)?;
@@ -204,18 +216,20 @@ impl SqlxJobRepository {
     }
 
     /// Dead-letter a job: mark it `failed` with `error` for inspection. The row
-    /// is later removed by `jobs.gc`.
-    pub async fn fail(&self, id: i64, error: &str) -> Result<(), JobRepoError> {
+    /// is later removed by `jobs.gc`. Scoped to `claimed_by = worker_id` (see
+    /// [`Self::finish_success`]).
+    pub async fn fail(&self, id: i64, worker_id: &str, error: &str) -> Result<(), JobRepoError> {
         sqlx::query(
             r#"
             UPDATE background_job
             SET state = 'failed', finished_at = now(), last_error = $2,
                 claimed_by = NULL, lease_expires_at = NULL, heartbeat_at = NULL, updated_at = now()
-            WHERE id = $1
+            WHERE id = $1 AND claimed_by = $3
             "#,
         )
         .bind(id)
         .bind(error)
+        .bind(worker_id)
         .execute(self.db.pool())
         .await
         .map_err(JobRepoError::Db)?;

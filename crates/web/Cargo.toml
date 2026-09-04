@@ -3,6 +3,9 @@ name = "bikenest-web"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 askama = "0.14"
 axum = { version = "0.8", features = ["multipart"] }

@@ -3,6 +3,9 @@ name = "bikenest-test-support"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait = "0.1"
 bikenest-application = { version = "0.1.0", path = "../application" }
