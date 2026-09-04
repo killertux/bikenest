@@ -12,8 +12,8 @@ use bikenest_domain::{CsrfToken, SessionId};
 use bikenest_infrastructure::MapConfig;
 
 use crate::htmx;
-use crate::i18n::{Locale, Translator};
 use crate::http::AppState;
+use crate::i18n::{Locale, Translator};
 
 /// Name of the session cookie.
 pub const SESSION_COOKIE: &str = "session_id";
@@ -200,14 +200,19 @@ impl<S: Send + Sync> FromRequestParts<S> for Auth {
 // Cookie helpers
 // ---------------------------------------------------------------------------
 
-/// Read the raw session id from the `session_id` cookie, if present.
-fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
+/// Read one named cookie's value from a request's `Cookie` header.
+pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
     cookie
         .split(';')
         .filter_map(|kv| kv.split_once('='))
-        .find(|(k, _)| k.trim() == SESSION_COOKIE)
+        .find(|(k, _)| k.trim() == name)
         .map(|(_, v)| v.trim().to_string())
+}
+
+/// Read the raw session id from the `session_id` cookie, if present.
+fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    cookie_value(headers, SESSION_COOKIE)
 }
 
 /// `Set-Cookie` header that persists the raw session id (HttpOnly, Secure,
@@ -230,6 +235,35 @@ pub fn clear_session_cookie() -> String {
 pub fn set_anon_csrf_cookie(token: &str) -> String {
     format!("{ANON_CSRF_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=3600")
 }
+
+/// Cookie name carrying an export's single-use download token.
+///
+/// One cookie per export id, scoped with `Path=/account/export/{id}` so the
+/// browser only ever sends it to that export's own page and download route
+/// (RFC 6265 path matching is per-segment, so `/account/export/12` does not
+/// match `/account/export/123`).
+pub fn export_cookie_name(id: i64) -> String {
+    format!("export_{id}")
+}
+
+/// `Set-Cookie` carrying an export's download token.
+///
+/// The token used to travel in the redirect's query string, which puts it in
+/// the browser's history, in any `Referer` the page sends, and in every proxy
+/// and access log on the way — for a credential that downloads the user's
+/// entire personal-data export. `HttpOnly` also keeps it away from page
+/// scripts. `Max-Age` matches the export's own 24-hour TTL, so the cookie dies
+/// no later than the thing it unlocks.
+pub fn set_export_cookie(id: i64, token: &str) -> String {
+    format!(
+        "{}={token}; HttpOnly; Secure; SameSite=Lax; Path=/account/export/{id}; Max-Age={}",
+        export_cookie_name(id),
+        EXPORT_TOKEN_MAX_AGE_SECONDS,
+    )
+}
+
+/// Lifetime of the export cookie, matching `PrivacyService`'s 24-hour export TTL.
+const EXPORT_TOKEN_MAX_AGE_SECONDS: u32 = 24 * 60 * 60;
 
 /// A fresh random token for an anonymous page, set both as the `csrf` cookie
 /// and in the form's hidden field / `<meta name="csrf">` (§108).
@@ -254,12 +288,7 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 }
 
 fn csrf_cookie_value(headers: &HeaderMap) -> Option<String> {
-    let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
-    cookie
-        .split(';')
-        .filter_map(|kv| kv.split_once('='))
-        .find(|(k, _)| k.trim() == ANON_CSRF_COOKIE)
-        .map(|(_, v)| v.trim().to_string())
+    cookie_value(headers, ANON_CSRF_COOKIE)
 }
 
 fn csrf_from_headers(headers: &HeaderMap) -> Option<String> {
@@ -354,8 +383,8 @@ pub async fn auth_middleware(
         //   2. the `csrf` query parameter — the multipart forms, whose body the
         //      middleware must leave untouched for the `Multipart` extractor;
         //   3. the `csrf` field of a urlencoded body — plain form POSTs.
-        let mut submitted = csrf_from_headers(req.headers())
-            .or_else(|| csrf_from_query(req.uri().query()));
+        let mut submitted =
+            csrf_from_headers(req.headers()).or_else(|| csrf_from_query(req.uri().query()));
         if submitted.is_none() {
             let content_type = req
                 .headers()

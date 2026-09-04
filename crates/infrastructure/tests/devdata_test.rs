@@ -24,7 +24,10 @@ async fn seed_mock_backs_photos_ratings_geo_spread_and_is_idempotent(
     let seeded = seed_mock(&db, &storage, &processor)
         .await
         .expect("seed_mock should succeed against a fresh test double");
-    assert!(seeded >= 25, "expected at least 25 seeded locations, got {seeded}");
+    assert!(
+        seeded >= 25,
+        "expected at least 25 seeded locations, got {seeded}"
+    );
 
     // --- (a) every referenced photo key exists in the double ---------------
     let photos: Vec<(String, Option<String>)> = sqlx::query_as(
@@ -95,6 +98,26 @@ async fn seed_mock_backs_photos_ratings_geo_spread_and_is_idempotent(
         }
     }
 
+    // --- every seeded review has its published version in review_revision --
+    // `review_revision` holds one row per published version, and the export's
+    // edit history reads it. The seeder used to write reviews without one, so a
+    // seeded reviewer's personal-data export came back with an empty history
+    // and the export was never exercised against real history in development.
+    let (reviews_without_history,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*) FROM review r
+        WHERE r.location_id IN (SELECT id FROM parking_location WHERE seed_key IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM review_revision v WHERE v.review_id = r.id)
+        "#,
+    )
+    .fetch_one(tx.executor())
+    .await
+    .expect("count seeded reviews without a revision");
+    assert_eq!(
+        reviews_without_history, 0,
+        "every seeded review must have at least one review_revision row"
+    );
+
     // --- (c) at least 25 ACTIVE locations within 1 km of the centroid ------
     // Same point the `FakeGeocoder` resolves "Rua XV de Novembro" to
     // (`crate::devdata::LANDMARKS`), so the default search actually reaches a
@@ -113,13 +136,19 @@ async fn seed_mock_backs_photos_ratings_geo_spread_and_is_idempotent(
     .fetch_one(tx.executor())
     .await
     .expect("count locations within 1km");
-    assert!(within >= 25, "only {within} ACTIVE locations within 1 km of the centroid");
+    assert!(
+        within >= 25,
+        "only {within} ACTIVE locations within 1 km of the centroid"
+    );
 
     // --- idempotency: re-running must not duplicate anything ---------------
     let reseeded = seed_mock(&db, &storage, &processor)
         .await
         .expect("re-seeding should also succeed");
-    assert_eq!(reseeded, seeded, "re-seeding should not change the row count");
+    assert_eq!(
+        reseeded, seeded,
+        "re-seeding should not change the row count"
+    );
 
     let (location_count,): (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM parking_location WHERE seed_key IS NOT NULL")
@@ -133,12 +162,11 @@ async fn seed_mock_backs_photos_ratings_geo_spread_and_is_idempotent(
 
     // Community reviewers are found-or-created by email (no seed_key column
     // on `users`), so re-seeding must not duplicate those accounts either.
-    let (authors,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM users WHERE lower(email) LIKE '%@seed.bikenest.dev'",
-    )
-    .fetch_one(tx.executor())
-    .await
-    .expect("count seeded review authors");
+    let (authors,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM users WHERE lower(email) LIKE '%@seed.bikenest.dev'")
+            .fetch_one(tx.executor())
+            .await
+            .expect("count seeded review authors");
     assert_eq!(
         authors,
         bikenest_infrastructure::devdata::REVIEW_AUTHORS.len() as i64,

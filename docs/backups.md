@@ -13,8 +13,10 @@
 
 - **Postgres** (the source of truth: accounts, parking, reviews, photos metadata,
   audit events, moderation, exports). Everything else is derivable.
-- **Media objects** (`MEDIA_ROOT` volume: full + thumbnail derivatives). These are
-  **not** in the DB — if lost, photo rows dangle (they render as missing).
+- **Media objects** (the S3 bucket, `S3_BUCKET`: full + thumbnail derivatives
+  under `uploads/`, plus the dev dataset under `seed/`). These are **not** in the
+  DB — if lost, photo rows dangle (they render as missing). Use the bucket's own
+  versioning / replication, or `aws s3 sync` to a second bucket.
 
 Templates, the binary, and migrations are embedded in the image — no backup
 needed there.

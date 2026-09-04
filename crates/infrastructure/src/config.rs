@@ -351,8 +351,6 @@ pub struct Config {
     pub probe_timeout: Duration,
     /// Directory the `/static` route serves from.
     pub static_root: PathBuf,
-    /// Filesystem root for locally written media (dev outbox, orphan sweep).
-    pub media_root: PathBuf,
     /// Email backend.
     pub email: EmailConfig,
     /// Geocoding backend.
@@ -433,10 +431,6 @@ impl Config {
             tls_on: env.bool("TLS_ON").unwrap_or(false),
             probe_timeout: Duration::from_millis(env.u64("PROBE_TIMEOUT_MS").unwrap_or(2000)),
             static_root: static_root(&env),
-            media_root: env
-                .string("MEDIA_ROOT")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("media")),
             email: email_config(&env, dev)?,
             geocoder: geocoder_config(&env)?,
             rate_limiter: rate_limiter_config(&env),
@@ -615,7 +609,6 @@ impl Config {
             tls_on: false,
             probe_timeout: Duration::from_secs(2),
             static_root: PathBuf::from(COMPILED_STATIC_ROOT),
-            media_root: PathBuf::from("media"),
             email: EmailConfig::Fake { outbox_root: None },
             geocoder: GeocoderConfig::Fake,
             rate_limiter: RateLimiterConfig {
@@ -715,7 +708,10 @@ fn email_config(env: &EnvSource<'_>, dev: bool) -> Result<EmailConfig, ConfigErr
         .as_str()
     {
         "fake" => Ok(EmailConfig::Fake {
-            // Only development writes the readable outbox to disk.
+            // Only development writes the readable outbox to disk. `MEDIA_ROOT`
+            // is now *only* this directory: media itself lives in object
+            // storage, and the retention sweep lists the bucket rather than a
+            // local tree (WP16).
             outbox_root: dev.then(|| {
                 env.string("MEDIA_ROOT")
                     .map(PathBuf::from)

@@ -371,13 +371,39 @@ impl AccountRepository for SqlxAccountRepository {
         Ok(())
     }
 
-    async fn revoke_role(&self, id: UserId, role: Role) -> Result<bool, AuthError> {
+    async fn revoke_role_guarded(&self, id: UserId, role: Role) -> Result<bool, AuthError> {
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| db_err("account.revoke_role_guarded", e))?;
+
+        // `FOR UPDATE` on the ADMIN rows is what makes the guard hold: two
+        // concurrent revokes serialize here, so the second one sees the first
+        // one's delete instead of the pre-delete count.
+        let admins: Vec<i64> = sqlx::query_scalar::<_, i64>(
+            "SELECT user_id FROM user_roles WHERE role = 'ADMIN' FOR UPDATE",
+        )
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| db_err("account.revoke_role_guarded", e))?;
+
+        // Stripping a role the target does not hold removes no admin, so it is
+        // a no-op and stays allowed even at a count of one.
+        if role == Role::Admin && admins.len() <= 1 && admins.contains(&id.0) {
+            return Err(AuthError::RefuseAdminSelfRevoke);
+        }
+
         let res = sqlx::query("DELETE FROM user_roles WHERE user_id = $1 AND role = $2")
             .bind(id.0)
             .bind(role.as_code())
-            .execute(self.db.pool())
+            .execute(&mut *tx)
             .await
-            .map_err(|e| db_err("account.revoke_role", e))?;
+            .map_err(|e| db_err("account.revoke_role_guarded", e))?;
+        tx.commit()
+            .await
+            .map_err(|e| db_err("account.revoke_role_guarded", e))?;
         Ok(res.rows_affected() > 0)
     }
 

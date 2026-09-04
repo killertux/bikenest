@@ -8,7 +8,7 @@ use bikenest_application::{
     NewPendingPhoto, PendingPhoto, PhotoError, PhotoForModeration, PhotoKind, PhotoRepository,
     PhotoTarget, RejectedPhoto,
 };
-use bikenest_domain::{PhotoDimensions, PhotoModerationState, UserId};
+use bikenest_domain::{PhotoModerationState, UserId};
 use sqlx::FromRow;
 
 pub struct SqlxPhotoRepository {
@@ -65,16 +65,27 @@ fn parent_col(kind: PhotoKind) -> &'static str {
 
 #[async_trait]
 impl PhotoRepository for SqlxPhotoRepository {
+    /// One insert, with the derivative keys already known: [`PhotoService`]
+    /// mints them from a random id before it writes the objects, so there is no
+    /// "insert with `storage_key = ''` to get an id, then patch it" step (and
+    /// no window in which a row points at nothing — a `CHECK (storage_key <>
+    /// '')` in migration 0019 now makes that unrepresentable).
     async fn insert_pending(&self, p: &NewPendingPhoto) -> Result<i64, PhotoError> {
         let (table, parent_col) = (p.target.kind().table(), parent_col(p.target.kind()));
         let id = if table == "parking_photo" {
             let row = sqlx::query_as::<_, IdRow>(&format!(
-                "INSERT INTO parking_photo ({parent_col}, storage_key, content_type, alt, position, moderation_state, uploader_id) \
-                 VALUES ($1, '', $2, $3, 0, 'PENDING_REVIEW', $4) RETURNING id"
+                "INSERT INTO parking_photo ({parent_col}, storage_key, thumbnail_key, content_type, alt, \
+                 width, height, processed_at, position, moderation_state, uploader_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, 'PENDING_REVIEW', $9) RETURNING id"
             ))
             .bind(p.target.parent_id())
+            .bind(&p.storage_key)
+            .bind(&p.thumbnail_key)
             .bind(&p.content_type)
             .bind(p.alt.as_deref())
+            .bind(p.dimensions.width as i32)
+            .bind(p.dimensions.height as i32)
+            .bind(p.processed_at)
             .bind(p.uploader_id.0)
             .fetch_one(self.db.pool())
             .await
@@ -84,10 +95,16 @@ impl PhotoRepository for SqlxPhotoRepository {
             // `review_photo` has no content_type/alt columns (review photos have
             // no accessible caption yet) — insert only the shared columns.
             let row = sqlx::query_as::<_, IdRow>(&format!(
-                "INSERT INTO review_photo ({parent_col}, storage_key, position, moderation_state, uploader_id) \
-                 VALUES ($1, '', 0, 'PENDING_REVIEW', $2) RETURNING id"
+                "INSERT INTO review_photo ({parent_col}, storage_key, thumbnail_key, \
+                 width, height, processed_at, position, moderation_state, uploader_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6, 0, 'PENDING_REVIEW', $7) RETURNING id"
             ))
             .bind(p.target.parent_id())
+            .bind(&p.storage_key)
+            .bind(&p.thumbnail_key)
+            .bind(p.dimensions.width as i32)
+            .bind(p.dimensions.height as i32)
+            .bind(p.processed_at)
             .bind(p.uploader_id.0)
             .fetch_one(self.db.pool())
             .await
@@ -107,31 +124,6 @@ impl PhotoRepository for SqlxPhotoRepository {
         .await
         .map_err(|e| db_err("photo.max_position", e))?;
         Ok(row.0.unwrap_or(0))
-    }
-
-    async fn mark_processed(
-        &self,
-        kind: PhotoKind,
-        id: i64,
-        storage_key: &str,
-        thumbnail_key: &str,
-        dimensions: PhotoDimensions,
-        processed_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<(), PhotoError> {
-        sqlx::query(&format!(
-            "UPDATE {} SET storage_key = $2, thumbnail_key = $3, width = $4, height = $5, processed_at = $6 WHERE id = $1",
-            kind.table()
-        ))
-        .bind(id)
-        .bind(storage_key)
-        .bind(thumbnail_key)
-        .bind(dimensions.width as i32)
-        .bind(dimensions.height as i32)
-        .bind(processed_at)
-        .execute(self.db.pool())
-        .await
-        .map_err(|e| db_err("photo.mark_processed", e))?;
-        Ok(())
     }
 
     async fn delete(&self, kind: PhotoKind, id: i64) -> Result<(), PhotoError> {

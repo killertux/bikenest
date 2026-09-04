@@ -18,6 +18,7 @@
 | Minimum age | **18+** — avoids LGPD art. 14 and GDPR art. 8 entirely | policy §10, terms §2, sign-up form |
 | Legal bases | contract for account + contributions; legitimate interest for security/moderation/audit; legal obligation for Marco Civil access logs and the rights-request record. **No consent-based processing** | policy §3; `docs/data-processing-inventory.md` |
 | Retention | inactive accounts: **not** auto-anonymized; deleted shells purged 30 days; audit + privacy requests 5 years; access logs 6 months; the rest = §75 technical defaults | policy §7; `docs/retention-policy.md` |
+| Erasure of contributions | account deletion **anonymizes** reviews and other contributions in place: the text stays as published, only the attribution goes. Text a user wants removed goes through the **rectification** request kind, not deletion | policy §7; `docs/retention-policy.md` ("Review bodies on account deletion") |
 | Cookies | 3 first-party essential/functional cookies, no banner, no consent | cookies policy |
 | UGC responsibility | user warrants authorship, no faces/plates/private interiors, no obscene/illegal content; indemnity; perpetual licence; anonymous display | terms §3 |
 | Moderation | photos held until approved; human moderators **plus automated tools (LLM classifiers) disclosed now** even though the automated part ships later; flagged content always goes to a human; review on request | policy §5, terms §4 |

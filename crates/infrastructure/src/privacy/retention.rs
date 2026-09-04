@@ -9,33 +9,34 @@ use crate::Db;
 use crate::privacy::SqlxAnonymizationRepository;
 use async_trait::async_trait;
 use bikenest_application::{
-    AnonymizationRepository, ObjectStorage, PrivacyError, RetentionRepository,
+    AnonymizationRepository, ObjectStorage, PrivacyError, RetentionRepository, StorageError,
 };
 use bikenest_domain::{RetentionPolicy, UserId};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Key prefix every uploaded derivative lives under (`uploads/{id}/full.jpg`,
+/// `uploads/{id}/thumb.jpg`). Seeded objects live under `seed/` and are never
+/// swept: they belong to the dev dataset, not to a user upload.
+const UPLOAD_PREFIX: &str = "uploads/";
+
+/// A `PENDING_REVIEW` photo row younger than this is left alone: its objects
+/// may still be mid-write.
+const PENDING_RECONCILE_GRACE: Duration = Duration::hours(1);
 
 pub struct SqlxRetentionRepository {
     db: Db,
     policy: RetentionPolicy,
     storage: Arc<dyn ObjectStorage>,
-    media_root: PathBuf,
 }
 
 impl SqlxRetentionRepository {
-    pub fn new(
-        db: Db,
-        policy: RetentionPolicy,
-        storage: Arc<dyn ObjectStorage>,
-        media_root: PathBuf,
-    ) -> Self {
+    pub fn new(db: Db, policy: RetentionPolicy, storage: Arc<dyn ObjectStorage>) -> Self {
         Self {
             db,
             policy,
             storage,
-            media_root,
         }
     }
 }
@@ -46,14 +47,15 @@ fn db_err(context: &'static str, e: sqlx::Error) -> PrivacyError {
     crate::db_error::classify_and_log(context, e).into()
 }
 
-// The object's file mtime (SystemTime) is older than `now - ttl`.
-fn modified_older_than(mtime: std::time::SystemTime, now: DateTime<Utc>, ttl: Duration) -> bool {
-    let cutoff_secs = (now - ttl).timestamp();
-    let mtime_secs = mtime
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    mtime_secs < cutoff_secs
+/// Log + map an object-storage failure. A retention step must never report a
+/// successful zero when the store could not answer — that is exactly how the
+/// old filesystem sweep went silently dead.
+fn storage_err(context: &'static str, e: StorageError) -> PrivacyError {
+    tracing::warn!(error = %e, context, "retention: object storage failed");
+    match e {
+        StorageError::Unavailable => PrivacyError::Unavailable,
+        _ => PrivacyError::Internal,
+    }
 }
 
 #[async_trait]
@@ -110,62 +112,88 @@ impl RetentionRepository for SqlxRetentionRepository {
         Ok(res.rows_affected())
     }
 
-    /// Walks the media tree and deletes aged, unreferenced files. Referenced-
-    /// ness is probed in batches (`referenced`) rather than loading every
-    /// photo key in the database up front — the age gate runs first so only
-    /// candidates that would actually be deleted ever reach the DB.
+    /// Deletes aged, unreferenced upload objects.
     ///
-    /// (This walks a local filesystem; WP16 rewrites the sweep against object
-    /// storage directly. This change is deliberately minimal and compatible
-    /// with that follow-up — only the referenced-keys check is batched.)
+    /// The authority on which objects exist is the **object store**, listed a
+    /// page at a time under `uploads/`. (This used to walk a local `media_root`
+    /// directory; once media moved to S3 that directory stopped existing,
+    /// `read_dir` failed, the error was swallowed and the step reported a
+    /// contented `Ok(0)` forever — media retention was a silent no-op.)
+    ///
+    /// Per page: gate on age first (only objects past the orphan TTL can ever
+    /// be deleted), then probe the database once for the whole batch to see
+    /// which of those keys a photo row still references. Anything aged and
+    /// unreferenced is deleted. A listing or delete failure propagates — a
+    /// step that cannot see the store reports an error, never zero.
     async fn purge_orphan_uploads(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
-        const BATCH_SIZE: usize = 500;
+        let cutoff = now - self.policy.upload_orphan_ttl;
         let mut purged = 0u64;
-        let mut stack = vec![self.media_root.clone()];
-        let mut batch: Vec<String> = Vec::with_capacity(BATCH_SIZE);
-        while let Some(dir) = stack.pop() {
-            let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
-                continue;
-            };
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let path = entry.path();
-                let file_type = match entry.file_type().await {
-                    Ok(t) => t,
-                    Err(_) => continue,
-                };
-                if file_type.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-                if !file_type.is_file() {
-                    continue;
-                }
-                // Only candidates older than the orphan TTL are worth a
-                // referenced-ness check at all.
-                let Ok(meta) = tokio::fs::metadata(&path).await else {
-                    continue;
-                };
-                if !modified_older_than(
-                    meta.modified().unwrap_or(std::time::UNIX_EPOCH),
-                    now,
-                    self.policy.upload_orphan_ttl,
-                ) {
-                    continue;
-                }
-                // The object key is the path relative to the media root.
-                let Ok(rel) = path.strip_prefix(&self.media_root) else {
-                    continue;
-                };
-                batch.push(rel.to_string_lossy().replace('\\', "/"));
-                if batch.len() >= BATCH_SIZE {
-                    purged += self.purge_unreferenced(std::mem::take(&mut batch)).await?;
-                }
+        let mut after: Option<String> = None;
+        loop {
+            let page = self
+                .storage
+                .list(UPLOAD_PREFIX, after.as_deref())
+                .await
+                .map_err(|e| storage_err("retention.purge_orphan_uploads", e))?;
+            let aged: Vec<String> = page
+                .objects
+                .iter()
+                .filter(|o| o.last_modified < cutoff)
+                .map(|o| o.key.clone())
+                .collect();
+            purged += self.purge_unreferenced(aged).await?;
+            match page.next {
+                Some(next) => after = Some(next),
+                None => break,
             }
         }
-        if !batch.is_empty() {
-            purged += self.purge_unreferenced(batch).await?;
-        }
         Ok(purged)
+    }
+
+    /// Belt and braces for the upload path: a `PENDING_REVIEW` row whose full
+    /// derivative is not in the store can never render, and the moderation
+    /// queue would show it as a broken image forever. Rows younger than
+    /// [`PENDING_RECONCILE_GRACE`] are left alone (an in-flight upload).
+    ///
+    /// With the keys now minted before any write, this should find nothing —
+    /// which is the point: it is the check that says so.
+    async fn reconcile_pending_photos(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError> {
+        let cutoff = now - PENDING_RECONCILE_GRACE;
+        let mut deleted = 0u64;
+        for (table, context) in [
+            (
+                "parking_photo",
+                "retention.reconcile_pending_photos.parking",
+            ),
+            ("review_photo", "retention.reconcile_pending_photos.review"),
+        ] {
+            let rows: Vec<(i64, String)> = sqlx::query_as(&format!(
+                "SELECT id, storage_key FROM {table} \
+                 WHERE moderation_state = 'PENDING_REVIEW' AND created_at < $1"
+            ))
+            .bind(cutoff)
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| db_err("retention.reconcile_pending_photos", e))?;
+
+            for (id, key) in rows {
+                if self
+                    .storage
+                    .exists(&key)
+                    .await
+                    .map_err(|e| storage_err(context, e))?
+                {
+                    continue;
+                }
+                let res = sqlx::query(&format!("DELETE FROM {table} WHERE id = $1"))
+                    .bind(id)
+                    .execute(self.db.pool())
+                    .await
+                    .map_err(|e| db_err("retention.reconcile_pending_photos", e))?;
+                deleted += res.rows_affected();
+            }
+        }
+        Ok(deleted)
     }
 
     async fn anonymize_inactive_accounts(
@@ -240,7 +268,9 @@ impl SqlxRetentionRepository {
     }
 
     /// Deletes every key in `candidates` that [`Self::referenced`] does not
-    /// report as still in use. Returns the number actually deleted.
+    /// report as still in use. Returns the number actually deleted; a delete
+    /// failure propagates rather than being counted as a skip, so a store that
+    /// is refusing writes cannot masquerade as a clean sweep.
     async fn purge_unreferenced(&self, candidates: Vec<String>) -> Result<u64, PrivacyError> {
         let referenced = self.referenced(&candidates).await?;
         let mut purged = 0u64;
@@ -248,9 +278,11 @@ impl SqlxRetentionRepository {
             if referenced.contains(&key) {
                 continue;
             }
-            if self.storage.delete(&key).await.is_ok() {
-                purged += 1;
-            }
+            self.storage
+                .delete(&key)
+                .await
+                .map_err(|e| storage_err("retention.purge_unreferenced", e))?;
+            purged += 1;
         }
         Ok(purged)
     }

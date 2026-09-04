@@ -201,7 +201,14 @@ pub trait AccountRepository: Send + Sync {
     /// guard, which a per-user role list cannot answer.
     async fn count_admins(&self) -> Result<i64, AuthError>;
     async fn grant_role(&self, id: UserId, role: Role, by: UserId) -> Result<(), AuthError>;
-    async fn revoke_role(&self, id: UserId, role: Role) -> Result<bool, AuthError>;
+    /// Revoke `role` from `id`, refusing any revoke that would leave the system
+    /// with zero administrators. Returns whether a row was removed.
+    ///
+    /// The guard and the delete are **one transaction** that locks the ADMIN
+    /// rows: counting admins and then deleting as two statements is a race, and
+    /// two admins demoting each other at the same moment both pass a count of
+    /// two. Refusal is [`AuthError::RefuseAdminSelfRevoke`].
+    async fn revoke_role_guarded(&self, id: UserId, role: Role) -> Result<bool, AuthError>;
     /// All accounts (for the admin user list).
     async fn list_users(&self) -> Result<Vec<User>, AuthError>;
     /// One keyset page of the admin user list, optionally filtered by a
@@ -1058,6 +1065,8 @@ impl AuthService {
     /// Revoke a role. Requires an ADMIN actor; refuses any revoke that would
     /// leave the system without an admin — self-demotion and demoting another
     /// admin alike. Self-demotion is allowed whenever a second admin remains.
+    /// The last-admin check is atomic with the delete (see
+    /// [`AccountRepository::revoke_role_guarded`]).
     pub async fn revoke_role(
         &self,
         actor: &AuthenticatedUser,
@@ -1070,16 +1079,11 @@ impl AuthService {
         if role == Role::User {
             return Err(AuthError::Unauthorized);
         }
-        // Count the admins in the system, not in the actor's own role list.
-        // The target must actually hold ADMIN for the revoke to remove one:
-        // stripping a non-admin is a no-op and stays allowed even at count 1.
-        if role == Role::Admin
-            && self.accounts.count_admins().await? <= 1
-            && self.accounts.roles(target).await?.contains(&Role::Admin)
-        {
-            return Err(AuthError::RefuseAdminSelfRevoke);
-        }
-        let removed = self.accounts.revoke_role(target, role).await?;
+        // The "never zero admins" rule is enforced by the repository, in the
+        // same transaction as the delete and holding a lock on the ADMIN rows.
+        // Counting here and deleting after would let two admins demote each
+        // other concurrently: both read a count of two, both delete.
+        let removed = self.accounts.revoke_role_guarded(target, role).await?;
         if removed {
             self.audit
                 .record(AuditEvent::success(

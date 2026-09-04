@@ -926,7 +926,8 @@ async fn privacy_public_pages_gating_and_export_flow(tx: &mut bikenest_test_supp
     assert!(body.contains("Export your data"));
     let csrf = extract_csrf(&body);
 
-    // Request an export: POST -> 303 redirect to /account/export/{id}?token=...
+    // Request an export: POST -> 303 redirect to /account/export/{id}, with the
+    // single-use token in a path-scoped cookie rather than the URL.
     let req = Request::builder()
         .method("POST")
         .uri("/account/privacy/export")
@@ -951,21 +952,47 @@ async fn privacy_public_pages_gating_and_export_flow(tx: &mut bikenest_test_supp
         loc.starts_with("/account/export/"),
         "redirect carries the export link"
     );
+    // The download token must NOT be in the URL: a redirect target is recorded
+    // in the browser's history, leaks through `Referer`, and lands in every
+    // proxy and access log on the way. It comes back in a path-scoped
+    // HttpOnly cookie instead.
+    assert!(
+        !loc.contains("token="),
+        "the export token must not travel in the query string: {loc}"
+    );
+    let export_cookie = res
+        .headers()
+        .get_all(axum::http::header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("export_"))
+        .expect("the response must set the export token cookie")
+        .to_string();
+    assert!(
+        export_cookie.contains("HttpOnly")
+            && export_cookie.contains("Secure")
+            && export_cookie.contains("SameSite=Lax")
+            && export_cookie.contains(&format!("Path={loc}")),
+        "export cookie must be HttpOnly, Secure, SameSite=Lax and scoped to \
+         the export's own path: {export_cookie}"
+    );
+    // Both cookies, as a browser on that path would send them.
+    let export_pair = export_cookie.split(';').next().unwrap().to_string();
+    let with_export = format!("{cookie}; {export_pair}");
 
-    // The C7 page renders the export status (Ready) and — the id now comes
-    // from the path, not a query param that was never set — the single-use
-    // download link.
-    let (s, body) = get_c(&app, &loc, Some(&cookie)).await;
+    // The C7 page renders the export status (Ready) and the download link —
+    // with no token in the href, because the browser attaches the cookie.
+    let (s, body) = get_c(&app, &loc, Some(&with_export)).await;
     assert_eq!(s, StatusCode::OK);
     assert!(body.contains("Ready") || body.contains("Downloaded") || body.contains("Expired"));
-    let (export_path, query) = loc.split_once('?').unwrap_or((&loc, ""));
+    let download_uri = format!("{loc}/download");
     assert!(
-        body.contains(&format!("{export_path}/download")),
-        "export page must render the download link: {body}"
+        body.contains(&format!("href=\"{download_uri}\"")),
+        "export page must render a tokenless download link: {body}"
     );
 
-    // The single-use download returns JSON with attachment headers.
-    let download_uri = format!("{export_path}/download?{query}");
+    // Without the export cookie there is no token at all → the download is
+    // refused (the owner session alone is not enough).
     let res = app
         .clone()
         .oneshot(
@@ -978,10 +1005,31 @@ async fn privacy_public_pages_gating_and_export_flow(tx: &mut bikenest_test_supp
         )
         .await
         .unwrap();
+    assert!(
+        res.status().is_client_error() || res.status().is_redirection(),
+        "a download with no token must not succeed, got {}",
+        res.status()
+    );
+    assert_ne!(res.status(), StatusCode::OK);
+
+    // With the cookie, the single-use download returns JSON with attachment
+    // headers.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&download_uri)
+                .header("cookie", &with_export)
+                .header("Accept-Language", "en")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(
         res.status(),
         StatusCode::OK,
-        "download succeeds for the owner"
+        "download succeeds for the owner carrying the export cookie"
     );
     assert_eq!(
         res.headers()
@@ -1132,6 +1180,9 @@ async fn admin_can_grant_role_and_audit_is_written(tx: &mut bikenest_test_suppor
             .fetch_one(&pool().await)
             .await
             .unwrap();
+    // Granting ADMIN changes a system-wide set that the last-admin guard reads,
+    // and other test binaries assert on it. Claim the shared lock first.
+    bikenest_test_support::hold_admin_set_lock_for_process(&pool().await).await;
     sqlx::query("INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, 'ADMIN', NULL)")
         .bind(root_id)
         .execute(&pool().await)
@@ -2190,11 +2241,6 @@ fn has_exif_marker(bytes: &[u8]) -> bool {
     false
 }
 
-/// The media root used by `LocalDiskStorage::from_env` in tests.
-fn media_root() -> &'static str {
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../media")
-}
-
 /// A committed fixture location (no photos) for photo tests.
 async fn fixture_location(tx: &mut bikenest_test_support::TestTx, mark: &str, name: &str) -> i64 {
     sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
@@ -2431,7 +2477,7 @@ async fn moderator_approve_publishes_to_gallery(tx: &mut bikenest_test_support::
 
 #[db_test]
 async fn moderator_reject_deletes_object_and_hides(tx: &mut bikenest_test_support::TestTx) {
-    let (app, email) = auth_app().await;
+    let (app, email, storage) = auth_app_with_storage().await;
     let loc = fixture_location(tx, "photo-reject", "Photo Reject").await;
     let uploader = verified_cookie(&app, &email, "photo-reject-up@example.com").await;
     let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
@@ -2445,11 +2491,15 @@ async fn moderator_reject_deletes_object_and_hides(tx: &mut bikenest_test_suppor
         Some(&csrf),
     )
     .await;
-    let (id,): (i64,) = sqlx::query_as("SELECT id FROM parking_photo WHERE location_id = $1")
-        .bind(loc)
-        .fetch_one(&pool().await)
-        .await
-        .unwrap();
+    let (id, full, thumb): (i64, String, Option<String>) = sqlx::query_as(
+        "SELECT id, storage_key, thumbnail_key FROM parking_photo WHERE location_id = $1",
+    )
+    .bind(loc)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    let thumb = thumb.expect("upload writes a thumbnail");
+    assert!(storage.contains(&full) && storage.contains(&thumb));
 
     let mod_cookie = moderator_cookie(&app, &email, "photo-reject-mod@example.com").await;
     let (_, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
@@ -2473,14 +2523,12 @@ async fn moderator_reject_deletes_object_and_hides(tx: &mut bikenest_test_suppor
     assert_eq!(state, "REJECTED");
     assert_eq!(reason.as_deref(), Some("unclear image"));
 
-    // The stored derivatives were deleted from the object store.
-    let full = format!("{}/uploads/{id}/full.jpg", media_root());
-    let thumb = format!("{}/uploads/{id}/thumb.jpg", media_root());
-    assert!(
-        !std::path::Path::new(&full).exists(),
-        "full derivative deleted"
-    );
-    assert!(!std::path::Path::new(&thumb).exists(), "thumbnail deleted");
+    // The stored derivatives were deleted from the object store. (This used to
+    // check for the absence of two paths under a local `media/` directory —
+    // which stopped existing when media moved to S3, so the assertion passed
+    // vacuously. It now asks the store the row's own keys.)
+    assert!(!storage.contains(&full), "full derivative must be deleted");
+    assert!(!storage.contains(&thumb), "thumbnail must be deleted");
     let _ = tx;
     sqlx::query("DELETE FROM parking_location WHERE seed_key = 'photo-reject'")
         .execute(&pool().await)
@@ -2655,6 +2703,9 @@ async fn admin_cookie(
         .fetch_one(&pool().await)
         .await
         .unwrap();
+    // See the note in `hold_admin_set_lock_for_process`: the ADMIN set is
+    // shared with the tests that assert on "never zero admins".
+    bikenest_test_support::hold_admin_set_lock_for_process(&pool().await).await;
     sqlx::query(
         "INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, 'ADMIN', NULL) ON CONFLICT DO NOTHING",
     )
@@ -5531,10 +5582,12 @@ async fn wp13_audit_log_shows_exact_times_and_named_actors(tx: &mut bikenest_tes
     );
 
     let _ = tx;
+    let mut audit_tx = bikenest_test_support::audit_mutation_tx(&pool().await).await;
     sqlx::query("DELETE FROM audit_events WHERE action = 'wp13.audit.probe'")
-        .execute(&pool().await)
+        .execute(&mut *audit_tx)
         .await
         .unwrap();
+    audit_tx.commit().await.unwrap();
     cleanup_user_contributions(ADMIN).await;
 }
 

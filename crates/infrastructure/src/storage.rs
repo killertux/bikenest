@@ -19,9 +19,15 @@ use aws_sdk_s3::Config;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_smithy_types::byte_stream::ByteStream;
-use bikenest_application::{ObjectStorage, PutObject, StorageError};
+use bikenest_application::{ObjectInfo, ObjectPage, ObjectStorage, PutObject, StorageError};
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Keys per `list_objects_v2` page. The S3 maximum is 1000; the retention
+/// sweep probes the database once per page, so a full page keeps that to one
+/// round trip per thousand objects.
+const LIST_PAGE_KEYS: i32 = 1000;
 
 #[derive(Clone)]
 pub struct S3ObjectStorage {
@@ -136,6 +142,46 @@ impl ObjectStorage for S3ObjectStorage {
             }
         }
     }
+
+    async fn list(&self, prefix: &str, after: Option<&str>) -> Result<ObjectPage, StorageError> {
+        let mut req = self
+            .client
+            .list_objects_v2()
+            .bucket(&self.bucket)
+            .prefix(prefix)
+            .max_keys(LIST_PAGE_KEYS);
+        if let Some(after) = after {
+            req = req.start_after(after);
+        }
+        let out = req.send().await.map_err(|e| {
+            tracing::warn!(error = %e, prefix = %prefix, "S3 list_objects_v2 failed");
+            StorageError::Unavailable
+        })?;
+
+        let objects: Vec<ObjectInfo> = out
+            .contents()
+            .iter()
+            .filter_map(|o| {
+                let key = o.key()?.to_string();
+                // A key with no LastModified cannot be age-gated; treat it as
+                // brand new (epoch would make it an instant deletion candidate).
+                let last_modified = o
+                    .last_modified()
+                    .and_then(|t| DateTime::from_timestamp(t.secs(), 0))
+                    .unwrap_or_else(Utc::now);
+                Some(ObjectInfo { key, last_modified })
+            })
+            .collect();
+
+        // `start_after` resumes from the last key we saw, so the cursor is the
+        // key itself — no continuation token to keep alive between calls.
+        let next = out
+            .is_truncated()
+            .unwrap_or(false)
+            .then(|| objects.last().map(|o| o.key.clone()))
+            .flatten();
+        Ok(ObjectPage { objects, next })
+    }
 }
 
 /// Shares a single [`ObjectStorage`] across a `Box<dyn ObjectStorage>` consumer
@@ -166,6 +212,10 @@ impl ObjectStorage for SharedObjectStorage {
 
     async fn exists(&self, key: &str) -> Result<bool, StorageError> {
         self.0.exists(key).await
+    }
+
+    async fn list(&self, prefix: &str, after: Option<&str>) -> Result<ObjectPage, StorageError> {
+        self.0.list(prefix, after).await
     }
 }
 

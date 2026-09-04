@@ -449,11 +449,13 @@ async fn audit_reader_filters_and_paginates(tx: &mut bikenest_test_support::Test
     );
 
     let _ = tx;
+    let mut audit_tx = bikenest_test_support::audit_mutation_tx(&pool().await).await;
     sqlx::query("DELETE FROM audit_events WHERE actor_user_id = $1")
         .bind(actor)
-        .execute(&pool().await)
+        .execute(&mut *audit_tx)
         .await
         .unwrap();
+    audit_tx.commit().await.unwrap();
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(actor)
         .execute(&pool().await)

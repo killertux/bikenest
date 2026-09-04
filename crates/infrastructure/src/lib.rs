@@ -18,9 +18,10 @@ pub mod storage;
 pub mod timezone;
 
 pub use auth::{
-    Argon2PasswordHasher, FakeOAuthProvider, InMemoryRateLimiter, RealTokenGenerator, SeedOutcome,
-    SharedRateLimiter, SqlxAccountRepository, SqlxAuditLog, SqlxSessionStore, SqlxTokenStore,
-    SystemClock, ValKeyRateLimiter, rate_limiter_from_config, seed_admin,
+    AUDIT_METADATA_KEYS, Argon2PasswordHasher, FakeOAuthProvider, InMemoryRateLimiter,
+    RealTokenGenerator, SeedOutcome, SharedRateLimiter, SqlxAccountRepository, SqlxAuditLog,
+    SqlxSessionStore, SqlxTokenStore, SystemClock, ValKeyRateLimiter, rate_limiter_from_config,
+    seed_admin,
 };
 pub use community::{
     SqlxContributionHistoryReader, SqlxFavoriteRepository, SqlxParkingContributionRepository,

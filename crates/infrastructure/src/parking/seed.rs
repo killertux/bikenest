@@ -191,11 +191,26 @@ pub async fn seed_mock(
             for (i, star) in stars.into_iter().enumerate() {
                 let author_id = author_ids[(start + i) % author_ids.len()];
                 let body = review_body_for(star, i);
-                sqlx::query(
-                    "INSERT INTO review (location_id, author_id, rating, body) VALUES ($1, $2, $3, $4)",
+                let (review_id,): (i64,) = sqlx::query_as(
+                    "INSERT INTO review (location_id, author_id, rating, body) \
+                     VALUES ($1, $2, $3, $4) RETURNING id",
                 )
                 .bind(id)
                 .bind(author_id)
+                .bind(i16::from(star))
+                .bind(body)
+                .fetch_one(&mut *tx)
+                .await?;
+                // `review_revision` holds one row per *published* version, and
+                // the seeder publishes one — exactly what
+                // `SqlxReviewRepository::upsert_review` writes on the create
+                // path. Without it a seeded reviewer's personal-data export
+                // came back with an empty edit history, so the export was
+                // never exercised against real history in development.
+                sqlx::query(
+                    "INSERT INTO review_revision (review_id, rating, body) VALUES ($1, $2, $3)",
+                )
+                .bind(review_id)
                 .bind(i16::from(star))
                 .bind(body)
                 .execute(&mut *tx)

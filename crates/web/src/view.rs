@@ -1308,7 +1308,10 @@ pub struct ExportVm {
     pub state_label: &'static str,
     pub created_label: String,
     pub expires_label: String,
-    pub download_token: Option<String>,
+    /// Whether the request holds this export's download token, and so whether
+    /// to render the link. The token itself is never put in the page: it lives
+    /// in the path-scoped `export_{id}` cookie and the browser attaches it.
+    pub downloadable: bool,
     pub is_ready: bool,
 }
 
@@ -1320,25 +1323,19 @@ pub fn export_state_label(t: Translator, s: bikenest_domain::ExportState) -> &'s
     }
 }
 
-/// Build a C7 row. `token` is the single-use download token — only present for
-/// the just-requested export (rendered once as the owner-only link).
-pub fn export_vm(
-    t: Translator,
-    e: &bikenest_application::Export,
-    token: Option<String>,
-) -> ExportVm {
+/// Build a C7 row. `token_held` says whether this request carries the export's
+/// single-use download token (the `export_{id}` cookie) — true only for the
+/// export the owner just requested, and only while it is still `READY`.
+pub fn export_vm(t: Translator, e: &bikenest_application::Export, token_held: bool) -> ExportVm {
+    let is_ready = e.state == bikenest_domain::ExportState::Ready;
     ExportVm {
         id: e.id,
         state_code: e.state.as_code(),
         state_label: export_state_label(t, e.state),
         created_label: iso_datetime_label(t, e.created_at),
         expires_label: iso_datetime_label(t, e.expires_at),
-        download_token: if e.state == bikenest_domain::ExportState::Ready {
-            token
-        } else {
-            None
-        },
-        is_ready: e.state == bikenest_domain::ExportState::Ready,
+        downloadable: is_ready && token_held,
+        is_ready,
     }
 }
 

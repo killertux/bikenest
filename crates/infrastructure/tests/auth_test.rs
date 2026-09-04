@@ -72,7 +72,7 @@ async fn account_repo_round_trip(_tx: &mut bikenest_test_support::TestTx) {
     repo.grant_role(id, Role::Moderator, id).await.unwrap();
     let roles = repo.roles(id).await.unwrap();
     assert!(roles.contains(&Role::Moderator));
-    assert!(repo.revoke_role(id, Role::Moderator).await.unwrap());
+    assert!(repo.revoke_role_guarded(id, Role::Moderator).await.unwrap());
 
     // Verify + list.
     repo.mark_email_verified(id, Utc::now()).await.unwrap();

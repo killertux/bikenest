@@ -47,7 +47,8 @@ use std::sync::Arc;
 use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 
 use crate::auth::{
-    Auth, anon_csrf_token, clear_session_cookie, set_anon_csrf_cookie, set_session_cookie,
+    Auth, anon_csrf_token, clear_session_cookie, cookie_value, export_cookie_name,
+    set_anon_csrf_cookie, set_export_cookie, set_session_cookie,
 };
 use crate::client_ip::ClientIp;
 use crate::htmx::{self, fragment_or_redirect, is_fragment_request, vary_fragment};
@@ -215,6 +216,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         rate_limiter: Box::new(SharedRateLimiter::new(rate_limiter.clone())),
         audit: Box::new(SqlxAuditLog::new(db.clone())),
         clock: Box::new(SystemClock),
+        tokens_gen: Box::new(RealTokenGenerator),
         limits: config.photo,
     });
     let moderation_service = ModerationService::new(ModerationDeps {
@@ -3413,6 +3415,11 @@ async fn account_privacy(State(state): State<AppState>, locale: Locale, auth: Au
 }
 
 /// POST /account/privacy/export — request a personal-data export.
+///
+/// The single-use download token is handed back in a path-scoped `HttpOnly`
+/// cookie, not in the redirect URL: a token in the query string is recorded by
+/// the browser's history, by any `Referer` the page emits, and by every proxy
+/// and access log between here and the user.
 async fn account_export_post(
     State(state): State<AppState>,
     _locale: Locale,
@@ -3423,9 +3430,10 @@ async fn account_export_post(
         Err(resp) => return resp,
     };
     match state.privacy.request_export(user).await {
-        Ok(req) => {
-            Redirect::to(&format!("/account/export/{}?token={}", req.id, req.token)).into_response()
-        }
+        Ok(req) => redirect_with_cookie(
+            &format!("/account/export/{}", req.id),
+            &set_export_cookie(req.id, &req.token),
+        ),
         Err(_) => Redirect::to("/account/privacy?export_error=1").into_response(),
     }
 }
@@ -3468,9 +3476,18 @@ async fn account_privacy_request_post(
 
 #[derive(Debug, Default, serde::Deserialize)]
 struct ExportQuery {
+    /// **Deprecated** — the token now travels in the `export_{id}` cookie.
+    /// Still accepted for one release so a link a user bookmarked or a page
+    /// left open across the deploy keeps working; remove it after that.
     token: Option<String>,
     #[serde(default)]
     error: Option<String>,
+}
+
+/// The download token for export `id`: the path-scoped cookie first, falling
+/// back to the deprecated `?token=` query parameter.
+fn export_token(headers: &HeaderMap, id: i64, q: &ExportQuery) -> Option<String> {
+    cookie_value(headers, &export_cookie_name(id)).or_else(|| q.token.clone())
 }
 
 /// C7 — export status + single-use download link.
@@ -3478,6 +3495,7 @@ async fn account_export(
     State(state): State<AppState>,
     locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Query(q): Query<ExportQuery>,
 ) -> Response {
@@ -3486,13 +3504,13 @@ async fn account_export(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    // Only whether a token is held decides whether the link is offered; the
+    // token itself never reaches the page — the browser attaches the cookie.
+    let held = export_token(&headers, id, &q).is_some();
     let exports = state.privacy.list_exports(user).await.unwrap_or_default();
     let items: Vec<view::ExportVm> = exports
         .iter()
-        .map(|e| {
-            let token = if e.id == id { q.token.clone() } else { None };
-            view::export_vm(tr, e, token)
-        })
+        .map(|e| view::export_vm(tr, e, e.id == id && held))
         .collect();
     let notice = if q.error.is_some() {
         Some(tr.t("export.error").to_string())
@@ -3515,11 +3533,14 @@ async fn account_export(
     )
 }
 
-/// GET /account/export/{id}/download?token=… — owner-only, single-use, expiring.
+/// GET /account/export/{id}/download — owner-only, single-use, expiring. The
+/// token comes from the `export_{id}` cookie (see [`set_export_cookie`]); the
+/// deprecated `?token=` query parameter is still honoured for one release.
 async fn account_export_download(
     State(state): State<AppState>,
     _locale: Locale,
     auth: Auth,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Query(q): Query<ExportQuery>,
 ) -> Response {
@@ -3527,8 +3548,8 @@ async fn account_export_download(
         Ok(u) => u,
         Err(resp) => return resp,
     };
-    let token = q.token.as_deref().unwrap_or("");
-    match state.privacy.download_export(user, id, token).await {
+    let token = export_token(&headers, id, &q).unwrap_or_default();
+    match state.privacy.download_export(user, id, &token).await {
         Ok(download) => {
             let body =
                 serde_json::to_vec_pretty(&download.payload).unwrap_or_else(|_| b"{}".to_vec());

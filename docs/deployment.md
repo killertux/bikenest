@@ -38,7 +38,7 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | `BIND_ADDR` | default `0.0.0.0:8080` |
 | `TRUSTED_PROXY_HOPS` | how many reverse proxies in front of the app may be trusted to have appended to `X-Forwarded-For`; `0` (default) uses the TCP peer address only. See §3 |
 | `BASE_URL` | the public origin, e.g. `https://bikenest.example.com` — builds links + canonical URLs. **Must be reachable** |
-| `MEDIA_ROOT` | legacy local media directory (default `/app/media`) — only used by the retention orphan-media sweep; with direct S3 presign the objects live in the bucket |
+| `MEDIA_ROOT` | directory the **development e-mail outbox** writes to (`EMAIL_PROVIDER=fake` only; default `media`). No longer a media directory: media lives in the S3 bucket, and the retention orphan sweep lists the bucket (WP16) |
 | `S3_ENDPOINT` | **Object storage** (Ledger #7): the S3-compatible endpoint. Unset defaults to `http://localhost:9000` (MinIO) in development only; set it empty for the standard AWS endpoint. **Required in production** |
 | `S3_REGION` / `S3_BUCKET` | region (default `us-east-1`) + bucket name (development default `bikenest`; **required in production**) |
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | S3 credentials (development default MinIO `minioadmin`, which production rejects outright) |

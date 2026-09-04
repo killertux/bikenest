@@ -21,8 +21,32 @@ impl SqlxAnonymizationRepository {
     }
 }
 
+/// Locks the ADMIN role rows and answers "would removing `user_id` leave the
+/// system with no administrator?".
+///
+/// `FOR UPDATE` is the whole point: it is taken **inside** the anonymization
+/// transaction, so two deletions racing for the last two admin seats serialize
+/// on these rows instead of both reading `count = 2` and both proceeding. The
+/// second one to arrive blocks until the first commits, then sees the
+/// post-commit truth and refuses.
+async fn last_admin_locked(
+    tx: &mut sqlx::PgConnection,
+    user_id: UserId,
+) -> Result<bool, PrivacyError> {
+    let admins: Vec<i64> = sqlx::query_scalar::<_, i64>(
+        "SELECT user_id FROM user_roles WHERE role = 'ADMIN' FOR UPDATE",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| db_err("anonymize.last_admin_locked", e))?;
+    Ok(admins.contains(&user_id.0) && admins.len() == 1)
+}
+
 #[async_trait]
 impl AnonymizationRepository for SqlxAnonymizationRepository {
+    /// A lock-free pre-check so the caller can refuse before it writes a
+    /// privacy-request row. It is **not** the guard: [`Self::anonymize`] holds
+    /// that inside its own transaction (see [`last_admin_locked`]).
     async fn is_last_admin(&self, user_id: UserId) -> Result<bool, PrivacyError> {
         // True only when the deleting user IS an ADMIN *and* no other ADMIN exists.
         // A non-admin must never be blocked by the last-admin guard even if the
@@ -49,7 +73,34 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
             .begin()
             .await
             .map_err(|e| db_err("anonymize.anonymize", e))?;
+
+        // The last-admin guard runs here, holding a row lock, rather than as a
+        // separate query before the transaction: otherwise two simultaneous
+        // deletions of the last two admins both pass their own check and the
+        // system ends up with none.
+        if last_admin_locked(&mut tx, user_id).await? {
+            return Err(PrivacyError::LastAdmin);
+        }
+
+        // `audit_events` is append-only (migration 0019). Erasure is one of the
+        // two sanctioned exceptions, and announces itself for this transaction
+        // only — the trigger reads this setting.
+        sqlx::query("SET LOCAL app.audit_purge = 'on'")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| db_err("anonymize.anonymize", e))?;
+
         let scrub_email = anonymized_email(user_id);
+        // The account's current email, read before it is scrubbed: a failed
+        // login is audited with the *email* as `target_id` (there is no user id
+        // to record when the credentials never resolved), so the audit trail
+        // holds direct personal data that nulling `actor_user_id` never reaches.
+        let old_email: Option<String> =
+            sqlx::query_scalar::<_, String>("SELECT email FROM users WHERE id = $1")
+                .bind(user_id.0)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| db_err("anonymize.anonymize", e))?;
 
         // 1) Scrub the users row (PII gone; the shell stays for FK stability).
         sqlx::query(
@@ -61,7 +112,7 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
             "#,
         )
         .bind(user_id.0)
-        .bind(scrub_email)
+        .bind(&scrub_email)
         .bind(now)
         .execute(&mut *tx)
         .await
@@ -79,6 +130,17 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
             .await
             .map_err(|e| db_err("anonymize.anonymize", e))?
             .rows_affected();
+        // Roles this account granted to *other* people still name it. The
+        // column's `ON DELETE SET NULL` only fires on a hard delete, which
+        // anonymize-in-place never performs — so the reference survives unless
+        // it is nulled here.
+        let roles_granted_by_anonymized =
+            sqlx::query("UPDATE user_roles SET granted_by = NULL WHERE granted_by = $1")
+                .bind(user_id.0)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| db_err("anonymize.anonymize", e))?
+                .rows_affected();
         let sessions = sqlx::query("DELETE FROM sessions WHERE user_id = $1")
             .bind(user_id.0)
             .execute(&mut *tx)
@@ -190,6 +252,26 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
                 .await
                 .map_err(|e| db_err("anonymize.anonymize", e))?
                 .rows_affected();
+        // `metadata` is deliberately *not* rewritten: the audit log writes a
+        // closed set of keys, none of which can hold an email, IP, user agent
+        // or display name (`AUDIT_METADATA_KEYS` in
+        // `crates/infrastructure/src/auth/audit.rs` pins that set, and a test
+        // fails if a new key appears without being classified). `target_id`
+        // does hold personal data — the attempted email on a failed login — so
+        // replace it with the anonymized form: the row stays countable and
+        // correlatable, it just stops naming a person.
+        let audit_targets_anonymized = match old_email.as_deref() {
+            Some(email) => sqlx::query(
+                "UPDATE audit_events SET target_id = $2 WHERE target_type = 'user' AND target_id = $1",
+            )
+            .bind(email)
+            .bind(&scrub_email)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| db_err("anonymize.anonymize", e))?
+            .rows_affected(),
+            None => 0,
+        };
         let privacy_requests_anonymized = sqlx::query("UPDATE privacy_request SET user_id = NULL, fulfilled_by = NULL WHERE user_id = $1 OR fulfilled_by = $1").bind(user_id.0)
         .execute(&mut *tx).await.map_err(|e| db_err("anonymize.anonymize", e))?.rows_affected();
 
@@ -200,6 +282,7 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
         Ok(AnonymizationReport {
             identities,
             roles,
+            roles_granted_by_anonymized,
             sessions,
             email_verification_tokens,
             password_reset_tokens,
@@ -216,6 +299,7 @@ impl AnonymizationRepository for SqlxAnonymizationRepository {
             parking_photos_anonymized,
             review_photos_anonymized,
             audit_events_anonymized,
+            audit_targets_anonymized,
             privacy_requests_anonymized,
         })
     }

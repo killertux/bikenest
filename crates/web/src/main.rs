@@ -106,7 +106,6 @@ async fn main() {
                 db.clone(),
                 config.retention,
                 Arc::new(storage),
-                config.media_root.clone(),
             );
             let job = bikenest_application::RetentionJob::new(
                 Box::new(retention),

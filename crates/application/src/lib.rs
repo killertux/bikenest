@@ -66,7 +66,7 @@ pub use search::{
     DEFAULT_RECOMMENDATION_CONFIG, DetailsError, GetParkingDetails, ParkingDetailsView,
     RecommendationConfig, SearchError, SearchParking, recommendation_score,
 };
-pub use storage::{ObjectStorage, PutObject, StorageError};
+pub use storage::{ObjectInfo, ObjectPage, ObjectStorage, PutObject, StorageError};
 pub use timezone::{TimezoneError, TimezoneResolver};
 
 /// Port: probe a required dependency (initially, the database).

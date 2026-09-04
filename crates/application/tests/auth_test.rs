@@ -246,8 +246,20 @@ impl AccountRepository for FakeRepo {
         }
         Ok(())
     }
-    async fn revoke_role(&self, id: UserId, role: Role) -> Result<bool, AuthError> {
+    /// Mirrors the SQL repository: the last-admin refusal and the delete are
+    /// one indivisible step (here, one `Mutex` guard) — the guard is the
+    /// repository's job, not the service's.
+    async fn revoke_role_guarded(&self, id: UserId, role: Role) -> Result<bool, AuthError> {
         let mut db = self.db.lock().unwrap();
+        let admins: Vec<UserId> = db
+            .users
+            .iter()
+            .filter(|u| u.roles.contains(&Role::Admin))
+            .map(|u| u.id)
+            .collect();
+        if role == Role::Admin && admins.len() <= 1 && admins.contains(&id) {
+            return Err(AuthError::RefuseAdminSelfRevoke);
+        }
         if let Some(u) = db.users.iter_mut().find(|u| u.id == id) {
             let before = u.roles.len();
             u.roles.retain(|r| *r != role);
@@ -969,6 +981,39 @@ async fn admin_may_revoke_another_admin_until_it_would_leave_none() {
     let err = auth.revoke_role(&actor, a, Role::Admin).await.unwrap_err();
     assert_eq!(err, AuthError::RefuseAdminSelfRevoke);
     assert!(roles_of(&db, a).contains(&Role::Admin));
+}
+
+#[tokio::test]
+async fn the_repository_owns_the_last_admin_guard_not_the_service() {
+    // The refusal is the repository's, taken atomically with the delete. The
+    // service used to count admins itself and then call a plain `revoke_role`,
+    // which two concurrent revokes could both pass. Calling the repository
+    // directly proves the guard has moved and cannot be bypassed by any other
+    // caller of the port.
+    use bikenest_application::AccountRepository;
+
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let a = seed_user_with_roles(&db, "guard-a@example.com", vec![Role::User, Role::Admin]);
+    let b = seed_user_with_roles(
+        &db,
+        "guard-b@example.com",
+        vec![Role::User, Role::Moderator],
+    );
+    let repo = FakeRepo::new(db.clone());
+
+    // Sole admin: refused, and the role is still there.
+    let err = repo
+        .revoke_role_guarded(a, Role::Admin)
+        .await
+        .expect_err("the sole admin must not be demotable");
+    assert_eq!(err, AuthError::RefuseAdminSelfRevoke);
+    assert!(roles_of(&db, a).contains(&Role::Admin));
+
+    // A role the target does not hold removes no admin: a no-op, not a refusal.
+    assert!(!repo.revoke_role_guarded(a, Role::Moderator).await.unwrap());
+    // And a non-ADMIN revoke on someone else is unaffected by the guard.
+    assert!(repo.revoke_role_guarded(b, Role::Moderator).await.unwrap());
+    assert!(!roles_of(&db, b).contains(&Role::Moderator));
 }
 
 #[tokio::test]

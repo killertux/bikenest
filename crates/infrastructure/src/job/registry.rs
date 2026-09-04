@@ -112,14 +112,11 @@ impl RetentionJobHandler {
         config: &Config,
         storage: Arc<dyn bikenest_application::ObjectStorage>,
     ) -> Self {
-        // The media wardrobe is a filesystem path only used by the S3-less orphan
-        // sweep (a no-op for S3 — there is no local disk to walk).
-        let retention = SqlxRetentionRepository::new(
-            db.clone(),
-            config.retention,
-            storage.clone(),
-            config.media_root.clone(),
-        );
+        // `storage` is the same object store the request path writes uploads to:
+        // the retention orphan sweep lists it under `uploads/` and deletes aged,
+        // unreferenced keys, so the job and the uploads it collects cannot
+        // disagree about where the objects live.
+        let retention = SqlxRetentionRepository::new(db.clone(), config.retention, storage.clone());
         let job = bikenest_application::RetentionJob::new(
             Box::new(retention),
             Box::new(SqlxAuditLog::new(db.clone())),
