@@ -28,6 +28,9 @@ struct IdRow {
 }
 
 /// The AFTER-state tuple returned by the optimistic `apply_edit` UPDATE.
+/// It carries the columns the edit does NOT write (point, timezone, moderation
+/// state) as well, so the revision snapshot is the row's true after-state
+/// rather than a pre-transaction read that a concurrent write may have aged.
 #[derive(sqlx::FromRow)]
 struct EditApplyRow {
     version: i64,
@@ -35,6 +38,10 @@ struct EditApplyRow {
     address: String,
     description: Option<String>,
     parking_type: String,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    timezone: String,
+    moderation_state: String,
 }
 
 pub struct SqlxParkingContributionRepository {
@@ -74,7 +81,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             .pool()
             .begin()
             .await
-            .map_err(map_db_err_to_contribution)?;
+            .map_err(|e| db_err("contribution.create", e))?;
 
         let (cost_kind, price_cents, price_currency, price_unit) = cost_parts(&new.cost);
 
@@ -108,7 +115,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         .bind(now)
         .fetch_one(&mut *tx)
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.create", e))?;
         let id = row.id;
 
         write_hours(&mut tx, id, &new.hours).await?;
@@ -137,7 +144,9 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         )
         .await?;
 
-        tx.commit().await.map_err(map_db_err_to_contribution)?;
+        tx.commit()
+            .await
+            .map_err(|e| db_err("contribution.create", e))?;
         Ok(id)
     }
 
@@ -149,24 +158,34 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         editor: UserId,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64, ContributionError> {
-        // Point / timezone / moderation state never change in a reversible edit;
-        // read them (committed) once before the transaction for the snapshot.
-        let current = self
-            .details
-            .details(id)
-            .await
-            .map_err(map_reader_err_to_contribution)?
-            .ok_or(ContributionError::VersionConflict)?;
-        let point = *current.point();
-        let tz = current.timezone();
-        let mod_state = current.moderation_state().as_code();
-
         let mut tx = self
             .db
             .pool()
             .begin()
             .await
-            .map_err(map_db_err_to_contribution)?;
+            .map_err(|e| db_err("contribution.apply_edit", e))?;
+
+        // Lock the row and read the true before-state inside the transaction.
+        // The UPDATE below carries both predicates, so a zero-row result cannot
+        // say *which* one failed; this read separates "someone else edited it"
+        // (VersionConflict) from "moderation took it down" (LocationNotActive)
+        // without a race, because the lock is held until commit.
+        let guard: Option<(i64, String)> = sqlx::query_as(
+            "SELECT version, moderation_state FROM parking_location WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| db_err("contribution.apply_edit", e))?;
+        let Some((current_version, current_state)) = guard else {
+            return Err(ContributionError::NotFound);
+        };
+        if current_state != bikenest_domain::ModerationState::Active.as_code() {
+            return Err(ContributionError::LocationNotActive);
+        }
+        if current_version != expected_version {
+            return Err(ContributionError::VersionConflict);
+        }
 
         let (cost_kind, price_cents, price_currency, price_unit) = cost_parts(&edit.cost);
 
@@ -178,8 +197,9 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
                 cost_kind = $5, price_cents = $6, price_currency = $7, price_unit = $8,
                 hours_unknown = $9,
                 version = version + 1, updated_at = $10, last_meaningful_update_at = $10
-            WHERE id = $11 AND version = $12
-            RETURNING version, name, address, description, parking_type
+            WHERE id = $11 AND version = $12 AND moderation_state = 'ACTIVE'
+            RETURNING version, name, address, description, parking_type,
+                      lat, lon, timezone, moderation_state
             "#,
         )
         .bind(edit.name.trim())
@@ -196,10 +216,11 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         .bind(expected_version)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.apply_edit", e))?;
 
         let Some(row) = row else {
-            // 0 rows → concurrent update; surface the conflict (§100).
+            // Unreachable while the FOR UPDATE lock above is held; kept as the
+            // conservative fallback if that guard is ever removed.
             return Err(ContributionError::VersionConflict);
         };
         let EditApplyRow {
@@ -208,7 +229,16 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             address,
             description,
             parking_type,
+            lat,
+            lon,
+            timezone,
+            moderation_state,
         } = row;
+        let point = GeoPoint::new(lat.unwrap_or(0.0), lon.unwrap_or(0.0))
+            .map_err(|e| ContributionError::InvalidField(e.to_string()))?;
+        let tz: chrono_tz::Tz = timezone.parse().map_err(|_| {
+            ContributionError::InvalidField(format!("unknown timezone: {timezone}"))
+        })?;
 
         write_hours(&mut tx, id, &edit.hours).await?;
         write_security(&mut tx, id, &edit.security).await?;
@@ -223,7 +253,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             tz,
             &edit.hours,
             &edit.security,
-            mod_state,
+            &moderation_state,
         );
         insert_revision(
             &mut tx,
@@ -236,7 +266,9 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         )
         .await?;
 
-        tx.commit().await.map_err(map_db_err_to_contribution)?;
+        tx.commit()
+            .await
+            .map_err(|e| db_err("contribution.apply_edit", e))?;
         Ok(new_version)
     }
 
@@ -256,11 +288,16 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         .bind(&p.proposed)
         .fetch_one(self.db.pool())
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.create_proposal", e))?;
         Ok(row.id)
     }
 
-    async fn revision_history(&self, id: i64) -> Result<Vec<RevisionSummary>, ContributionError> {
+    async fn revision_history(
+        &self,
+        id: i64,
+        limit: i64,
+    ) -> Result<Vec<RevisionSummary>, ContributionError> {
+        let limit = limit.clamp(1, 200);
         #[derive(sqlx::FromRow)]
         struct RevRow {
             version: i64,
@@ -274,12 +311,14 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             FROM parking_revision
             WHERE location_id = $1
             ORDER BY version DESC
+            LIMIT $2
             "#,
         )
         .bind(id)
+        .bind(limit)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.revision_history", e))?;
 
         rows.into_iter()
             .map(|r| {
@@ -294,6 +333,13 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             .collect()
     }
 
+    /// Near neighbours to compare a proposed location against.
+    ///
+    /// The `LIMIT 50` is a cap on how much name/address similarity work
+    /// happens in Rust, so the fifty rows have to be the fifty *nearest*: with
+    /// no `ORDER BY` they were fifty arbitrary rows, and the duplicate a
+    /// contributor was about to create could sit outside them. Ordering by
+    /// `<->` also lets the GIST index supply the rows already sorted.
     async fn duplicate_candidates(
         &self,
         point: GeoPoint,
@@ -311,11 +357,12 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
             FROM parking_location
             WHERE moderation_state = 'ACTIVE'
               AND ST_DWithin(location, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography, $3)
+            ORDER BY location <-> ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
             LIMIT 50
             "#).bind(point.lat()).bind(point.lon()).bind(f64::from(DUPLICATE_RADIUS_M))
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_db_err_to_contribution)?;
+        .map_err(|e| db_err("contribution.duplicate_candidates", e))?;
 
         let mut candidates: Vec<DuplicateCandidate> = rows
             .into_iter()
@@ -344,18 +391,15 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn map_db_err_to_contribution(e: sqlx::Error) -> ContributionError {
-    match e {
-        sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => {
-            ContributionError::Internal
-        }
-        _ => ContributionError::Internal,
-    }
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"contribution.create"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> ContributionError {
+    crate::db_error::classify_and_log(context, e).into()
 }
 
 fn map_reader_err_to_contribution(e: bikenest_application::ReaderError) -> ContributionError {
     match e {
-        bikenest_application::ReaderError::Unavailable => ContributionError::Internal,
+        bikenest_application::ReaderError::Unavailable => ContributionError::Unavailable,
         bikenest_application::ReaderError::Unexpected(_) => ContributionError::Internal,
     }
 }
@@ -374,6 +418,11 @@ fn cost_parts(cost: &Cost) -> (&'static str, Option<i64>, Option<String>, Option
     }
 }
 
+/// Replaces a location's opening hours in two statements (was: one DELETE +
+/// one INSERT per row). `opening_hours` has no natural per-range unique key —
+/// an edit can change a range's times entirely, which is a different primary
+/// key tuple — so a delete-then-insert stays the right shape; the insert side
+/// is now one multi-row statement via `unnest` instead of N round trips.
 async fn write_hours(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: i64,
@@ -383,61 +432,84 @@ async fn write_hours(
         .bind(id)
         .execute(&mut **tx)
         .await
-        .map_err(map_db_err_to_contribution)?;
-    if let OpeningHours::Weekly(rows) = hours {
+        .map_err(|e| db_err("contribution.write_hours", e))?;
+    if let OpeningHours::Weekly(rows) = hours
+        && !rows.is_empty()
+    {
+        let mut days: Vec<i16> = Vec::with_capacity(rows.len());
+        let mut opens: Vec<chrono::NaiveTime> = Vec::with_capacity(rows.len());
+        let mut closes: Vec<chrono::NaiveTime> = Vec::with_capacity(rows.len());
+        let mut all_day: Vec<bool> = Vec::with_capacity(rows.len());
         for (day, range) in rows {
-            let opens = if range.all_day {
+            days.push(i16::from(*day));
+            opens.push(if range.all_day {
                 chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()
             } else {
                 range.opens_at
-            };
-            let closes = if range.all_day {
+            });
+            closes.push(if range.all_day {
                 chrono::NaiveTime::from_hms_opt(23, 59, 59).unwrap()
             } else {
                 range.closes_at
-            };
-            sqlx::query(
-                "INSERT INTO opening_hours (location_id, day_of_week, opens_at, closes_at, all_day) VALUES ($1,$2,$3,$4,$5)",
-            )
-            .bind(id)
-            .bind(i16::from(*day))
-            .bind(opens)
-            .bind(closes)
-            .bind(range.all_day)
-            .execute(&mut **tx)
-            .await
-            .map_err(map_db_err_to_contribution)?;
+            });
+            all_day.push(range.all_day);
         }
+        sqlx::query(
+            r#"
+            INSERT INTO opening_hours (location_id, day_of_week, opens_at, closes_at, all_day)
+            SELECT $1, d, o, c, a
+            FROM UNNEST($2::smallint[], $3::time[], $4::time[], $5::bool[]) AS t(d, o, c, a)
+            "#,
+        )
+        .bind(id)
+        .bind(days)
+        .bind(opens)
+        .bind(closes)
+        .bind(all_day)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| db_err("contribution.write_hours", e))?;
     }
     Ok(())
 }
 
+/// Upserts a location's security attributes in one statement (was: one
+/// DELETE plus N single-row INSERTs). Every call writes all codes in
+/// [`bikenest_domain::SECURITY_FEATURE_CODES`] (defaulting to `Unknown` for
+/// codes the caller didn't set) — the row set per location never shrinks —
+/// so `ON CONFLICT … DO UPDATE` is equivalent to delete-then-insert with no
+/// separate DELETE needed.
 async fn write_security(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: i64,
     security: &[SecurityFeature],
 ) -> Result<(), ContributionError> {
-    sqlx::query("DELETE FROM parking_security WHERE location_id = $1")
-        .bind(id)
-        .execute(&mut **tx)
-        .await
-        .map_err(map_db_err_to_contribution)?;
-    for code in bikenest_domain::SECURITY_FEATURE_CODES {
-        let state = security
-            .iter()
-            .find(|f| f.code() == *code)
-            .map(|f| f.state())
-            .unwrap_or(SecurityState::Unknown);
-        sqlx::query(
-            "INSERT INTO parking_security (location_id, feature_code, state) VALUES ($1, $2, $3)",
-        )
-        .bind(id)
-        .bind(code)
-        .bind(state_smallint(state))
-        .execute(&mut **tx)
-        .await
-        .map_err(map_db_err_to_contribution)?;
-    }
+    let codes: Vec<&'static str> = bikenest_domain::SECURITY_FEATURE_CODES.to_vec();
+    let states: Vec<i16> = codes
+        .iter()
+        .map(|code| {
+            let state = security
+                .iter()
+                .find(|f| f.code() == *code)
+                .map(|f| f.state())
+                .unwrap_or(SecurityState::Unknown);
+            state_smallint(state)
+        })
+        .collect();
+    sqlx::query(
+        r#"
+        INSERT INTO parking_security (location_id, feature_code, state)
+        SELECT $1, c, s
+        FROM UNNEST($2::text[], $3::smallint[]) AS t(c, s)
+        ON CONFLICT (location_id, feature_code) DO UPDATE SET state = EXCLUDED.state
+        "#,
+    )
+    .bind(id)
+    .bind(codes)
+    .bind(states)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| db_err("contribution.write_security", e))?;
     Ok(())
 }
 
@@ -473,7 +545,7 @@ async fn insert_revision(
     .bind(snapshot)
     .execute(&mut **tx)
     .await
-    .map_err(map_db_err_to_contribution)?;
+    .map_err(|e| db_err("contribution.insert_revision", e))?;
     Ok(())
 }
 

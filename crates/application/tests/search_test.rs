@@ -2,9 +2,9 @@
 //! fake ports (no database — the real-SQL tests live in infrastructure).
 
 use bikenest_application::{
-    Cursor, DEFAULT_RECOMMENDATION_CONFIG, Filters, GeoHit, GeocodeError, Geocoder,
-    GetParkingDetails, ParkingDetailsReader, ParkingSearchReader, ParkingSummary, ReaderError,
-    SearchError, SearchInput, SearchParking,
+    BoundsPage, BoundsQuery, Cursor, Filters, GeoHit, GeocodeError, Geocoder, GetParkingDetails,
+    ParkingDetailsReader, ParkingSearchReader, ParkingSummary, ReaderError, SearchError,
+    SearchInput, SearchParking,
 };
 use bikenest_domain::{Cost, GeoPoint, ParkingLocation, ParkingType, Rating, TimeRange, hms};
 use std::sync::{Arc, Mutex};
@@ -40,6 +40,18 @@ fn summary(
         timezone: sp_tz(),
         is_open_now: true,
         photo_key: None,
+        // Stands in for the reader's key: these fakes are read with the
+        // distance sort, whose key is the distance itself.
+        sort_key: Some(distance_m),
+    }
+}
+
+/// A summary whose sort key is set independently of its distance — what a
+/// scoring sort returns.
+fn summary_keyed(id: i64, distance_m: f64, sort_key: f64) -> ParkingSummary {
+    ParkingSummary {
+        sort_key: Some(sort_key),
+        ..summary(id, distance_m, None, Some(2))
     }
 }
 
@@ -68,6 +80,10 @@ struct FakeReader {
     items: Vec<ParkingSummary>,
     received_limit: Arc<Mutex<Vec<usize>>>,
     received_apply_cursor: Arc<Mutex<Vec<bool>>>,
+    /// Every bounds query that reached the reader — what the browse tests
+    /// assert the use case passed through (and, by its emptiness, what it
+    /// refused before touching the database).
+    received_bounds: Arc<Mutex<Vec<BoundsQuery>>>,
 }
 
 impl FakeReader {
@@ -99,15 +115,19 @@ impl ParkingSearchReader for FakeReader {
             next_cursor: None,
         })
     }
+
+    async fn in_bounds(&self, query: &BoundsQuery) -> Result<BoundsPage, ReaderError> {
+        self.received_bounds.lock().unwrap().push(query.clone());
+        Ok(BoundsPage {
+            items: self.items.clone(),
+            total: self.items.len(),
+            clusters: Vec::new(),
+        })
+    }
 }
 
 fn use_case(geocoder: FakeGeocoder, reader: FakeReader) -> SearchParking {
-    SearchParking::new(
-        Box::new(geocoder),
-        Box::new(reader),
-        DEFAULT_RECOMMENDATION_CONFIG,
-        Default::default(),
-    )
+    SearchParking::new(Box::new(geocoder), Box::new(reader))
 }
 
 fn input() -> SearchInput {
@@ -168,7 +188,7 @@ async fn query_is_geocoded_and_label_preserved() {
 #[tokio::test]
 async fn radius_and_page_size_are_clamped() {
     let mut input = input();
-    input.sort = Some("distance".to_string()); // SQL path: limit = page_size + 1
+    input.sort = Some("distance".to_string());
     input.radius_m = Some(9999); // not in allowlist → default 1000
     input.page_size = Some(100_000); // clamp to MAX_PAGE_SIZE
     let reader = FakeReader::default();
@@ -176,101 +196,104 @@ async fn radius_and_page_size_are_clamped() {
         .execute(input)
         .await
         .unwrap();
-    // limit was requested as page_size + 1 (lookahead), so 100 + 1.
     assert_eq!(*reader.received_limit.lock().unwrap().last().unwrap(), 101);
 
-    // The recommended path uses the candidate cap instead.
-    let mut rec_input = SearchInput {
+    // Every sort now reads one page plus the look-ahead row, `recommended`
+    // (the default) included: there is no candidate fetch to cap any more.
+    let rec_input = SearchInput {
         query: Some("Rua XV de Novembro".to_string()),
+        page_size: Some(100_000),
         ..Default::default()
-    }; // default sort = recommended
-    rec_input.page_size = Some(100_000);
+    };
     let reader = FakeReader::default();
     use_case(FakeGeocoder::default(), reader.clone())
         .execute(rec_input)
         .await
         .unwrap();
-    assert_eq!(
-        *reader.received_limit.lock().unwrap().last().unwrap(),
-        DEFAULT_RECOMMENDATION_CONFIG.candidate_cap
-    );
+    assert_eq!(*reader.received_limit.lock().unwrap().last().unwrap(), 101);
 }
 
+/// The home page's featured strip asks for four cards; the reader must be
+/// asked for five (the look-ahead row), not for a five-hundred-row candidate
+/// set it would then throw away.
 #[tokio::test]
-async fn recommended_sort_orders_by_score_then_id_and_paginates() {
-    // Two items with identical scores (both verified recently, free, no
-    // security known, no rating) at different distances → tie broken by id.
+async fn a_small_page_size_reads_a_small_page() {
+    let reader = FakeReader::new(
+        (1..=30)
+            .map(|i| summary(i, i as f64 * 10.0, None, Some(1)))
+            .collect(),
+    );
+    let (page, _) = use_case(FakeGeocoder::default(), reader.clone())
+        .execute(SearchInput {
+            lat: Some(-25.4297),
+            lon: Some(-49.2705),
+            radius_m: Some(1000),
+            page_size: Some(4),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        *reader.received_limit.lock().unwrap().last().unwrap(),
+        5,
+        "page_size 4 + one look-ahead row"
+    );
+    assert_eq!(page.items.len(), 4);
+    assert!(page.next_cursor.is_some(), "more rows exist");
+}
+
+/// `Recommended` is a SQL sort like every other one now: the reader ranks and
+/// limits, the use case passes the cursor down and mints the next one from the
+/// key the reader computed. Nothing is re-ranked in memory, so no page can be
+/// ordered differently from the query that produced it.
+#[tokio::test]
+async fn recommended_sort_pages_through_the_reader_like_the_other_sorts() {
     let items = vec![
-        summary(2, 100.0, None, Some(2)),
-        summary(1, 100.0, None, Some(2)),
-        summary(3, 50.0, None, Some(2)), // closer → higher distance score
+        summary_keyed(3, 50.0, -0.72),
+        summary_keyed(1, 100.0, -0.68),
+        summary_keyed(2, 100.0, -0.61),
     ];
     let reader = FakeReader::new(items);
     let mut input = input();
     input.sort = Some("recommended".to_string());
+    input.page_size = Some(2);
     let (page, _) = use_case(FakeGeocoder::default(), reader.clone())
         .execute(input.clone())
         .await
         .unwrap();
     assert_eq!(
-        page.items.iter().map(|i| i.id).collect::<Vec<_>>(),
-        vec![3, 1, 2]
+        reader.received_apply_cursor.lock().unwrap().last().unwrap(),
+        &true,
+        "the reader applies the keyset predicate for recommended too"
     );
-
-    // Deterministic: same input → same order.
-    let (page2, _) = use_case(
-        FakeGeocoder::default(),
-        FakeReader::new(vec![
-            summary(2, 100.0, None, Some(2)),
-            summary(1, 100.0, None, Some(2)),
-            summary(3, 50.0, None, Some(2)),
-        ]),
-    )
-    .execute(input.clone())
-    .await
-    .unwrap();
+    assert_eq!(reader.received_limit.lock().unwrap().last().unwrap(), &3);
     assert_eq!(
         page.items.iter().map(|i| i.id).collect::<Vec<_>>(),
-        page2.items.iter().map(|i| i.id).collect::<Vec<_>>()
+        vec![3, 1],
+        "reader order is the page order"
     );
+    let next = page.next_cursor.expect("a second page exists");
+    assert_eq!(next.sort, bikenest_application::Sort::Recommended);
+    assert!(
+        (next.v - (-0.68)).abs() < 1e-9,
+        "the cursor anchors on the reader's own sort key, not a recomputed score"
+    );
+    assert_eq!(next.id, 1);
 
-    // Missing data is neutral, not worst: an unverified, unreviewed item with
-    // unknown security still beats a verified one that is twice as far? No —
-    // but it must beat nothing-by-default: check score neutrality directly.
-    let now = chrono::Utc::now();
-    let cfg = DEFAULT_RECOMMENDATION_CONFIG;
-    let fresh = Default::default();
-    let neutral = bikenest_application::recommendation_score(
-        &summary(9, 500.0, None, None),
+    // A cursor minted for one sort must not be replayed against another.
+    let mut crossed = input;
+    crossed.sort = Some("distance".to_string());
+    crossed.cursor = Some(next.encode());
+    let request = bikenest_application::SearchRequest::new(
+        GeoPoint::new(-23.5, -46.6).unwrap(),
+        None,
         1000,
-        now,
-        &cfg,
-        &fresh,
+        Filters::default(),
+        bikenest_application::Sort::Distance,
+        20,
+        Some(&next.encode()),
     );
-    // distance .35*(1-0.5) + security .25*0.5 + rating .2*0.5 + freshness .15*0.5 + verification .05*0.5
-    let expected = 0.35 * 0.5 + 0.5 * (0.25 + 0.2 + 0.15 + 0.05);
-    assert!((neutral - expected).abs() < 1e-9);
-
-    // Cursor pagination on the recommended sort.
-    let cursor = Cursor {
-        sort: bikenest_application::Sort::Recommended,
-        v: page.items[0].id as f64, // not a real score, but exercises the filter path
-        id: page.items[0].id,
-    };
-    let mut paged_input = input;
-    paged_input.cursor = Some(cursor.encode());
-    let (paged, _) = use_case(
-        FakeGeocoder::default(),
-        FakeReader::new(vec![
-            summary(1, 100.0, None, Some(2)),
-            summary(2, 100.0, None, Some(2)),
-            summary(3, 50.0, None, Some(2)),
-        ]),
-    )
-    .execute(paged_input)
-    .await
-    .unwrap();
-    assert!(paged.items.iter().all(|i| i.id != page.items[0].id));
+    assert!(request.cursor.is_none());
 }
 
 #[tokio::test]
@@ -366,6 +389,43 @@ async fn filters_parse_from_input() {
 // GetParkingDetails
 // ---------------------------------------------------------------------------
 
+/// A filter code no catalog knows can never be confirmed on any location, so
+/// keeping it would turn the whole search into "no results". A stale or
+/// hand-edited URL degrades to the filters that still mean something.
+#[tokio::test]
+async fn unknown_security_codes_are_dropped_from_the_request() {
+    let request = |codes: Vec<&str>| {
+        bikenest_application::SearchRequest::new(
+            GeoPoint::new(-23.5, -46.6).unwrap(),
+            None,
+            1000,
+            Filters {
+                security_all: codes.into_iter().map(str::to_string).collect(),
+                ..Filters::default()
+            },
+            bikenest_application::Sort::Distance,
+            20,
+            None,
+        )
+    };
+
+    assert_eq!(
+        request(vec!["cctv", "laser_fence", "well_lit"])
+            .filters
+            .security_all,
+        vec!["cctv", "well_lit"],
+    );
+    assert!(
+        request(vec!["laser_fence"]).filters.security_all.is_empty(),
+        "an all-unknown filter set becomes no filter, not an impossible one"
+    );
+    assert_eq!(
+        request(vec![" cctv ", "cctv", ""]).filters.security_all,
+        vec!["cctv"],
+        "codes are trimmed and deduped"
+    );
+}
+
 struct OneLocationReader(Option<ParkingLocation>);
 
 #[async_trait::async_trait]
@@ -420,4 +480,114 @@ async fn details_view_computes_freshness_and_open_status() {
 async fn details_of_unknown_id_is_none() {
     let uc = GetParkingDetails::new(Box::new(OneLocationReader(None)), Default::default());
     assert!(uc.execute(999).await.unwrap().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Browse mode (WP20): the box is the request, and it is validated here
+// ---------------------------------------------------------------------------
+
+fn browse_input(bbox: &str) -> SearchInput {
+    SearchInput {
+        bbox: Some(bbox.to_string()),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn browse_rejects_every_kind_of_impossible_box() {
+    // Each of these must be refused *before* the reader is asked anything: a
+    // box the database cannot be trusted with is a 400, not an empty page.
+    let cases = [
+        ("", "no box at all"),
+        ("-49.30,-25.45,-49.25", "three numbers"),
+        ("-49.30,-25.45,-49.25,-25.41,7", "five numbers"),
+        ("west,-25.45,-49.25,-25.41", "not a number"),
+        ("-49.25,-25.45,-49.30,-25.41", "west east of east"),
+        ("-49.30,-25.41,-49.25,-25.45", "south north of north"),
+        ("-49.30,-25.45,-49.30,-25.41", "zero width"),
+        ("-181.0,-25.45,-49.25,-25.41", "longitude off the globe"),
+        ("-49.30,-91.0,-49.25,-25.41", "latitude off the globe"),
+        ("-50.30,-25.45,-49.25,-25.41", "wider than the span limit"),
+        ("-49.30,-26.45,-49.25,-25.41", "taller than the span limit"),
+    ];
+    for (bbox, why) in cases {
+        let reader = FakeReader::default();
+        let result = use_case(FakeGeocoder::default(), reader.clone())
+            .browse(&browse_input(bbox))
+            .await;
+        assert!(
+            matches!(result, Err(SearchError::InvalidBounds)),
+            "{why} ({bbox}) must be InvalidBounds"
+        );
+        assert!(
+            reader.received_bounds.lock().unwrap().is_empty(),
+            "{why} must not reach the reader"
+        );
+    }
+}
+
+#[tokio::test]
+async fn browse_refuses_a_cursor_because_it_has_no_pages() {
+    let reader = FakeReader::default();
+    let input = SearchInput {
+        cursor: Some("whatever".to_string()),
+        ..browse_input("-49.30,-25.45,-49.25,-25.41")
+    };
+    let result = use_case(FakeGeocoder::default(), reader.clone())
+        .browse(&input)
+        .await;
+    assert!(matches!(result, Err(SearchError::BoundsNotPaginated)));
+    assert!(reader.received_bounds.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn browse_passes_the_box_and_every_filter_to_the_reader() {
+    let reader = FakeReader::new(vec![summary(1, 120.0, None, Some(1))]);
+    let input = SearchInput {
+        cost: Some("free".to_string()),
+        types: Some("rack,locker".to_string()),
+        security: Some("cctv".to_string()),
+        open_now: true,
+        ..browse_input(" -49.30 , -25.45 , -49.25 , -25.41 ")
+    };
+    let (bounds, page) = use_case(FakeGeocoder::default(), reader.clone())
+        .browse(&input)
+        .await
+        .expect("a valid box");
+
+    assert_eq!(page.total, 1);
+    let seen = reader.received_bounds.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1, "exactly one reader call");
+    // The box the reader got is the box the caller gets back — the view layer
+    // frames the map with it, so they must not be two different boxes.
+    assert_eq!(seen[0], bounds);
+    assert_eq!(seen[0].west, -49.30);
+    assert_eq!(seen[0].south, -25.45);
+    assert_eq!(seen[0].east, -49.25);
+    assert_eq!(seen[0].north, -25.41);
+    assert_eq!(seen[0].limit, bikenest_application::BROWSE_MARKER_CAP);
+    assert_eq!(
+        seen[0].filters.cost,
+        Some(bikenest_application::CostFilter::Free)
+    );
+    assert_eq!(
+        seen[0].filters.types,
+        vec![
+            bikenest_domain::ParkingType::Rack,
+            bikenest_domain::ParkingType::Locker
+        ]
+    );
+    assert_eq!(seen[0].filters.security_all, vec!["cctv".to_string()]);
+    assert!(seen[0].filters.open_now);
+}
+
+#[test]
+fn a_browse_box_centres_and_grids_itself() {
+    let bounds = BoundsQuery::parse("-49.30,-25.45,-49.25,-25.41", Filters::default(), 200)
+        .expect("a valid box");
+    let center = bounds.center();
+    assert!((center.lat() - -25.43).abs() < 1e-9, "{center:?}");
+    assert!((center.lon() - -49.275).abs() < 1e-9, "{center:?}");
+    // The grid is the box's width over twelve columns, whatever the zoom.
+    assert!((bounds.cell_deg() - 0.05 / 12.0).abs() < 1e-9);
 }

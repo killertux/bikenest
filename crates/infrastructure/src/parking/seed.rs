@@ -1,12 +1,16 @@
-//! Mock parking seeder (plans/m1-search-map.md §8; **Ledger #1/#13**).
+//! Mock parking seeder.
 //!
 //! Dev/demo affordance only: production starts with an empty dataset (§116.1).
-//! Rows are tagged with `seed_key` so re-runs are idempotent (delete + insert
-//! in one transaction) and easy to identify for cleanup.
+//! `parking_location`/`parking_photo` rows are tagged with `seed_key` so
+//! re-runs are idempotent (delete + insert in one transaction) and easy to
+//! identify for cleanup. `users` has no `seed_key` column, so the community
+//! reviewers the seeder authors reviews as are found-or-created by email
+//! instead (re-seeding never duplicates them).
 
 use crate::Db;
-use crate::devdata::mock_parkings;
-use bikenest_application::{ObjectStorage, PutObject};
+use crate::devdata::{REVIEW_AUTHORS, mock_parkings, review_body_for, star_ratings_for};
+use bikenest_application::{ImageProcessor, ObjectStorage, PhotoError, PutObject, StorageError};
+use std::collections::HashSet;
 
 const SEED_KEY: &str = "mock-cwb-2026-01";
 
@@ -14,24 +18,75 @@ const SEED_KEY: &str = "mock-cwb-2026-01";
 /// storage (relative to this crate).
 const IMG_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/static/img");
 
-/// Seed the mock dataset and push each location's photo through the object
-/// storage port (Ledger #1/#7). `storage` is a local-disk store in dev; the
-/// same call works unchanged against S3 later.
-pub async fn seed_mock(db: &Db, storage: &dyn ObjectStorage) -> Result<usize, sqlx::Error> {
+#[derive(Debug, thiserror::Error)]
+pub enum SeedError {
+    #[error("database error: {0}")]
+    Db(#[from] sqlx::Error),
+    #[error("photo processing error: {0}")]
+    Photo(#[from] PhotoError),
+    #[error("storage error: {0}")]
+    Storage(#[from] StorageError),
+    #[error("seed photo {0}: {1}")]
+    Io(String, std::io::Error),
+    #[error("seeded object missing after upload: {0}")]
+    MissingObject(String),
+}
+
+/// Seed the mock dataset: locations, hours, security, backing reviews (a
+/// rating never appears without real `review` rows behind it), and photos —
+/// each processed into full + thumbnail derivatives exactly like a real
+/// upload and pushed through the object-storage port. `storage` and
+/// `processor` are the same ports the live photo pipeline uses (S3 in
+/// production; the same call works unchanged against a test double).
+pub async fn seed_mock(
+    db: &Db,
+    storage: &dyn ObjectStorage,
+    processor: &dyn ImageProcessor,
+) -> Result<usize, SeedError> {
     let mut tx = db.pool().begin().await?;
     // Remove every previously seeded row (any dev dataset, including an older
     // key) so re-seeding is fully idempotent and never leaves stale rows.
-    // `parking_photo` rows cascade with their location; storage objects use
-    // stable per-image keys, so re-seeding overwrites them in place.
+    // `parking_photo`/`review` rows cascade with their location; storage
+    // objects use stable per-image keys, so re-seeding overwrites them in
+    // place.
     sqlx::query("DELETE FROM parking_location WHERE seed_key IS NOT NULL")
         .execute(&mut *tx)
         .await?;
 
+    // Community reviewers: find-or-create by email (idempotent — see the
+    // module doc for why `users` can't be tagged/deleted like the other seed
+    // tables).
+    let mut author_ids: Vec<i64> = Vec::with_capacity(REVIEW_AUTHORS.len());
+    for (email, display_name) in REVIEW_AUTHORS {
+        let existing: Option<(i64,)> =
+            sqlx::query_as("SELECT id FROM users WHERE lower(email) = lower($1)")
+                .bind(email)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let id = match existing {
+            Some((id,)) => id,
+            None => {
+                let row: (i64,) = sqlx::query_as(
+                    "INSERT INTO users (email, display_name) VALUES ($1, $2) RETURNING id",
+                )
+                .bind(email)
+                .bind(display_name)
+                .fetch_one(&mut *tx)
+                .await?;
+                row.0
+            }
+        };
+        author_ids.push(id);
+    }
+
     let now = chrono::Utc::now();
     let tz = "America/Sao_Paulo";
     let mut count = 0usize;
+    // Every object key the seeder pushes this run, so we can confirm each one
+    // is really retrievable before declaring success (Problem #1).
+    let mut pushed_keys: HashSet<String> = HashSet::new();
 
-    for mock in mock_parkings() {
+    for (loc_idx, mock) in mock_parkings().into_iter().enumerate() {
         let (cost_kind, price_cents, price_currency, price_unit) = match &mock.cost {
             bikenest_domain::Cost::Free => ("free", None, None, None),
             bikenest_domain::Cost::Unknown => ("unknown", None, None, None),
@@ -43,25 +98,25 @@ pub async fn seed_mock(db: &Db, storage: &dyn ObjectStorage) -> Result<usize, sq
             ),
             bikenest_domain::Cost::Paid { price: None } => ("paid", None, None, None),
         };
-        let rating_avg = mock.rating_avg.map(|a| a as f32);
         let last_verified_at = mock
             .verified_days_ago
             .map(|d| now - chrono::Duration::days(d));
 
+        // rating_avg/rating_count are intentionally omitted here (both
+        // default to NULL/0): they're recomputed below from the actual
+        // `review` rows, never hand-set (Problem #2).
         let row: (i64,) = sqlx::query_as(
             r#"
             INSERT INTO parking_location
                 (name, address, description, parking_type, cost_kind,
                  price_cents, price_currency, price_unit,
                  location, timezone, hours_unknown,
-                 rating_avg, rating_count,
                  created_at, updated_at, last_verified_at,
                  moderation_state, seed_key)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                     ST_SetSRID(ST_MakePoint($9, $10), 4326)::geography, $11, $12,
-                    $13, $14,
-                    $15, $15, $16,
-                    'ACTIVE', $17)
+                    $13, $13, $14,
+                    'ACTIVE', $15)
             RETURNING id
             "#,
         )
@@ -77,8 +132,6 @@ pub async fn seed_mock(db: &Db, storage: &dyn ObjectStorage) -> Result<usize, sq
         .bind(mock.lat)
         .bind(tz)
         .bind(mock.hours_unknown)
-        .bind(rating_avg)
-        .bind(mock.rating_count)
         .bind(now)
         .bind(last_verified_at)
         .bind(SEED_KEY)
@@ -127,40 +180,128 @@ pub async fn seed_mock(db: &Db, storage: &dyn ObjectStorage) -> Result<usize, sq
             }
         }
 
-        // Photo: push the bundled image through the object-storage port, then
-        // link it (pre-APPROVED for the demo — §30's moderation flow is M4).
+        // Reviews (Problem #2): synthesize `rating_count` real ACTIVE reviews
+        // approximating `rating_avg`, authored by distinct seeded reviewers
+        // (rotated per location so the same few people don't review
+        // everything), then recompute the denormalized aggregate from them.
+        if mock.rating_count > 0 {
+            let target_avg = mock.rating_avg.unwrap_or(4.0);
+            let stars = star_ratings_for(target_avg, mock.rating_count);
+            let start = (loc_idx * 7) % author_ids.len();
+            for (i, star) in stars.into_iter().enumerate() {
+                let author_id = author_ids[(start + i) % author_ids.len()];
+                let body = review_body_for(star, i);
+                let (review_id,): (i64,) = sqlx::query_as(
+                    "INSERT INTO review (location_id, author_id, rating, body) \
+                     VALUES ($1, $2, $3, $4) RETURNING id",
+                )
+                .bind(id)
+                .bind(author_id)
+                .bind(i16::from(star))
+                .bind(body)
+                .fetch_one(&mut *tx)
+                .await?;
+                // `review_revision` holds one row per *published* version, and
+                // the seeder publishes one — exactly what
+                // `SqlxReviewRepository::upsert_review` writes on the create
+                // path. Without it a seeded reviewer's personal-data export
+                // came back with an empty edit history, so the export was
+                // never exercised against real history in development.
+                sqlx::query(
+                    "INSERT INTO review_revision (review_id, rating, body) VALUES ($1, $2, $3)",
+                )
+                .bind(review_id)
+                .bind(i16::from(star))
+                .bind(body)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        // Recompute the denormalized aggregate from actual ACTIVE reviews —
+        // the same query `SqlxReviewRepository::upsert_review` uses — so a
+        // location can never end up with a rating_count and no reviews behind
+        // it (Problem #2), including the locations with no reviews at all
+        // (this just confirms rating_avg/rating_count stay NULL/0 for them).
+        sqlx::query(
+            r#"
+            UPDATE parking_location
+            SET rating_avg = (
+                    SELECT AVG(rating)::numeric(3,2) FROM review
+                    WHERE location_id = $1 AND moderation_state = 'ACTIVE'
+                ),
+                rating_count = (
+                    SELECT COUNT(*)::integer FROM review
+                    WHERE location_id = $1 AND moderation_state = 'ACTIVE'
+                )
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+        // Photo (Problem #1): process the bundled JPEG into a full derivative
+        // + thumbnail exactly as a real upload would, then push both through
+        // the object-storage port under stable keys (re-seeding overwrites
+        // them in place) and record both in `parking_photo`.
         if let Some(basename) = mock.photo {
-            let key = format!("seed/curitiba/{basename}");
             let bytes = tokio::fs::read(format!("{IMG_DIR}/{basename}"))
                 .await
-                .map_err(|e| {
-                    sqlx::Error::Io(std::io::Error::other(format!("seed photo {basename}: {e}")))
-                })?;
+                .map_err(|e| SeedError::Io(basename.to_string(), e))?;
+            let processed = processor.process(&bytes).await?;
+
+            let stem = basename.strip_suffix(".jpg").unwrap_or(basename);
+            let full_key = format!("seed/curitiba/{basename}");
+            let thumb_key = format!("seed/curitiba/{stem}-thumb.jpg");
+
             storage
                 .put(PutObject {
-                    key: key.clone(),
-                    bytes: &bytes,
-                    content_type: "image/jpeg".to_string(),
+                    key: full_key.clone(),
+                    bytes: &processed.full,
+                    content_type: processed.content_type.to_string(),
                 })
-                .await
-                .map_err(|e| sqlx::Error::Io(std::io::Error::other(e.to_string())))?;
+                .await?;
+            storage
+                .put(PutObject {
+                    key: thumb_key.clone(),
+                    bytes: &processed.thumb,
+                    content_type: processed.content_type.to_string(),
+                })
+                .await?;
+            pushed_keys.insert(full_key.clone());
+            pushed_keys.insert(thumb_key.clone());
 
             sqlx::query(
                 r#"
                 INSERT INTO parking_photo
-                    (location_id, storage_key, content_type, alt, position, moderation_state, seed_key)
-                VALUES ($1, $2, 'image/jpeg', $3, 0, 'APPROVED', $4)
+                    (location_id, storage_key, thumbnail_key, content_type, alt,
+                     width, height, processed_at, position, moderation_state, seed_key)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, 'APPROVED', $9)
                 "#,
             )
             .bind(id)
-            .bind(&key)
+            .bind(&full_key)
+            .bind(&thumb_key)
+            .bind(processed.content_type)
             .bind(mock.name)
+            .bind(processed.dimensions.width as i32)
+            .bind(processed.dimensions.height as i32)
+            .bind(now)
             .bind(SEED_KEY)
             .execute(&mut *tx)
             .await?;
         }
 
         count += 1;
+    }
+
+    // Verify every object the seeder just pushed is really retrievable before
+    // declaring success (Problem #1) — a `put` that silently no-ops must fail
+    // the seed loudly instead of leaving a broken photo in the demo.
+    for key in &pushed_keys {
+        if !storage.exists(key).await? {
+            return Err(SeedError::MissingObject(key.clone()));
+        }
     }
 
     tx.commit().await?;

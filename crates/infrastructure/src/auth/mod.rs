@@ -15,12 +15,12 @@ pub mod token;
 pub mod token_store;
 
 pub use account_repo::SqlxAccountRepository;
-pub use audit::SqlxAuditLog;
+pub use audit::{AUDIT_METADATA_KEYS, SqlxAuditLog};
 pub use clock::SystemClock;
 pub use oauth::FakeOAuthProvider;
 pub use password::Argon2PasswordHasher;
 pub use rate_limit::{
-    InMemoryRateLimiter, SharedRateLimiter, ValKeyRateLimiter, rate_limiter_from_env,
+    InMemoryRateLimiter, SharedRateLimiter, ValKeyRateLimiter, rate_limiter_from_config,
 };
 pub use seed::{SeedOutcome, seed_admin};
 pub use session_store::SqlxSessionStore;

@@ -32,24 +32,31 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 | Variable | Notes |
 |---|---|
 | `DATABASE_URL` | Postgres DSN. Example `postgres://user:pass@db:5432/bikenest` |
+| `DB_MAX_CONNECTIONS` | pool ceiling per instance (default `10`). Size it as the database's `max_connections` divided by the replica count, minus headroom for migrations/psql |
+| `DB_STATEMENT_TIMEOUT_MS` | `statement_timeout` on every pooled connection (default `5000`). Migrations are exempt (§4); a long maintenance run through the app — e.g. `retention` on a large database — may need a higher value |
+| `DB_IDLE_IN_TX_TIMEOUT_MS` | `idle_in_transaction_session_timeout` (default `10000`), so a transaction abandoned by a crashed client releases its connection |
 | `BIND_ADDR` | default `0.0.0.0:8080` |
+| `TRUSTED_PROXY_HOPS` | how many reverse proxies in front of the app may be trusted to have appended to `X-Forwarded-For`; `0` (default) uses the TCP peer address only. See §3 |
 | `BASE_URL` | the public origin, e.g. `https://bikenest.example.com` — builds links + canonical URLs. **Must be reachable** |
-| `MEDIA_ROOT` | legacy local media directory (default `/app/media`) — only used by the retention orphan-media sweep; with direct S3 presign the objects live in the bucket |
-| `S3_ENDPOINT` | **Object storage** (Ledger #7): the S3-compatible endpoint (default `http://localhost:9000` → MinIO). Set `S3_ENDPOINT=` (empty) for the standard AWS endpoint |
-| `S3_REGION` / `S3_BUCKET` | coverage: region (default `us-east-1`) + bucket name (default `bikenest`) |
-| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | S3 credentials (default MinIO `minioadmin`; **required** real creds in prod) |
+| `MEDIA_ROOT` | directory the **development e-mail outbox** writes to (`EMAIL_PROVIDER=fake` only; default `media`). No longer a media directory: media lives in the S3 bucket, and the retention orphan sweep lists the bucket (WP16) |
+| `S3_ENDPOINT` | **Object storage** (Ledger #7): the S3-compatible endpoint. Unset defaults to `http://localhost:9000` (MinIO) in development only; set it empty for the standard AWS endpoint. **Required in production** |
+| `S3_REGION` / `S3_BUCKET` | region (default `us-east-1`) + bucket name (development default `bikenest`; **required in production**) |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | S3 credentials (development default MinIO `minioadmin`, which production rejects outright) |
 | `TLS_ON` | set `true` to emit HSTS behind a real TLS terminator |
 | `VALKEY_URL` | **Rate limiter** (Ledger #6) single node, e.g. `valkey://valkey:6379`. Shared across auth/photo/contribution/moderation, survives restarts, aggregates across instances |
 | `VALKEY_CLUSTER_URLS` | comma-separated node URLs → **cluster** mode (wins over `VALKEY_URL`) |
 | `RATE_LIMIT_FAIL_OPEN` | `true` (default) → a ValKey outage **allows** requests (goes fail-open); `false` → **denies** (429s the rate-limited endpoints) |
-| `JOBS_ENABLED` | **Background job queue** (M9): `true` (default) spawns an in-process worker that claims/run/retries `background_job` rows; `false` for web-only instances |
+| `JOBS_ENABLED` | **Background job queue** (M9): `true` (default) spawns an in-process worker that claims/run/retries `background_job` rows; `false` for web-only instances — transactional email then sends inline on the request path instead of being queued (§5d) |
 | `JOBS_POLL_INTERVAL_MS` / `JOBS_BATCH_SIZE` / `JOBS_LEASE_TTL_MS` | queue poll cadence, batch size, and lease length (defaults 5000 / 4 / 600000) |
 | `JOBS_MAX_ATTEMPTS` / `JOBS_BACKOFF_BASE_MS` | retry budget (default 5) and exponential-backoff base (default 2000) before dead-letter |
 | `JOBS_HISTORY_RETENTION_DAYS` | `jobs.gc` deletes `succeeded`/`failed` rows older than this (default 7) |
 | `CSP_TILE_HOSTS` / `CSP_GEOCODE_HOSTS` | origins allowed by the strict CSP for map tiles / geocoding |
-| `APP_ENV` | `production` → JSON structured logs (machine-parseable, forward to a log aggregator) |
+| `CSP_MEDIA_HOSTS` | object-storage origin(s) allowed in the CSP `img-src` that parking photos are served from as direct pre-signed URLs (dev: `http://localhost:9000`; AWS: `https://<bucket>.s3.<region>.amazonaws.com`) |
+| `APP_ENV` | `production` → JSON structured logs (machine-parseable, forward to a log aggregator) **and the startup validation in §2a** |
+| `STATIC_ROOT` | directory `/static` is served from; the image sets `/app/web/static`. Unset falls back to `web/static` beside the working directory, then to the compile-time path |
 | `GEOCODER` | **Geocoder** (Ledger #2): `mapbox` \| `fake` (default `fake`). `mapbox` sends the query to Mapbox server-side (§77/§83) |
-| `MAPBOX_ACCESS_TOKEN` | Mapbox token; required when `GEOCODER=mapbox` (missing token falls back to `fake`) |
+| `MAPBOX_ACCESS_TOKEN` | Mapbox token; required when `GEOCODER=mapbox` (a missing token is a startup error, never a fallback to `fake`) |
+| `RATE_GEOCODE_PER_IP` / `RATE_GEOCODE_WINDOW_SECS` | per-IP budget for **billable** geocodes on `/search` (default 60 per 15 min). Only cache **misses** count; over the budget `/search` answers 429 with a notice instead of calling the provider |
 | `MAP_STYLE_URL` | **Basemap** (Ledger #3): style URL; default MapLibre demo tiles |
 | `MAPBOX_MAP_ACCESS_TOKEN` | **Basemap** public Mapbox token (client-side); falls back to `MAPBOX_ACCESS_TOKEN` if unset; only loaded when the style is Mapbox-based |
 | `EMAIL_PROVIDER` | `smtp` or `resend` in production (not `fake`) |
@@ -62,6 +69,37 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 
 **Never** put secrets in the image; the `.dockerignore` excludes `.env*`.
 
+## 2a. Startup validation
+
+The whole environment is parsed once, at startup, into one typed `Config` — no
+setting is re-read per request. With `APP_ENV=production` the process then
+validates that configuration and **refuses to start** (exit code 1, one line per
+problem on stderr) unless all of the following hold:
+
+- `BASE_URL` is set and does not point at `localhost` / `127.0.0.1` — otherwise
+  every verification and password-reset e-mail links to the wrong host.
+- `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are
+  all set, and the credentials are not the MinIO development default
+  (`minioadmin`).
+- `EMAIL_PROVIDER` is `smtp` or `resend`, with its credentials present. The
+  `fake` provider discards every message, so production never runs on it.
+- `GEOCODER=mapbox` with `MAPBOX_ACCESS_TOKEN`. The fake geocoder fabricates
+  coordinates for unknown queries.
+- `VALKEY_URL` or `VALKEY_CLUSTER_URLS` is set. The in-memory limiter is
+  per-process, so N replicas would multiply every rate limit by N.
+- `TLS_ON=true`, so `Strict-Transport-Security` is emitted.
+- `CSP_MEDIA_HOSTS` names the object-storage origin photos are served from;
+  without it the CSP blocks every photo.
+- `GOOGLE_OAUTH_ENABLED=false` — only the deterministic fake provider exists.
+
+Every failing rule is reported in one run, so a misconfigured deploy is fixed in
+one pass rather than one restart per missing variable. Independently of
+`APP_ENV`, asking for a provider without its credentials (e.g.
+`EMAIL_PROVIDER=resend` with no `RESEND_API_KEY`, or a ValKey URL that cannot be
+reached) is a hard startup error — the app never silently downgrades to a fake.
+
+Development runs no validation; it logs a `warn!` naming each fake in use.
+
 ## 3. TLS, reverse proxy, health checks
 
 Terminate TLS at a reverse proxy / LB (Caddy, Traefik, nginx, or a cloud LB) and
@@ -73,6 +111,48 @@ Health/readiness endpoints:
 - `GET /healthz` → liveness (process up). Wire to the LB's health check.
 - `GET /readyz` → readiness (DB reachable + migrations applied). Wire to the LB's
   readiness gate so `readyz` fails during a migration before rollout completes.
+
+### Client address behind the proxy (`TRUSTED_PROXY_HOPS`)
+
+Every per-address rate limit (login, registration, password reset, photo upload,
+reports) is keyed on the client address the app resolves. `X-Forwarded-For` is a
+plain request header — anyone can send one, and anyone can send a *different* one
+per request — so the app ignores it unless you say how many proxies are in front
+of it:
+
+- `TRUSTED_PROXY_HOPS=0` (default): the TCP peer address, and nothing else.
+  Correct when the app is directly exposed. **Behind a proxy this keys every
+  client on the proxy's address**, so one shared bucket for everyone — set the
+  real value.
+- `TRUSTED_PROXY_HOPS=N`: each of the N proxies appends the address it saw, so
+  the entry N places from the **right** is the address the outermost trusted
+  proxy received the request from. One load balancer → `1`; a CDN in front of a
+  load balancer → `2`.
+
+Set it to the *exact* number: too high lets clients forge their own address by
+prepending entries, too low keys everyone on a proxy. A chain shorter than N
+entries, or an entry that is not a bare IP address, falls back to the peer
+address. `X-Real-IP` is never read (it is not standardised and carries no hop
+count). The app also needs the peer address itself, which it gets from the TCP
+connection — no configuration needed.
+
+### Shutdown (SIGTERM) and PID 1
+
+`SIGTERM` (what `docker stop` / Kubernetes send) starts a graceful shutdown: the
+HTTP server stops accepting, in-flight requests drain, then the background job
+worker is given up to 30 s to finish whatever job it is running before the
+process exits. Killing the process mid-job would leave a `background_job` row in
+`state='running'` until its lease expired.
+
+The container image runs the server under [tini] as PID 1
+(`ENTRYPOINT ["/usr/bin/tini", "--", "bikenest-web"]`) so signals are forwarded
+and zombies reaped. If you run the binary some other way, make sure it receives
+`SIGTERM` directly (`docker run --init`, or `init: true` in compose, gives the
+same guarantee) and allow at least 35 s of termination grace
+(`--stop-timeout` / `terminationGracePeriodSeconds`) so the worker's 30 s budget
+is usable.
+
+[tini]: https://github.com/krallin/tini
 
 ## 4. Migrations
 
@@ -89,6 +169,33 @@ Migrations are **forward-only** (`sqlx` records applied versions). This means:
 > If a release must be undone and the schema is incompatible, restore the
 > pre-release data backup and re-run the old image — see `docs/backups.md`.
 
+Migrations run on a dedicated connection with `statement_timeout` disabled and
+closed afterwards, so `DB_STATEMENT_TIMEOUT_MS` (§2) never aborts an index build
+on a cold database, and the relaxed setting never leaks back into request
+handling.
+
+**PostGIS prerequisite.** `0001_init.sql` runs `CREATE EXTENSION IF NOT EXISTS
+postgis`, which requires the PostGIS extension to be *installed* on the target
+Postgres instance, not merely permitted by SQL — on a self-managed box that
+means the `postgresql-*-postgis-*` package (or an image that bundles it, e.g.
+`postgis/postgis`); on a managed provider (RDS, Cloud SQL, etc.) it means
+adding `postgis` to that provider's extension allowlist *before* the first
+deploy. Missing this fails the very first migration, not a later one.
+
+**Building new indexes on a live database.** Every `CREATE INDEX` in a
+migration runs inside `sqlx`'s migration transaction, which takes a normal
+(non-concurrent) lock for the build's duration — acceptable against an empty
+or small table (dev, first deploy), but a normal-priority lock on a large,
+already-populated table (e.g. `parking_location`, `report`, `audit_events`)
+blocks writers for as long as the build takes. For an index migration against
+a table with real production volume, build the equivalent index with `CREATE
+INDEX CONCURRENTLY` by hand, out of band, *before* shipping the release that
+adds it as a plain (transactional) migration — `CONCURRENTLY` cannot run
+inside a transaction block, so it is never something a `migrations/*.sql`
+file can do on its own. If a concurrent build fails partway (it can leave an
+`INVALID` index behind), `DROP INDEX` the invalid one and retry rather than
+letting the later transactional migration collide with it.
+
 ## 5. Providers
 
 The map/tile, geocoder, email, OAuth and object-storage integrations
@@ -100,13 +207,27 @@ remain (Google OAuth) are documented below and must be replaced before launch.
 
 - `fake` — deterministic dev geocoder (landmark table + hashed jitter).
 - `mapbox` — real `MapboxGeocoder` calling the Mapbox Geocoding API
-  (hosted, OSM-derived; §83). Requires `MAPBOX_ACCESS_TOKEN`; if the token is
-  missing it logs and falls back to `fake`.
+  (hosted, OSM-derived; §83). Requires `MAPBOX_ACCESS_TOKEN`; without it the
+  process refuses to start rather than falling back to `fake`.
 
   **§77 boundary:** the query is sent **server-side** with only the free-text
   destination — no account identity, cookie, or client IP crosses to Mapbox
   (see `docs/provider-transfer-inventory.md`). A Mapbox error is **graceful**: the
   search page shows a "location service unavailable" message rather than a 500.
+
+  **Cost control.** Two things bound what a hosted geocoder can be billed for.
+  Resolved destinations are cached in-process for 24 h (bounded at ~10k
+  queries), which covers the common case of the same handful of destinations
+  being searched repeatedly — including the home page, which now passes fixed
+  coordinates for its featured strip instead of geocoding a constant string on
+  every render. Searches that *miss* that cache are metered per client IP
+  (`RATE_GEOCODE_PER_IP` / `RATE_GEOCODE_WINDOW_SECS`, default 60 per 15 min);
+  over the budget `/search` answers 429 with a "try again in a few minutes"
+  notice and calls nobody. Cache hits and searches that carry coordinates are
+  never metered, because they cost nothing. The cache is per instance: a shared
+  ValKey tier (the rate limiter already talks to one) would let replicas share
+  the savings and survive restarts — a worthwhile follow-up, not a
+  correctness gap.
   Terms of service, attribution, rate limits and the **provider contract / DPA /
   international-transfer review** apply —
   Mapbox is a paid hosted SaaS (free tier ≈100k geocode/mo); self-hosted Photon
@@ -116,12 +237,16 @@ remain (Google OAuth) are documented below and must be replaced before launch.
 (MinIO in dev, AWS/S3/R2/B2 in prod; `S3_*` env) and served via **direct S3
 presigned GET URLs** — the browser hits the bucket and S3's SigV4 signature
 authorizes the read (no app-side proxy, no app signing secret). Selectable by
-`S3_ENDPOINT`/`S3_BUCKET`; defaults target the compose MinIO.
+`S3_ENDPOINT`/`S3_BUCKET`; the compose MinIO is the DEVELOPMENT default only —
+production must set every `S3_*` value (see §2a).
 
-**Email (Ledger #4) — done in code.** Provider is selected by `EMAIL_PROVIDER`
-(`fake` | `smtp` | `resend`, default `fake`; dev uses `smtp` → Mailpit). For
+**Email — done in code.** Provider is selected by `EMAIL_PROVIDER`
+(`fake` | `smtp` | `resend`, default `fake`; dev uses `smtp` → Mailpit). Asking
+for `smtp`/`resend` without its credentials is a startup error, never a silent
+fallback to the fake. For
 production set `EMAIL_PROVIDER=resend` + `RESEND_API_KEY`/`RESEND_FROM`, or
 `smtp` + `SMTP_*`. Only the production relay/ESP credentials remain (ops).
+Delivery itself goes through the job queue — see §5d.
 
 **Other providers (tiles, Google OAuth) still use dev impls —**
 **tiles are now configurable** (Ledger #3):
@@ -143,7 +268,7 @@ and moderation. Dev uses an in-memory limiter; production should run ValKey
 (Redis-compatible), which aggregates limits across instances and survives
 restarts. The app picks the backend from env (no code change):
 
-- no `VALKEY_URL`/`VALKEY_CLUSTER_URLS` → in-memory (default, dev/test).
+- no `VALKEY_URL`/`VALKEY_CLUSTER_URLS` → in-memory (default, dev/test only — production refuses to start on it).
 - `VALKEY_URL` → `ValKeyRateLimiter::single` (one node).
 - `VALKEY_CLUSTER_URLS` → `ValKeyRateLimiter::cluster` (a real cluster; the
   `redis-rs` `ClusterClient` auto-discovers nodes and routes each key to its
@@ -193,6 +318,36 @@ The always-on recurring jobs (`retention`, `jobs.gc`) are bootstrapped by the
 worker at startup (idempotent via a stable `idempotency_key`), so no manual
 seeding is required. The legacy `cargo run -- retention` subcommand still works
 as a manual escape hatch.
+
+## 5d. Transactional email goes through the queue
+
+Verification, password-reset and e-mail-change messages are **queued, not sent
+inline**. A request writes one `email.send` job (a single INSERT, in the same
+database as the account and token rows) and returns; the worker delivers it with
+the queue's retry budget (`JOBS_MAX_ATTEMPTS`), exponential backoff and
+dead-lettering. A slow or failing relay/ESP therefore cannot hold an HTTP
+request open, and cannot fail a registration *after* the account already exists.
+
+- **Language.** The message carries the recipient's locale (`users.locale`, set
+  at registration from the page's language and updated by the header language
+  toggle for signed-in users). Subject and body are rendered from the message
+  catalog *at send time* — pt-BR and en, never a hard-coded English string.
+- **No double sends.** Each job is enqueued under `email:{kind}:{sha256(link)}`,
+  so a retried or double-submitted request collapses onto the existing row. A
+  genuine re-send issues a new token, hence a new link and a new job.
+- **Dead letters.** An exhausted job logs at `error!` with the message kind and
+  the recipient's *domain* only (never the address, never the link) and stays in
+  `background_job` as `failed` with `last_error` until `jobs.gc` removes it.
+  Alert on that log line: it means someone is stuck without a verification or
+  reset link and needs a re-send.
+- **`JOBS_ENABLED=false`.** No worker runs, so nothing would ever claim an
+  `email.send` row. The app detects this at wiring time and sends **inline** on
+  the request path instead (same provider, same localized rendering) — mail is
+  never silently queued into a void. The trade-off returns with it: a slow ESP
+  is back on the user's request. Prefer leaving the worker on; if you run
+  web-only instances, make sure at least one instance (or a dedicated worker
+  deployment) has `JOBS_ENABLED=true`. Startup validation needs no new rule
+  here: both wirings deliver, so neither is a misconfiguration.
 
 ## 6. Rolling deploy + rollback
 

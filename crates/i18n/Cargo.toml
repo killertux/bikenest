@@ -1,0 +1,16 @@
+[package]
+name = "bikenest-i18n"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# The axum request extractor (`Locale` as a handler argument) and
+# `Locale::from_headers`. Enabled by the web crate only: the infrastructure
+# layer renders emails from a stored locale and must not pull axum in.
+axum = ["dep:axum"]
+
+[dependencies]
+axum = { workspace = true, optional = true }

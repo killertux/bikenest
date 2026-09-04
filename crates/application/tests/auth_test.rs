@@ -4,13 +4,13 @@
 use async_trait::async_trait;
 use bikenest_application::{
     AccountRepository, AuditEvent, AuditLog, AuthError, AuthService, AuthenticatedUser, Clock,
-    EmailError, EmailProvider, IdentityRecord, LoginOutcome, NewAccount, OAuthProvider,
-    OutboundEmail, PasswordHasher, RateLimitError, RateLimiter, Session, SessionStore,
-    TokenGenerator, TokenStore,
+    EmailError, EmailKind, EmailMessage, EmailQueue, IdentityRecord, LoginOutcome, NewAccount,
+    OAuthProvider, PasswordHasher, RateLimitError, RateLimiter, Session, SessionStore,
+    TokenGenerator, TokenStore, UserActivity, UserSearch,
 };
 use bikenest_domain::{
-    AccountState, AuthenticationProvider, CsrfToken, Password, ProviderIdentity, Role, SessionId,
-    User, UserEmail, UserId, VerificationToken,
+    AccountState, AuthenticationProvider, CsrfToken, LocaleCode, Password, ProviderIdentity, Role,
+    SessionId, User, UserEmail, UserId, VerificationToken,
 };
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -28,7 +28,13 @@ struct FakeDb {
     sessions: Vec<(String, Session)>, // keyed by raw session id hex
     verification: Vec<(String, UserId, String, bool)>, // (token hex, user, email, used)
     reset: Vec<(String, UserId, bool)>,
-    emails: Vec<OutboundEmail>,
+    /// What the use cases handed to the email *queue*. Nothing here was
+    /// delivered: `AuthService` can no longer reach a provider at all, which is
+    /// the point — a broken ESP cannot fail a registration any more.
+    emails: Vec<EmailMessage>,
+    /// Set to make `FakeQueue::enqueue` fail, standing in for "the database
+    /// that holds the job queue is unreachable".
+    queue_broken: bool,
     next_id: i64,
 }
 
@@ -72,6 +78,7 @@ impl AccountRepository for FakeRepo {
         let id = UserId(db.next_id);
         let mut user = User::new(id, new.email.clone(), new.display_name.map(str::to_string));
         user.account_state = new.state;
+        user.locale = new.locale;
         db.users.push(user);
         if !new.password_hash.is_empty() {
             db.identities.push(IdentityRecord {
@@ -83,6 +90,19 @@ impl AccountRepository for FakeRepo {
             });
         }
         Ok(id)
+    }
+    async fn set_locale(&self, id: UserId, locale: LocaleCode) -> Result<(), AuthError> {
+        if let Some(u) = self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter_mut()
+            .find(|u| u.id == id)
+        {
+            u.locale = locale;
+        }
+        Ok(())
     }
     async fn set_state(&self, id: UserId, state: AccountState) -> Result<(), AuthError> {
         if let Some(u) = self
@@ -202,6 +222,16 @@ impl AccountRepository for FakeRepo {
             .map(|u| u.roles.clone())
             .unwrap_or_default())
     }
+    async fn count_admins(&self) -> Result<i64, AuthError> {
+        Ok(self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter()
+            .filter(|u| u.roles.contains(&Role::Admin))
+            .count() as i64)
+    }
     async fn grant_role(&self, id: UserId, role: Role, _by: UserId) -> Result<(), AuthError> {
         if let Some(u) = self
             .db
@@ -216,8 +246,20 @@ impl AccountRepository for FakeRepo {
         }
         Ok(())
     }
-    async fn revoke_role(&self, id: UserId, role: Role) -> Result<bool, AuthError> {
+    /// Mirrors the SQL repository: the last-admin refusal and the delete are
+    /// one indivisible step (here, one `Mutex` guard) — the guard is the
+    /// repository's job, not the service's.
+    async fn revoke_role_guarded(&self, id: UserId, role: Role) -> Result<bool, AuthError> {
         let mut db = self.db.lock().unwrap();
+        let admins: Vec<UserId> = db
+            .users
+            .iter()
+            .filter(|u| u.roles.contains(&Role::Admin))
+            .map(|u| u.id)
+            .collect();
+        if role == Role::Admin && admins.len() <= 1 && admins.contains(&id) {
+            return Err(AuthError::RefuseAdminSelfRevoke);
+        }
         if let Some(u) = db.users.iter_mut().find(|u| u.id == id) {
             let before = u.roles.len();
             u.roles.retain(|r| *r != role);
@@ -228,6 +270,54 @@ impl AccountRepository for FakeRepo {
     }
     async fn list_users(&self) -> Result<Vec<User>, AuthError> {
         Ok(self.db.lock().unwrap().users.clone())
+    }
+    async fn search_users(&self, search: UserSearch<'_>) -> Result<Vec<User>, AuthError> {
+        let needle = search.query.map(str::to_lowercase);
+        let mut users: Vec<User> = self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter()
+            .filter(|u| match &needle {
+                Some(n) => {
+                    u.email.as_str().to_lowercase().contains(n)
+                        || u.display_name
+                            .as_deref()
+                            .is_some_and(|d| d.to_lowercase().contains(n))
+                }
+                None => true,
+            })
+            .filter(|u| search.after_id.is_none_or(|after| u.id.0 < after))
+            .cloned()
+            .collect();
+        users.sort_by_key(|u| std::cmp::Reverse(u.id.0));
+        users.truncate(search.limit.clamp(1, 200) as usize);
+        Ok(users)
+    }
+    async fn labels_for(&self, ids: &[i64]) -> Result<HashMap<i64, String>, AuthError> {
+        Ok(self
+            .db
+            .lock()
+            .unwrap()
+            .users
+            .iter()
+            .filter(|u| ids.contains(&u.id.0))
+            .map(|u| {
+                (
+                    u.id.0,
+                    u.display_name
+                        .clone()
+                        .unwrap_or_else(|| u.email.as_str().to_string()),
+                )
+            })
+            .collect())
+    }
+    async fn activity_for(&self, ids: &[i64]) -> Result<HashMap<i64, UserActivity>, AuthError> {
+        Ok(ids
+            .iter()
+            .map(|id| (*id, UserActivity::default()))
+            .collect())
     }
 }
 
@@ -413,15 +503,19 @@ impl Clock for FakeClock {
     }
 }
 
-// --- EmailProvider (captures OutboundEmails into the FakeDb) ---
+// --- EmailQueue (records the handed-off messages; never delivers) ---
 #[derive(Clone)]
-struct FakeEmail {
+struct FakeQueue {
     db: Arc<Mutex<FakeDb>>,
 }
 #[async_trait]
-impl EmailProvider for FakeEmail {
-    async fn send(&self, email: OutboundEmail) -> Result<(), EmailError> {
-        self.db.lock().unwrap().emails.push(email);
+impl EmailQueue for FakeQueue {
+    async fn enqueue(&self, msg: EmailMessage) -> Result<(), EmailError> {
+        let mut db = self.db.lock().unwrap();
+        if db.queue_broken {
+            return Err(EmailError::Unavailable);
+        }
+        db.emails.push(msg);
         Ok(())
     }
 }
@@ -503,7 +597,7 @@ fn make_service(db: Arc<Mutex<FakeDb>>) -> AuthService {
             n: Arc::new(Mutex::new(0)),
         }),
         Box::new(FakeClock::new(Utc::now())),
-        Box::new(FakeEmail { db: db.clone() }),
+        Box::new(FakeQueue { db: db.clone() }),
         Box::new(FakeOauth {
             email: "oauth.user@example.com".into(),
             subject: "sub-1".into(),
@@ -597,7 +691,13 @@ async fn register_email_taken_is_leak_free() {
     seed_active_user(&db, "taken@example.com", "x");
     let auth = make_service(db.clone());
     let result = auth
-        .register("1.1.1.1", "taken@example.com", None, "password123")
+        .register(
+            "1.1.1.1",
+            "taken@example.com",
+            None,
+            "password123",
+            LocaleCode::PtBr,
+        )
         .await;
     assert!(
         result.is_ok(),
@@ -609,11 +709,164 @@ async fn register_email_taken_is_leak_free() {
     assert_eq!(db.lock().unwrap().users.len(), 1);
 }
 
+/// The i18n rule applied to mail: `register` hands the queue a *description*
+/// of the message — kind, recipient, link and the locale the signup happened
+/// in — and no subject or body. Rendering happens in the layer that owns the
+/// catalog, so a pt-BR signup cannot receive an English email.
+#[tokio::test]
+async fn register_queues_one_message_carrying_the_signup_locale() {
+    for locale in [LocaleCode::PtBr, LocaleCode::En] {
+        let db = Arc::new(Mutex::new(FakeDb::default()));
+        let auth = make_service(db.clone());
+        auth.register("1.1.1.1", "a@example.com", None, "password123", locale)
+            .await
+            .unwrap();
+
+        let queued = db.lock().unwrap().emails.clone();
+        assert_eq!(queued.len(), 1, "exactly one message per registration");
+        assert_eq!(queued[0].to, "a@example.com");
+        assert_eq!(queued[0].locale, locale);
+        assert!(
+            matches!(queued[0].kind, EmailKind::VerifyEmail { .. }),
+            "{:?}",
+            queued[0].kind
+        );
+        assert!(queued[0].kind.link().contains("/verify-email?token="));
+
+        // The locale is also on the account, so the *next* message — a resend
+        // or a password reset, both sent with no request in scope — finds it.
+        assert_eq!(db.lock().unwrap().users[0].locale, locale);
+    }
+}
+
+/// The registration succeeds without anything being delivered: the service
+/// holds an `EmailQueue`, not a provider, so a slow or broken relay is no
+/// longer on the request path at all. (The queue double here records and never
+/// sends; `register` still returns `Ok`.)
+#[tokio::test]
+async fn register_does_not_wait_on_delivery() {
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let auth = make_service(db.clone());
+    assert!(
+        auth.register(
+            "1.1.1.1",
+            "a@example.com",
+            None,
+            "password123",
+            LocaleCode::PtBr
+        )
+        .await
+        .is_ok()
+    );
+    // Handed off, not sent.
+    assert_eq!(db.lock().unwrap().emails.len(), 1);
+    assert_eq!(
+        db.lock().unwrap().users[0].account_state,
+        AccountState::PendingEmailVerification
+    );
+}
+
+/// If the hand-off itself fails there is nothing to recover from later, so the
+/// registration fails too: telling someone to check their inbox when no message
+/// exists (and none ever will) is worse than asking them to try again.
+#[tokio::test]
+async fn a_failing_queue_fails_the_registration() {
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    db.lock().unwrap().queue_broken = true;
+    let auth = make_service(db.clone());
+
+    let err = auth
+        .register(
+            "1.1.1.1",
+            "a@example.com",
+            None,
+            "password123",
+            LocaleCode::PtBr,
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(err, AuthError::Internal);
+    assert!(db.lock().unwrap().emails.is_empty());
+    // The account and token rows were already written when the enqueue failed
+    // (the repository ports expose no shared transaction). That is recoverable
+    // and left deliberately visible: the address is unverified, so "resend
+    // verification" issues a fresh token and queues a fresh message.
+    assert_eq!(db.lock().unwrap().users.len(), 1);
+    assert_eq!(
+        db.lock().unwrap().users[0].account_state,
+        AccountState::PendingEmailVerification
+    );
+}
+
+/// A resend, a reset and an email change all happen without a page being
+/// rendered, so their locale can only come from the stored one.
+#[tokio::test]
+async fn later_messages_use_the_stored_account_locale() {
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let id = seed_active_user(&db, "a@example.com", "correct-horse");
+    db.lock()
+        .unwrap()
+        .users
+        .iter_mut()
+        .find(|u| u.id == id)
+        .unwrap()
+        .locale = LocaleCode::En;
+    let auth = make_service(db.clone());
+    let email = UserEmail::parse("a@example.com").unwrap();
+
+    auth.resend_verification("1.1.1.1", &email).await.unwrap();
+    auth.request_password_reset("1.1.1.1", &email)
+        .await
+        .unwrap();
+    auth.change_email(
+        id,
+        "correct-horse",
+        &UserEmail::parse("new@example.com").unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let queued = db.lock().unwrap().emails.clone();
+    assert_eq!(queued.len(), 3);
+    assert!(
+        queued.iter().all(|m| m.locale == LocaleCode::En),
+        "every message follows the account language: {queued:?}"
+    );
+    assert!(matches!(queued[0].kind, EmailKind::VerifyEmail { .. }));
+    assert!(matches!(queued[1].kind, EmailKind::ResetPassword { .. }));
+    // An email change is its own message kind (and goes to the NEW address).
+    assert!(matches!(
+        queued[2].kind,
+        EmailKind::ConfirmEmailChange { .. }
+    ));
+    assert_eq!(queued[2].to, "new@example.com");
+}
+
+/// The language toggle persists for a signed-in user, so mail sent after it
+/// switches too.
+#[tokio::test]
+async fn set_locale_updates_the_account() {
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let id = seed_active_user(&db, "a@example.com", "correct-horse");
+    let auth = make_service(db.clone());
+    assert_eq!(db.lock().unwrap().users[0].locale, LocaleCode::PtBr);
+
+    auth.set_locale(id, LocaleCode::En).await.unwrap();
+    assert_eq!(db.lock().unwrap().users[0].locale, LocaleCode::En);
+
+    let email = UserEmail::parse("a@example.com").unwrap();
+    auth.request_password_reset("1.1.1.1", &email)
+        .await
+        .unwrap();
+    assert_eq!(db.lock().unwrap().emails[0].locale, LocaleCode::En);
+}
+
 #[tokio::test]
 async fn register_rejects_weak_password() {
     let auth = make_service(Arc::new(Mutex::new(FakeDb::default())));
     let err = auth
-        .register("1.1.1.1", "a@example.com", None, "short")
+        .register("1.1.1.1", "a@example.com", None, "short", LocaleCode::PtBr)
         .await;
     assert_eq!(err.unwrap_err(), AuthError::WeakPassword);
 }
@@ -623,9 +876,15 @@ async fn register_rejects_weak_password() {
 async fn verify_email_consumes_token_single_use() {
     let db = Arc::new(Mutex::new(FakeDb::default()));
     let auth = make_service(db.clone());
-    auth.register("1.1.1.1", "a@example.com", None, "password123")
-        .await
-        .unwrap();
+    auth.register(
+        "1.1.1.1",
+        "a@example.com",
+        None,
+        "password123",
+        LocaleCode::PtBr,
+    )
+    .await
+    .unwrap();
     let user_id = db.lock().unwrap().users[0].id;
     assert!(db.lock().unwrap().users[0].email_verified_at.is_none());
 
@@ -706,9 +965,158 @@ async fn grant_role_requires_admin_and_refuses_last_admin_self_revoke() {
     assert_eq!(err.unwrap_err(), AuthError::RefuseAdminSelfRevoke);
 }
 
+#[tokio::test]
+async fn admin_may_revoke_another_admin_until_it_would_leave_none() {
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let a = seed_user_with_roles(&db, "a@example.com", vec![Role::User, Role::Admin]);
+    let b = seed_user_with_roles(&db, "b@example.com", vec![Role::User, Role::Admin]);
+    let auth = make_service(db.clone());
+    let actor = actor_for(&db, a);
+
+    // Two admins: revoking B's ADMIN is fine.
+    auth.revoke_role(&actor, b, Role::Admin).await.unwrap();
+    assert!(!roles_of(&db, b).contains(&Role::Admin));
+
+    // A is now the only admin: revoking it — from anyone — is refused.
+    let err = auth.revoke_role(&actor, a, Role::Admin).await.unwrap_err();
+    assert_eq!(err, AuthError::RefuseAdminSelfRevoke);
+    assert!(roles_of(&db, a).contains(&Role::Admin));
+}
+
+#[tokio::test]
+async fn the_repository_owns_the_last_admin_guard_not_the_service() {
+    // The refusal is the repository's, taken atomically with the delete. The
+    // service used to count admins itself and then call a plain `revoke_role`,
+    // which two concurrent revokes could both pass. Calling the repository
+    // directly proves the guard has moved and cannot be bypassed by any other
+    // caller of the port.
+    use bikenest_application::AccountRepository;
+
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let a = seed_user_with_roles(&db, "guard-a@example.com", vec![Role::User, Role::Admin]);
+    let b = seed_user_with_roles(
+        &db,
+        "guard-b@example.com",
+        vec![Role::User, Role::Moderator],
+    );
+    let repo = FakeRepo::new(db.clone());
+
+    // Sole admin: refused, and the role is still there.
+    let err = repo
+        .revoke_role_guarded(a, Role::Admin)
+        .await
+        .expect_err("the sole admin must not be demotable");
+    assert_eq!(err, AuthError::RefuseAdminSelfRevoke);
+    assert!(roles_of(&db, a).contains(&Role::Admin));
+
+    // A role the target does not hold removes no admin: a no-op, not a refusal.
+    assert!(!repo.revoke_role_guarded(a, Role::Moderator).await.unwrap());
+    // And a non-ADMIN revoke on someone else is unaffected by the guard.
+    assert!(repo.revoke_role_guarded(b, Role::Moderator).await.unwrap());
+    assert!(!roles_of(&db, b).contains(&Role::Moderator));
+}
+
+#[tokio::test]
+async fn last_admin_cannot_self_demote() {
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let a = seed_user_with_roles(&db, "only@example.com", vec![Role::User, Role::Admin]);
+    let auth = make_service(db.clone());
+    let actor = actor_for(&db, a);
+
+    let err = auth.revoke_role(&actor, a, Role::Admin).await.unwrap_err();
+    assert_eq!(err, AuthError::RefuseAdminSelfRevoke);
+    assert!(roles_of(&db, a).contains(&Role::Admin));
+}
+
+#[tokio::test]
+async fn admin_may_self_demote_while_another_admin_remains() {
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let a = seed_user_with_roles(&db, "a2@example.com", vec![Role::User, Role::Admin]);
+    let _b = seed_user_with_roles(&db, "b2@example.com", vec![Role::User, Role::Admin]);
+    let auth = make_service(db.clone());
+    let actor = actor_for(&db, a);
+
+    auth.revoke_role(&actor, a, Role::Admin).await.unwrap();
+    assert!(!roles_of(&db, a).contains(&Role::Admin));
+}
+
+#[tokio::test]
+async fn revoking_a_non_admin_role_is_unaffected_by_the_admin_floor() {
+    // One admin in the system, but the revoke removes MODERATOR from someone
+    // else — the floor must not block it.
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let a = seed_user_with_roles(&db, "a3@example.com", vec![Role::User, Role::Admin]);
+    let b = seed_user_with_roles(&db, "b3@example.com", vec![Role::User, Role::Moderator]);
+    let auth = make_service(db.clone());
+    let actor = actor_for(&db, a);
+
+    auth.revoke_role(&actor, b, Role::Moderator).await.unwrap();
+    assert!(!roles_of(&db, b).contains(&Role::Moderator));
+}
+
+#[tokio::test]
+async fn change_email_to_a_taken_address_is_refused_before_any_token() {
+    let db = Arc::new(Mutex::new(FakeDb::default()));
+    let user = seed_active_user(&db, "old@example.com", "correct-horse");
+    seed_active_user(&db, "taken@example.com", "other-secret");
+    let auth = make_service(db.clone());
+    // Registration/verification mail from the seeding never happens (the users
+    // are inserted directly), so the mailbox starts empty.
+    assert!(db.lock().unwrap().emails.is_empty());
+
+    let err = auth
+        .change_email(
+            user,
+            "correct-horse",
+            &UserEmail::parse("taken@example.com").unwrap(),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(err, AuthError::EmailTaken);
+    assert!(
+        db.lock().unwrap().verification.is_empty(),
+        "no verification token issued for a taken address"
+    );
+    assert!(
+        db.lock().unwrap().emails.is_empty(),
+        "no mail sent for a taken address"
+    );
+    assert_eq!(
+        db.lock().unwrap().users[0].email.as_str(),
+        "old@example.com",
+        "the address is unchanged"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn seed_user_with_roles(db: &Arc<Mutex<FakeDb>>, email: &str, roles: Vec<Role>) -> UserId {
+    let mut g = db.lock().unwrap();
+    g.next_id += 1;
+    let id = UserId(g.next_id);
+    let mut user = User::new(id, UserEmail::parse(email).unwrap(), None);
+    user.account_state = AccountState::Active;
+    user.roles = roles;
+    g.users.push(user);
+    id
+}
+
+fn actor_for(db: &Arc<Mutex<FakeDb>>, id: UserId) -> AuthenticatedUser {
+    let g = db.lock().unwrap();
+    AuthenticatedUser::from_user(g.users.iter().find(|u| u.id == id).expect("seeded user"))
+}
+
+fn roles_of(db: &Arc<Mutex<FakeDb>>, id: UserId) -> Vec<Role> {
+    let g = db.lock().unwrap();
+    g.users
+        .iter()
+        .find(|u| u.id == id)
+        .map(|u| u.roles.clone())
+        .unwrap_or_default()
+}
 
 fn seed_active_user(db: &Arc<Mutex<FakeDb>>, email: &str, password: &str) -> UserId {
     let mut g = db.lock().unwrap();
@@ -727,14 +1135,14 @@ fn seed_active_user(db: &Arc<Mutex<FakeDb>>, email: &str, password: &str) -> Use
     id
 }
 
-/// Find the token param in the first captured email whose text contains `path`.
+/// Find the token param on the first queued message whose link contains `path`.
 fn find_token(db: &Arc<Mutex<FakeDb>>, path: &str) -> String {
     db.lock()
         .unwrap()
         .emails
         .iter()
-        .find(|e| e.text.contains(path))
-        .map(|e| token_from(&e.text))
+        .find(|e| e.kind.link().contains(path))
+        .map(|e| token_from(e.kind.link()))
         .unwrap_or_default()
 }
 

@@ -3,12 +3,14 @@
 use crate::Db;
 use crate::auth::{SqlxAuditLog, SystemClock};
 use crate::config::Config;
+use crate::job::email::SendEmailHandler;
 use crate::job::repo::SqlxJobRepository;
 use crate::privacy::SqlxRetentionRepository;
 use async_trait::async_trait;
-use bikenest_application::{JOB_JOBS_GC, JOB_RETENTION, JobError, JobHandler, JobPayload};
+use bikenest_application::{
+    EmailProvider, JOB_JOBS_GC, JOB_RETENTION, JobError, JobHandler, JobPayload,
+};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// An always-on recurring job the worker bootstraps at startup (self-healing:
@@ -54,12 +56,18 @@ pub struct JobServices {
     pub registry: Arc<JobRegistry>,
 }
 
-/// Build the built-in job handlers from the real infrastructure (like
-/// `storage_from_env`). Wires retention (backed by `RetentionJob`) and `jobs.gc`.
+/// Build the built-in job handlers from the real infrastructure. Wires
+/// retention (backed by `RetentionJob`), `jobs.gc` and `email.send`.
+///
+/// `email` is the same provider instance the router holds, so a deployment
+/// running with `JOBS_ENABLED=false` (where the inline `EmailQueue` sends on
+/// the request path) and one running with the worker talk to one configured
+/// relay/ESP, not two.
 pub fn job_services(
     db: Db,
     config: &Config,
     storage: Arc<dyn bikenest_application::ObjectStorage>,
+    email: Arc<dyn EmailProvider>,
 ) -> JobServices {
     let repo = SqlxJobRepository::new(db.clone());
     let handlers: Vec<Box<dyn JobHandler>> = vec![
@@ -68,6 +76,7 @@ pub fn job_services(
             repo.clone(),
             config.jobs.history_retention_days,
         )),
+        Box::new(SendEmailHandler::new(email)),
     ];
     let recurring = vec![
         RecurringKind {
@@ -103,14 +112,11 @@ impl RetentionJobHandler {
         config: &Config,
         storage: Arc<dyn bikenest_application::ObjectStorage>,
     ) -> Self {
-        // The media wardrobe is a filesystem path only used by the S3-less orphan
-        // sweep (a no-op for S3 — there is no local disk to walk). Default to the
-        // gitignored `media/` dir.
-        let media_root = std::env::var("MEDIA_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("media"));
-        let retention =
-            SqlxRetentionRepository::new(db.clone(), config.retention, storage.clone(), media_root);
+        // `storage` is the same object store the request path writes uploads to:
+        // the retention orphan sweep lists it under `uploads/` and deletes aged,
+        // unreferenced keys, so the job and the uploads it collects cannot
+        // disagree about where the objects live.
+        let retention = SqlxRetentionRepository::new(db.clone(), config.retention, storage.clone());
         let job = bikenest_application::RetentionJob::new(
             Box::new(retention),
             Box::new(SqlxAuditLog::new(db.clone())),

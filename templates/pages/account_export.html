@@ -33,8 +33,14 @@
             <td class="py-3 pr-4 font-mono text-xs text-fg">{{ item.expires_label }}</td>
             <td class="py-3">
               <span class="text-xs">{{ item.state_label }}</span>
-              {% if item.is_ready && item.download_token.is_some() %}
-                <a href="/account/export/{{ item.id }}/download?token={{ item.download_token.as_deref().unwrap_or("") }}" class="mt-1 block text-xs font-medium text-accent-strong hover:underline">{{ tr.t("export.download") }}</a>
+              {% if item.downloadable %}
+                {# No `?token=` — the single-use token is in the path-scoped
+                   `export_{id}` cookie, which the browser attaches to this
+                   very URL. `download` is both the correct semantics for an
+                   attachment and htmx's own opt-out from boosting
+                   (`#shouldBoost` skips `a[download]`): a boosted fetch would
+                   swap the JSON export into <body> instead of saving it. #}
+                <a href="/account/export/{{ item.id }}/download" download class="mt-1 block text-xs font-medium text-accent-strong hover:underline">{{ tr.t("export.download") }}</a>
               {% endif %}
             </td>
           </tr>

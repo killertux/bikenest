@@ -1,12 +1,15 @@
 {% extends "layouts/base.html" %}
+{% import "components/search_state_inputs.html" as state %}
 {% block content %}
 <div x-data="searchFilters">
 
 <!-- ======== Search strip (P2 — pre-filled, editable) ======== -->
 <section class="border-b border-border bg-surface">
   <div class="mx-auto max-w-shell px-4 pb-6 pt-8 lg:px-8">
-    <h1 class="font-display text-2xl font-bold tracking-tight sm:text-3xl">
-      {% if let Some(label) = results.destination_label %}
+    <h1 id="search-heading" class="font-display text-2xl font-bold tracking-tight sm:text-3xl">
+      {% if results.browse %}
+        {{ tr.t("search.browse.heading") }}
+      {% else if let Some(label) = results.destination_label %}
         {{ tr.t("search.heading.near") }} <span class="text-accent-strong">“{{ label }}”</span>
       {% else %}
         {{ tr.t("search.heading.generic") }}
@@ -17,17 +20,17 @@
       id="search-form"
       action="/search" method="get"
       hx-get="/search" hx-target="#results" hx-swap="innerHTML"
+      hx-push-url="true" hx-indicator="#results-indicator"
       class="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center"
     >
-      {% if let Some(lat) = form.lat %}<input type="hidden" name="lat" value="{{ lat }}" />{% endif %}
-      {% if let Some(lon) = form.lon %}<input type="hidden" name="lon" value="{{ lon }}" />{% endif %}
+      {% call state::hidden(form, true, false, false, true) %}
       <div class="relative flex-1">
         <svg aria-hidden="true" class="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-muted" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
         <label for="q" class="sr-only">{{ tr.t("home.search.placeholder") }}</label>
         <input
           id="q" name="q" type="search" value="{{ form.q }}"
           placeholder="{{ tr.t("home.search.placeholder") }}"
-          class="h-12 w-full rounded-xl border border-border bg-bg pl-11 pr-4 text-[15px] text-fg placeholder:text-muted focus:border-accent focus:outline-none"
+          class="h-12 w-full rounded-xl border border-border bg-bg pl-11 pr-4 text-[15px] text-fg placeholder:text-muted focus:border-accent"
         />
       </div>
       <div class="flex gap-3">
@@ -56,24 +59,27 @@
         {% if results.error.is_some() %}{% else %}{{ results.total_label }}{% endif %}
       </p>
       <div class="flex items-center gap-2.5">
-        <button @click="toggleMap" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg lg:hidden">
+        {% if can_contribute %}
+          <a href="/parking/new" class="inline-flex items-center gap-1.5 rounded-lg bg-accent-strong px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-dark">
+            <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="M12 5v14" /></svg>
+            {{ tr.t("nav.add_spot") }}
+          </a>
+        {% else if is_authenticated %}
+          <a href="/account" class="text-xs text-muted hover:text-fg">{{ tr.t("nav.verify_to_contribute") }}</a>
+        {% else %}
+          <a href="/register" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg hover:border-fg">{{ tr.t("nav.signup_to_add") }}</a>
+        {% endif %}
+        <button @click="toggleMap" :aria-expanded="mapOpen" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg">
           <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.5 9.9 3.8 4 6v15l5.9-2.2 4.2 1.7 5.9-2.3V3.7Z" /><path d="M9.9 3.8v15" /><path d="M14.1 5.5v15" /></svg>
           <span x-text="mapOpen ? '{{ tr.t("search.map.hide") }}' : '{{ tr.t("search.map.show") }}'">{{ tr.t("search.map.show") }}</span>
         </button>
-        <form action="/search" method="get" hx-get="/search" hx-target="#results" hx-swap="innerHTML" class="flex items-center gap-2.5">
-          {% if let Some(lat) = form.lat %}<input type="hidden" name="lat" value="{{ lat }}" />{% endif %}
-          {% if let Some(lon) = form.lon %}<input type="hidden" name="lon" value="{{ lon }}" />{% endif %}
-          {% if q_set() %}<input type="hidden" name="q" value="{{ form.q }}" />{% endif %}
-          {% if let Some(r) = form.radius %}<input type="hidden" name="radius" value="{{ r }}" />{% endif %}
-          {% if !form.cost.is_empty() %}<input type="hidden" name="cost" value="{{ form.cost }}" />{% endif %}
-          {% if !form.parking_type.is_empty() %}<input type="hidden" name="type" value="{{ form.parking_type }}" />{% endif %}
-          {% if !form.security.is_empty() %}<input type="hidden" name="security" value="{{ form.security }}" />{% endif %}
-          {% if !form.open_now.is_empty() %}<input type="hidden" name="open_now" value="{{ form.open_now }}" />{% endif %}
+        <form action="/search" method="get" hx-get="/search" hx-target="#results" hx-swap="innerHTML" hx-push-url="true" hx-indicator="#results-indicator" class="flex items-center gap-2.5">
+          {% call state::hidden(form, false, true, false, false) %}
           <label class="flex items-center gap-2 text-sm text-muted">
             {{ tr.t("search.sort.label") }}
             <select
               name="sort" @change="submitSort"
-              class="h-9 rounded-lg border border-border bg-surface px-2.5 text-sm font-medium text-fg focus:border-accent focus:outline-none"
+              class="h-9 rounded-lg border border-border bg-surface px-2.5 text-sm font-medium text-fg focus:border-accent"
             >
               <option value="recommended" {% if sort_is("recommended") || sort_none() %}selected{% endif %}>{{ tr.t("search.sort.recommended") }}</option>
               <option value="distance" {% if sort_is("distance") %}selected{% endif %}>{{ tr.t("search.sort.distance") }}</option>
@@ -82,6 +88,7 @@
               <option value="recently_verified" {% if sort_is("recently_verified") %}selected{% endif %}>{{ tr.t("search.sort.recently_verified") }}</option>
             </select>
           </label>
+          <noscript><button type="submit" class="rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg">{{ tr.t("search.filters.apply") }}</button></noscript>
         </form>
         <button @click="toggleFilters" :aria-expanded="filtersOpen" class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-medium text-fg">
           <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18" /><path d="M7 12h10" /><path d="M10 18h4" /></svg>
@@ -94,18 +101,16 @@
     <div x-show="filtersOpen" class="mt-4 rounded-2xl border border-border bg-surface p-5 shadow-card">
       <div class="flex items-center justify-between">
         <h2 class="font-display text-sm font-semibold uppercase tracking-wide text-muted">{{ tr.t("search.filters.results") }}</h2>
-        <a href="/search{% if q_set() %}?q={{ form.q }}{% endif %}" class="text-sm font-medium text-accent-strong hover:text-accent-dark">{{ tr.t("search.filters.clear") }}</a>
+        <a href="/search{% if q_set() %}?q={{ form.q|urlencode }}{% endif %}" class="text-sm font-medium text-accent-strong hover:text-accent-dark">{{ tr.t("search.filters.clear") }}</a>
       </div>
       <form
         action="/search" method="get"
         hx-get="/search" hx-target="#results" hx-swap="innerHTML"
         hx-trigger="change from:input[type='checkbox'], change from:input[type='radio'], change from:select"
+        hx-push-url="true" hx-indicator="#results-indicator"
         class="mt-4 grid gap-6 md:grid-cols-3"
       >
-        {% if q_set() %}<input type="hidden" name="q" value="{{ form.q }}" />{% endif %}
-        {% if let Some(lat) = form.lat %}<input type="hidden" name="lat" value="{{ lat }}" />{% endif %}
-        {% if let Some(lon) = form.lon %}<input type="hidden" name="lon" value="{{ lon }}" />{% endif %}
-        {% if sort_set() %}<input type="hidden" name="sort" value="{{ form.sort }}" />{% endif %}
+        {% call state::hidden(form, false, false, true, false) %}
 
         <fieldset>
           <legend class="mb-2.5 text-sm font-semibold text-fg">{{ tr.t("search.filters.type") }}</legend>
@@ -144,12 +149,13 @@
         </fieldset>
         <fieldset class="md:col-span-1">
           <legend class="mb-2.5 text-sm font-semibold text-fg">{{ tr.t("search.filters.radius") }}</legend>
-          <select name="radius" class="h-10 w-full rounded-lg border border-border bg-bg px-2.5 text-sm font-medium text-fg focus:border-accent focus:outline-none">
+          <select name="radius" class="h-10 w-full rounded-lg border border-border bg-bg px-2.5 text-sm font-medium text-fg focus:border-accent">
             <option value="" {% if radius_none() %}selected{% endif %}>1 km · {{ tr.t("search.radius.default") }}</option>
             <option value="250" {% if radius_is(250) %}selected{% endif %}>250 m</option>
             <option value="500" {% if radius_is(500) %}selected{% endif %}>500 m</option>
             <option value="1000" {% if radius_is(1000) %}selected{% endif %}>1 km</option>
             <option value="2000" {% if radius_is(2000) %}selected{% endif %}>2 km</option>
+            <option value="5000" {% if radius_is(5000) %}selected{% endif %}>{{ tr.t("search.radius.5km") }}</option>
           </select>
           <p class="mt-2 text-xs text-muted">{{ tr.t("search.radius.hint") }}</p>
         </fieldset>
@@ -175,7 +181,31 @@
               </button>
             </div>
             <div class="relative aspect-[5/4] overflow-hidden">
-              <div id="map" class="absolute inset-0"></div>
+              <div
+                id="map" class="absolute inset-0"
+                data-label-destination="{{ tr.t("map.destination") }}"
+                data-label-on-map="{{ tr.t("map.on_map") }}"
+                data-label-spot="{{ tr.t("map.spot") }}"
+                data-label-details="{{ tr.t("card.view") }}"
+                data-label-cluster="{{ tr.t("map.cluster") }}"
+              ></div>
+              <!-- Appears once the viewer has panned or zoomed: the map's own
+                   box, submitted as a browse search. Inside the map frame so it
+                   reads as "this area", and hidden until there is an area to
+                   search (Alpine's `moved`, set from `bikenest:map-moved`). -->
+              <form
+                x-show="moved" x-cloak
+                action="/search" method="get"
+                hx-get="/search" hx-target="#results" hx-swap="innerHTML"
+                hx-push-url="true" hx-indicator="#results-indicator"
+                class="absolute inset-x-0 bottom-3 flex justify-center"
+              >
+                {% call state::browse(form) %}
+                <button type="submit" class="inline-flex items-center gap-1.5 rounded-full bg-accent-strong px-4 py-2 text-sm font-medium text-white shadow-pop transition-colors hover:bg-accent-dark">
+                  <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg>
+                  {{ tr.t("search.browse.here") }}
+                </button>
+              </form>
             </div>
             <div class="flex items-center justify-between border-t border-border px-4 py-3">
               <p class="font-mono text-[11px] text-muted">{{ tr.t("search.map.pins") }}</p>
@@ -185,11 +215,23 @@
         </div>
       </div>
 
-      <!-- Results list (the accessible non-map alternative, §23) -->
-      <div class="lg:col-span-7" :class="resultsClass">
+      <!-- Results list (the accessible non-map alternative) -->
+      <!-- The column's width is the binding's alone: a static `lg:col-span-7`
+           here would fight `resultsClass` when the map is hidden. Both literal
+           class strings live in app.js (and input.css's `@source inline`), so
+           Tailwind still generates them. -->
+      <div :class="resultsClass">
         <div class="relative">
+          {# The map's data island: a sibling of `#results`, never a child of
+             it — `role="list"` must contain only `role="listitem"` articles
+             (WP21 a11y pass). The AJAX fragment (partials/search_results.html,
+             rendered standalone with `oob: true`) re-renders this same id via
+             `hx-swap-oob`, so search.js's `readData()` (a plain
+             `document.getElementById("search-data")`) keeps finding it after
+             every re-search. #}
+          <script type="application/json" id="search-data">{{ results.map_json|safe }}</script>
           <!-- HTMX loading overlay -->
-          <div class="htmx-indicator absolute inset-0 z-10 items-center justify-center rounded-2xl bg-[oklch(98%_0.004_240_/_0.7)]" aria-hidden="true">
+          <div id="results-indicator" class="htmx-indicator absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-[oklch(98%_0.004_240_/_0.7)]" aria-hidden="true">
             <span class="inline-flex items-center gap-2.5 rounded-xl border border-border bg-surface px-4 py-2.5 text-sm font-medium text-fg shadow-pop">{{ tr.t("search.updating") }}</span>
           </div>
           <div id="results" role="list" aria-label="{{ tr.t("search.results_aria") }}" class="space-y-4">
@@ -203,7 +245,17 @@
 </div>
 {% endblock %}
 
+{% block head %}
+<!-- MapLibre base styles (map clipping, canvas layout, control/attribution
+     positioning). Must load before map.css so the page's map overrides win. -->
+<link rel="stylesheet" href="{{ layout.asset("vendor/maplibre-gl.css") }}">
+<link rel="stylesheet" href="{{ layout.asset("css/map.css") }}">
+{% if !layout.map_style_url.is_empty() %}
+<link rel="preconnect" href="{{ layout.tile_origin() }}" crossorigin>
+{% endif %}
+{% endblock %}
+
 {% block scripts %}
-<script src="/static/vendor/maplibre-gl.js"></script>
-<script src="/static/js/search.js"></script>
+<script src="{{ layout.asset("vendor/maplibre-gl.js") }}"></script>
+<script src="{{ layout.asset("js/search.js") }}"></script>
 {% endblock %}

@@ -45,10 +45,11 @@ browser ──> reverse proxy / TLS ──> axum (web) ──> application servi
 
 | Crate | Responsibility | May depend on |
 |---|---|---|
-| `bikenest-domain` (`crates/domain`) | pure business concepts: value objects, enums, rules (hours, freshness, confidence, cost, security) | nothing (chrono/thiserror only) |
+| `bikenest-domain` (`crates/domain`) | pure business concepts: value objects, enums, rules (hours, freshness, confidence, cost, security), the typed proposal payload | nothing framework-level (chrono, thiserror, serde_json for the proposal payload) |
 | `bikenest-application` (`crates/application`) | use cases (services) + ports (`trait`s). Orchestrates domain objects; no I/O of its own | `domain` |
 | `bikenest-infrastructure` (`crates/infrastructure`) | SQLx repositories, config loading, providers (S3, SMTP, Mapbox, ValKey, image, timezone), seeders, job worker | `domain`, `application` |
-| `bikenest-web` (`crates/web`) | axum router, handlers, middleware, view models, i18n catalog, Askama templates. **The binary** (`bikenest-web`) | `domain`, `application`, `infrastructure` |
+| `bikenest-i18n` (`crates/i18n`) | the en + pt-BR string catalog (`Locale`, `Translator`); the axum request extractor sits behind the `axum` feature so infrastructure can render emails without it | nothing framework-level (axum only with the feature) |
+| `bikenest-web` (`crates/web`) | axum router, handlers, middleware, view models, Askama templates; re-exports the i18n catalog. **The binary** (`bikenest-web`) | `domain`, `application`, `infrastructure`, `i18n` |
 | `bikenest-test-support` (`crates/test-support`) | shared `#[db_test]` harness, pool fixture, domain-rich builders, fast test doubles | `domain`, `application`, `infrastructure`, `test-macros` |
 | `bikenest-test-macros` (`crates/test-macros`) | the `#[db_test]` proc macro | (proc-macro deps) |
 
@@ -76,7 +77,8 @@ Value objects and rules, no I/O. Notable concepts:
   with one tri-state value.
 - **`OpeningHours`** — wall-clock ranges per day-of-week stored in the
   location's IANA timezone (never converted to UTC), with an "open now" check
-  that is DST-correct.
+  that is DST-correct. `status_at` answers `Open | Closed | Unknown`; the
+  boolean form of the same rule lives in SQL (see "open now", below).
 - **`ModerationState`** (parking) — `Active | PendingReview | Flagged | Invalid | Removed`.
 - **`FreshnessCategory`** — `Never | Fresh | RecentlyVerified | Aging | Stale | VeryStale`,
   derived from the last-verified timestamp against configurable thresholds.
@@ -109,8 +111,9 @@ directly. Examples: `SearchParking`, `ContributionService`, `AuthService`,
 | Port | Purpose |
 |---|---|
 | `Geocoder` | address/place → coordinates |
-| `ParkingSearchReader` / `ParkingDetailsReader` | proximity search + detail reads |
+| `ParkingSearchReader` / `ParkingDetailsReader` | proximity search (`search`) + map-viewport browse (`in_bounds`, clustered past the marker cap) + detail reads |
 | `ParkingPhotoReader` / `ReviewPhotosReader` | photo gallery reads |
+| `SitemapReader` | the ids `/sitemap.xml` lists (every ACTIVE location) |
 | `ParkingContributionRepository` | add/edit/propose, optimistic apply, revisions |
 | `ReviewRepository` | reviews + aggregate recompute |
 | `VerificationRepository` | existence/attribute/parked-here signals |
@@ -122,7 +125,7 @@ directly. Examples: `SearchParking`, `ContributionService`, `AuthService`,
 | `EmailProvider` | send verification/reset mail (`fake`/`smtp`/`resend`) |
 | `RateLimiter` | sliding-window abuse limits |
 | `AuditLog` / `AuditLogReader` | write/read the audit trail |
-| `ObjectStorage` | put/get + presigned media URLs |
+| `ObjectStorage` | put/delete + direct S3 presigned media URLs |
 | `ImageProcessor` | decode → EXIF-strip → re-encode → thumbnail |
 | `PhotoRepository` | photo lifecycle + moderation queue |
 | `ReportRepository` / `ModerationRepository` | reports + moderation actions |
@@ -142,7 +145,7 @@ The adapters: `Sqlx*` repositories for every persistence port, `Config::from_env
 (`seed-mock`, `seed-admin`, `seed-policies`), and `Db`/`probe`.
 
 Providers are selected from environment variables in `config.rs` and wired into
-the router in `crates/web/src/http.rs`.
+the router in `crates/web/src/wiring.rs` — the one module that names them.
 
 ### Web (`crates/web`)
 
@@ -150,14 +153,32 @@ the router in `crates/web/src/http.rs`.
 job worker, then serves the router. Subcommands dispatch before `serve`:
 `seed-mock`, `seed-admin`, `seed-policies`, `retention`.
 
-`http.rs` builds the axum router: middleware (request tracing, security
-headers + strict nonce-free CSP, session/CSRF, auth extraction), public pages
-(P1 home, P2 search, P3 details, P7 about, legal pages), authenticated pages
-(account, contributions, favorites, add/edit/review/verify), moderation and
-admin pages, and htmx fragment endpoints. `lib.rs` holds the Askama view-model
-structs; `i18n.rs` holds the en + pt-BR catalogs; `security.rs` the headers/CSP;
-`observability.rs` the JSON structured logging; `markdown.rs` the sanitizing
-renderer for the legal pages.
+The router is split three ways:
+
+- **`wiring.rs`** — the composition root. It builds every provider from the
+  parsed `Config`, assembles the services, fills `AppState`, mounts the route
+  table and wraps it in the middleware stack (request tracing, security headers
+  + strict nonce-free CSP, session/CSRF, auth extraction, the styled-error
+  upgrade, compression). `RouterDeps` is the seam tests inject fakes through.
+  This is the only module that may name a concrete adapter.
+- **`state.rs`** — `AppState`: the services, the read-side ports and the
+  configuration-derived values (map, security policy, base URL, asset
+  manifest), cloned per request. It holds no connection pool.
+- **`routes/`** — one module per slice, each owning its handlers, its
+  form/query structs, its form → domain mapping and its error → response
+  mapping: `public` (home, about, robots/sitemap, language, health), `search`,
+  `details`, `auth` (M2 accounts), `community` (add/edit/propose),
+  `reviews` (review/verify/parked-here/favorite + the account activity lists),
+  `photo` (M4 upload + photo queue), `moderation` (M5 reports and queues),
+  `admin` (users, audit, privacy requests), `privacy` (M6 export/delete),
+  `legal` (policy pages), plus `common` (shared render/fragment helpers) and
+  `errors` (the styled 404/500 family). `routes/mod.rs` holds the URL → handler
+  table. Two tests guard the shape: no file over 1200 lines, and nothing under
+  `routes/` may name a repository, a pool or an adapter.
+
+`lib.rs` holds the Askama view-model structs; `i18n.rs` holds the en + pt-BR
+catalogs; `security.rs` the headers/CSP; `observability.rs` the JSON structured
+logging; `markdown.rs` the sanitizing renderer for the legal pages.
 
 ## Tech stack
 
@@ -198,11 +219,27 @@ Versioned, forward-only migrations in `migrations/`:
 | `0012_privacy.sql` | privacy requests, exports, anonymization |
 | `0013_policies.sql` + `0014_policy_locale.sql` | versioned legal pages |
 | `0015_background_jobs.sql` | `background_job` queue |
+| `0016_report_dedupe.sql` | one open report per (target, reporter) |
+| `0017_indexes.sql` | FK/read-path indexes, narrowing CHECKs |
+| `0018_user_locale.sql` | per-account locale |
+| `0019_photo_key_and_audit_integrity.sql` | non-empty `storage_key`, append-only audit |
+| `0020_open_now_fn.sql` | `bikenest_is_open_at()` + confirmed-attribute index |
 
 Key modeling notes:
 
 - **Timestamps are UTC**; opening hours are wall-clock ranges in the location's
   timezone; "open now" is computed in that timezone.
+- **"Open now" is one implementation with two shapes.** The rule (same-day
+  ranges, all-day rows, and ranges that run past midnight counting on both
+  days) lives in SQL as `bikenest_is_open_at(location, timezone, instant)`
+  (migration `0020`), which the search query calls twice: once as the
+  `open_now` filter and once as each row's flag. The domain keeps
+  `OpeningHours::status_at` because the details page needs a *tri-state* — it
+  must say "hours unknown" rather than "closed", which a card's boolean cannot
+  express. `bikenest_is_open_at` is exactly `status_at(...) == Open`, and a
+  table-driven `#[db_test]` (`parking_test.rs`) holds the two together across
+  same-day boundaries, overnight ranges, all-day rows, a DST transition and
+  locations with no hours at all.
 - **`parking_revision`** is an immutable field-level history (JSONB after-state
   snapshots); **`parking_proposal`** holds sensitive changes pending moderation.
 - **Optimistic concurrency** via `version` on `parking_location`; conflicting

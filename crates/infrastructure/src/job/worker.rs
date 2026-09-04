@@ -8,7 +8,16 @@ use bikenest_application::JobError;
 use chrono::Utc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
+
+/// Sleep for `poll`, or return early the moment shutdown is signalled.
+async fn sleep_or_cancel(poll: std::time::Duration, shutdown: &CancellationToken) {
+    tokio::select! {
+        _ = tokio::time::sleep(poll) => {}
+        _ = shutdown.cancelled() => {}
+    }
+}
 
 /// Polls the job queue, claims due jobs, runs their handler, and records the
 /// outcome (success / retry / dead-letter). Spawned on the tokio runtime at
@@ -38,29 +47,43 @@ impl Worker {
         }
     }
 
-    /// Runs forever: bootstrap recurring jobs, then poll→claim→process.
-    /// Consumes `self` so the loop can be moved into a spawned tokio task.
-    pub async fn run(self) {
+    /// This worker's claim identity, as written to `background_job.claimed_by`.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Bootstrap recurring jobs, then poll→claim→process until `shutdown` is
+    /// cancelled. Consumes `self` so the loop can be moved into a spawned
+    /// tokio task.
+    ///
+    /// Cancellation is checked between polls *and* interrupts the idle sleep,
+    /// so an idle worker returns within one poll interval at worst. A job
+    /// already in flight is always run to completion and its outcome recorded —
+    /// abandoning it would leave the row `running` until its lease expired.
+    pub async fn run(self, shutdown: CancellationToken) {
         self.bootstrap().await;
         let poll = std::time::Duration::from_millis(self.config.poll_interval.as_millis() as u64);
-        loop {
+        while !shutdown.is_cancelled() {
             match self
                 .repo
                 .claim(self.config.batch_size, &self.id, self.config.lease_ttl)
                 .await
             {
-                Ok(jobs) if jobs.is_empty() => tokio::time::sleep(poll).await,
+                Ok(jobs) if jobs.is_empty() => sleep_or_cancel(poll, &shutdown).await,
                 Ok(jobs) => {
                     for job in jobs {
+                        // Finish the batch we already claimed: these rows are
+                        // marked `running` and would otherwise wait out a lease.
                         self.process(job).await;
                     }
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "job claim failed; backing off");
-                    tokio::time::sleep(poll).await;
+                    sleep_or_cancel(poll, &shutdown).await;
                 }
             }
         }
+        tracing::info!(worker = %self.id, "background worker stopped");
     }
 
     /// Ensure the always-on recurring rows exist (idempotent via `idempotency_key`).
@@ -101,6 +124,7 @@ impl Worker {
                 .repo
                 .fail(
                     job.id,
+                    &self.id,
                     &format!("no handler registered for kind '{}'", job.kind),
                 )
                 .await;
@@ -116,12 +140,12 @@ impl Worker {
             Ok(()) => {
                 match next_run_at(job.schedule.as_ref(), now) {
                     Ok(next) => {
-                        let _ = self.repo.finish_success(job.id, next, now).await;
+                        let _ = self.repo.finish_success(job.id, &self.id, next, now).await;
                         tracing::info!("job succeeded (recurring={})", next.is_some());
                     }
                     // Invalid schedule → permanent (dead-letter) rather than retry.
                     Err(e) => {
-                        let _ = self.repo.fail(job.id, &e.to_string()).await;
+                        let _ = self.repo.fail(job.id, &self.id, &e.to_string()).await;
                         tracing::warn!(error = %e, "invalid schedule; dead-lettering");
                     }
                 }
@@ -130,7 +154,7 @@ impl Worker {
                 if job.attempts < job.max_attempts {
                     let delay_ms = backoff_ms(job.attempts, self.config.backoff_base_ms);
                     let run_at = now + chrono::Duration::milliseconds(delay_ms as i64);
-                    let _ = self.repo.retry(job.id, &e, run_at).await;
+                    let _ = self.repo.retry(job.id, &self.id, &e, run_at).await;
                     tracing::info!(
                         attempt = job.attempts,
                         backoff_ms = delay_ms,
@@ -138,12 +162,17 @@ impl Worker {
                         "job failed; will retry"
                     );
                 } else {
-                    let _ = self.repo.fail(job.id, &e).await;
+                    // Give the handler its say before the row goes terminal:
+                    // only it can decode the payload (e.g. which email, to
+                    // which domain) into something operators can act on.
+                    handler.on_dead_letter(&job.payload, &e).await;
+                    let _ = self.repo.fail(job.id, &self.id, &e).await;
                     tracing::warn!(error = %e, "job exhausted attempts; dead-lettered");
                 }
             }
             Err(JobError::Permanent(e)) => {
-                let _ = self.repo.fail(job.id, &e).await;
+                handler.on_dead_letter(&job.payload, &e).await;
+                let _ = self.repo.fail(job.id, &self.id, &e).await;
                 tracing::warn!(error = %e, "job failed permanently; dead-lettered");
             }
         }

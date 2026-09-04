@@ -267,12 +267,22 @@ async fn cleanup(fx: &Fixture) {
     }
 }
 
-fn new_pending(fx: &Fixture) -> NewPendingPhoto {
+/// A pending photo whose derivative objects are already written under `slug`
+/// — the shape [`PhotoService`] hands the repository now that keys are minted
+/// before any write.
+fn new_pending(fx: &Fixture, slug: &str) -> NewPendingPhoto {
     NewPendingPhoto {
         target: PhotoTarget::Parking(fx.location_id),
         uploader_id: fx.user_id,
         content_type: "image/jpeg".to_string(),
         alt: Some("An alt text".to_string()),
+        storage_key: format!("uploads/{slug}/full.jpg"),
+        thumbnail_key: format!("uploads/{slug}/thumb.jpg"),
+        dimensions: PhotoDimensions {
+            width: 800,
+            height: 600,
+        },
+        processed_at: chrono::Utc::now(),
     }
 }
 
@@ -280,55 +290,61 @@ fn new_pending(fx: &Fixture) -> NewPendingPhoto {
 async fn repo_insert_pending_creates_pending_row(tx: &mut bikenest_test_support::TestTx) {
     let fx = fresh_fixture(tx, "photo-insert@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
-    let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
+    let id = repo
+        .insert_pending(&new_pending(&fx, "insert"))
+        .await
+        .unwrap();
 
-    // The inserted photo is PENDING_REVIEW with an empty storage_key placeholder.
+    // The row is PENDING_REVIEW *and* complete: one insert, both derivative
+    // keys, the dimensions and `processed_at`. There is no window in which
+    // `storage_key` is empty (migration 0019 CHECKs that it never is).
     let row = sqlx::query!(
-        "SELECT moderation_state, storage_key, uploader_id FROM parking_photo WHERE id = $1",
+        "SELECT moderation_state, storage_key, thumbnail_key, width, height, processed_at, \
+         uploader_id FROM parking_photo WHERE id = $1",
         id
     )
     .fetch_one(&pool().await)
     .await
     .unwrap();
     assert_eq!(row.moderation_state, "PENDING_REVIEW");
-    assert_eq!(row.storage_key, "");
+    assert_eq!(row.storage_key, "uploads/insert/full.jpg");
+    assert_eq!(
+        row.thumbnail_key.as_deref(),
+        Some("uploads/insert/thumb.jpg")
+    );
+    assert_eq!(row.width, Some(800));
+    assert_eq!(row.height, Some(600));
+    assert!(row.processed_at.is_some());
     assert_eq!(row.uploader_id, Some(fx.user_id.0));
 
     cleanup(&fx).await;
 }
 
 #[db_test]
-async fn repo_mark_processed_sets_keys_and_dimensions(tx: &mut bikenest_test_support::TestTx) {
-    let fx = fresh_fixture(tx, "photo-processed@example.com").await;
-    let repo = SqlxPhotoRepository::new(db().await);
-    let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
-
-    repo.mark_processed(
-        PhotoKind::Parking,
-        id,
-        "uploads/1/full.jpg",
-        "uploads/1/thumb.jpg",
-        PhotoDimensions {
-            width: 800,
-            height: 600,
-        },
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
-
-    let row = sqlx::query!(
-        "SELECT storage_key, thumbnail_key, width, height, processed_at FROM parking_photo WHERE id = $1",
-        id
-    )
-    .fetch_one(&pool().await)
-    .await
-    .unwrap();
-    assert_eq!(row.storage_key, "uploads/1/full.jpg");
-    assert_eq!(row.thumbnail_key.as_deref(), Some("uploads/1/thumb.jpg"));
-    assert_eq!(row.width, Some(800));
-    assert_eq!(row.height, Some(600));
-    assert!(row.processed_at.is_some());
+async fn parking_photo_rejects_an_empty_storage_key(tx: &mut bikenest_test_support::TestTx) {
+    // The CHECK from migration 0019: a row that names no object is not
+    // representable, so the crash window the old two-step insert had cannot
+    // reopen without this test failing.
+    let fx = fresh_fixture(tx, "photo-emptykey@example.com").await;
+    for table in ["parking_photo", "review_photo"] {
+        let sql = if table == "parking_photo" {
+            "INSERT INTO parking_photo (location_id, storage_key, content_type, position, \
+             moderation_state) VALUES ($1, '', 'image/jpeg', 0, 'PENDING_REVIEW')"
+        } else {
+            "INSERT INTO review_photo (review_id, storage_key, position, moderation_state) \
+             VALUES ($1, '', 0, 'PENDING_REVIEW')"
+        };
+        let err = sqlx::query(sql)
+            .bind(fx.location_id)
+            .execute(&pool().await)
+            .await
+            .expect_err("an empty storage_key must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("storage_key_nonempty") || msg.contains("violates"),
+            "{table}: expected the CHECK to fire, got: {msg}"
+        );
+    }
 
     cleanup(&fx).await;
 }
@@ -337,20 +353,10 @@ async fn repo_mark_processed_sets_keys_and_dimensions(tx: &mut bikenest_test_sup
 async fn repo_approve_sets_position_and_reviewer(tx: &mut bikenest_test_support::TestTx) {
     let fx = fresh_fixture(tx, "photo-approve@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
-    let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
-    repo.mark_processed(
-        PhotoKind::Parking,
-        id,
-        "uploads/1/full.jpg",
-        "uploads/1/thumb.jpg",
-        PhotoDimensions {
-            width: 10,
-            height: 10,
-        },
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
+    let id = repo
+        .insert_pending(&new_pending(&fx, "approve"))
+        .await
+        .unwrap();
 
     let moderator = fx.moderator_id;
     repo.approve(PhotoKind::Parking, id, moderator, 5)
@@ -381,30 +387,20 @@ async fn repo_approve_sets_position_and_reviewer(tx: &mut bikenest_test_support:
 async fn repo_reject_records_reason_and_returns_keys(tx: &mut bikenest_test_support::TestTx) {
     let fx = fresh_fixture(tx, "photo-reject@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
-    let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
-    repo.mark_processed(
-        PhotoKind::Parking,
-        id,
-        "uploads/2/full.jpg",
-        "uploads/2/thumb.jpg",
-        PhotoDimensions {
-            width: 10,
-            height: 10,
-        },
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
+    let id = repo
+        .insert_pending(&new_pending(&fx, "reject"))
+        .await
+        .unwrap();
 
     let moderator = fx.moderator_id;
     let rejected = repo
         .reject(PhotoKind::Parking, id, moderator, "unclear image")
         .await
         .unwrap();
-    assert_eq!(rejected.storage_key, "uploads/2/full.jpg");
+    assert_eq!(rejected.storage_key, "uploads/reject/full.jpg");
     assert_eq!(
         rejected.thumbnail_key.as_deref(),
-        Some("uploads/2/thumb.jpg")
+        Some("uploads/reject/thumb.jpg")
     );
 
     let row = sqlx::query!(
@@ -432,8 +428,14 @@ async fn repo_max_position_and_queue_ordering(tx: &mut bikenest_test_support::Te
             .unwrap(),
         0
     );
-    let first = repo.insert_pending(&new_pending(&fx)).await.unwrap();
-    let second = repo.insert_pending(&new_pending(&fx)).await.unwrap();
+    let first = repo
+        .insert_pending(&new_pending(&fx, "order-1"))
+        .await
+        .unwrap();
+    let second = repo
+        .insert_pending(&new_pending(&fx, "order-2"))
+        .await
+        .unwrap();
     // max_position counts APPROVED + all photos (position default 0 here).
     assert_eq!(
         repo.max_position(PhotoTarget::Parking(fx.location_id))
@@ -444,7 +446,7 @@ async fn repo_max_position_and_queue_ordering(tx: &mut bikenest_test_support::Te
 
     // Both fixture photos must appear in the queue (it may also hold other
     // tests' pending rows — DB is shared), oldest first relative to each other.
-    let list = repo.list_pending().await.unwrap();
+    let list = repo.list_pending(None, 200).await.unwrap();
     let ids: Vec<i64> = list.iter().map(|p| p.id).collect();
     assert!(ids.contains(&first) && ids.contains(&second));
     let i_first = ids.iter().position(|&i| i == first).unwrap();
@@ -458,20 +460,10 @@ async fn repo_max_position_and_queue_ordering(tx: &mut bikenest_test_support::Te
 async fn reader_returns_thumbnail_key_for_processed_photo(tx: &mut bikenest_test_support::TestTx) {
     let fx = fresh_fixture(tx, "photo-thumb@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
-    let id = repo.insert_pending(&new_pending(&fx)).await.unwrap();
-    repo.mark_processed(
-        PhotoKind::Parking,
-        id,
-        "uploads/3/full.jpg",
-        "uploads/3/thumb.jpg",
-        PhotoDimensions {
-            width: 10,
-            height: 10,
-        },
-        chrono::Utc::now(),
-    )
-    .await
-    .unwrap();
+    let id = repo
+        .insert_pending(&new_pending(&fx, "thumb"))
+        .await
+        .unwrap();
     // Approve so the gallery reader returns it.
     repo.approve(PhotoKind::Parking, id, fx.moderator_id, 1)
         .await
@@ -483,8 +475,8 @@ async fn reader_returns_thumbnail_key_for_processed_photo(tx: &mut bikenest_test
         .iter()
         .find(|p| p.alt.as_deref() == Some("An alt text"))
         .expect("photo");
-    assert_eq!(p.key, "uploads/3/full.jpg");
-    assert_eq!(p.thumbnail_key.as_deref(), Some("uploads/3/thumb.jpg"));
+    assert_eq!(p.key, "uploads/thumb/full.jpg");
+    assert_eq!(p.thumbnail_key.as_deref(), Some("uploads/thumb/thumb.jpg"));
 
     cleanup(&fx).await;
 }

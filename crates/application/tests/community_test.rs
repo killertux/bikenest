@@ -9,12 +9,13 @@ use bikenest_application::{
     AddParkingLocationOutcome, AttributeSummary, AuthenticatedUser, Clock, ContributionDeps,
     ContributionError, ContributionHistoryReader, ContributionItem, ContributionService,
     DuplicateCandidate, FavoriteRepository, NewParkingLocation, NewVerification,
-    ParkingContributionRepository, ParkingDetailsReader, ParkingEdit, Review, ReviewRepository,
-    TimezoneError, TimezoneResolver, VerificationRepository,
+    ParkingContributionRepository, ParkingEdit, Review, ReviewRepository, TimezoneError,
+    TimezoneResolver, VerificationRepository,
 };
 use bikenest_domain::{
-    AccountState, Confidence, Cost, ExistenceResult, ExistenceSignal, GeoPoint, OpeningHours,
-    ParkingLocation, ParkingType, ReviewBody, SecurityFeature, SecurityState, StarRating, UserId,
+    AccountState, Confidence, Cost, ExistenceResult, ExistenceSignal, GeoPoint, ModerationState,
+    OpeningHours, ParkingLocation, ParkingType, ReviewBody, SecurityFeature, SecurityState,
+    StarRating, UserId,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -116,10 +117,12 @@ impl bikenest_application::AuditLog for RecordingAudit {
     }
 }
 
-/// Minimal contribution repo: tracks id→version and a fixed duplicates list.
+/// Minimal contribution repo: tracks id→(version, moderation state) and a
+/// fixed duplicates list.
 struct FakeContributionRepo {
     next_id: Mutex<i64>,
     versions: Mutex<HashMap<i64, i64>>,
+    states: Mutex<HashMap<i64, ModerationState>>,
     dupes: Mutex<Vec<DuplicateCandidate>>,
 }
 impl FakeContributionRepo {
@@ -127,15 +130,30 @@ impl FakeContributionRepo {
         Self {
             next_id: Mutex::new(100),
             versions: Mutex::new(HashMap::new()),
+            states: Mutex::new(HashMap::new()),
             dupes: Mutex::new(dupes),
         }
+    }
+
+    /// Registers an existing location at `version` in `state`.
+    fn seed(&self, id: i64, version: i64, state: ModerationState) {
+        self.versions.lock().unwrap().insert(id, version);
+        self.states.lock().unwrap().insert(id, state);
     }
 }
 #[async_trait]
 impl ParkingContributionRepository for FakeContributionRepo {
     async fn get_for_edit(&self, id: i64) -> Result<Option<ParkingLocation>, ContributionError> {
         let v = self.versions.lock().unwrap().get(&id).copied();
-        v.map(|version| location_at(id, version)).transpose()
+        let state = self
+            .states
+            .lock()
+            .unwrap()
+            .get(&id)
+            .copied()
+            .unwrap_or(ModerationState::Active);
+        v.map(|version| location_at_state(id, version, state))
+            .transpose()
     }
     async fn create(
         &self,
@@ -174,6 +192,7 @@ impl ParkingContributionRepository for FakeContributionRepo {
     async fn revision_history(
         &self,
         _id: i64,
+        _limit: i64,
     ) -> Result<Vec<bikenest_domain::RevisionSummary>, ContributionError> {
         Ok(vec![])
     }
@@ -187,6 +206,14 @@ impl ParkingContributionRepository for FakeContributionRepo {
 }
 
 fn location_at(id: i64, version: i64) -> Result<ParkingLocation, ContributionError> {
+    location_at_state(id, version, ModerationState::Active)
+}
+
+fn location_at_state(
+    id: i64,
+    version: i64,
+    state: ModerationState,
+) -> Result<ParkingLocation, ContributionError> {
     ParkingLocation::new(
         id,
         "Estação Centro",
@@ -198,7 +225,7 @@ fn location_at(id: i64, version: i64) -> Result<ParkingLocation, ContributionErr
         tz(),
         OpeningHours::Unknown,
         vec![SecurityFeature::new("well_lit", SecurityState::Yes)],
-        bikenest_domain::ModerationState::Active,
+        state,
         bikenest_domain::Rating::new(None, 0).unwrap(),
         chrono::Utc::now(),
         chrono::Utc::now(),
@@ -229,13 +256,18 @@ impl ReviewRepository for FakeReviewRepo {
         _a: UserId,
         _r: StarRating,
         _b: &ReviewBody,
-    ) -> Result<(), ContributionError> {
-        Ok(())
+    ) -> Result<bool, ContributionError> {
+        Ok(self.own.lock().unwrap().is_some())
     }
     async fn find_own(&self, _l: i64, _a: UserId) -> Result<Option<Review>, ContributionError> {
         Ok(self.own.lock().unwrap().clone())
     }
-    async fn list_active(&self, _l: i64) -> Result<Vec<Review>, ContributionError> {
+    async fn list_active(
+        &self,
+        _l: i64,
+        _after_id: Option<i64>,
+        _limit: i64,
+    ) -> Result<Vec<Review>, ContributionError> {
         Ok(self.list.lock().unwrap().clone())
     }
 }
@@ -289,11 +321,11 @@ impl VerificationRepository for FakeVerificationRepo {
     ) -> Result<Vec<ExistenceSignal>, ContributionError> {
         Ok(self.state.signals.lock().unwrap().clone())
     }
-    async fn attribute_summary(&self, _l: i64) -> Result<Vec<AttributeSummary>, ContributionError> {
-        Ok(vec![])
-    }
-    async fn parked_here_count(&self, _l: i64) -> Result<i64, ContributionError> {
-        Ok(0)
+    async fn attribute_and_parked_summary(
+        &self,
+        _l: i64,
+    ) -> Result<(Vec<AttributeSummary>, i64), ContributionError> {
+        Ok((vec![], 0))
     }
     async fn mark_verified_at(
         &self,
@@ -316,7 +348,12 @@ impl FavoriteRepository for FakeFavoriteRepo {
     async fn is_favorited(&self, _u: UserId, _l: i64) -> Result<bool, ContributionError> {
         Ok(self.favorited)
     }
-    async fn list(&self, _u: UserId) -> Result<Vec<i64>, ContributionError> {
+    async fn list(
+        &self,
+        _u: UserId,
+        _after: Option<(chrono::DateTime<chrono::Utc>, i64)>,
+        _limit: i64,
+    ) -> Result<Vec<bikenest_application::FavoriteItem>, ContributionError> {
         Ok(vec![])
     }
 }
@@ -324,50 +361,80 @@ impl FavoriteRepository for FakeFavoriteRepo {
 struct FakeHistory;
 #[async_trait]
 impl ContributionHistoryReader for FakeHistory {
-    async fn history(&self, _u: UserId) -> Result<Vec<ContributionItem>, ContributionError> {
+    async fn history(
+        &self,
+        _u: UserId,
+        _after: Option<(chrono::DateTime<chrono::Utc>, i64)>,
+        _limit: i64,
+    ) -> Result<Vec<ContributionItem>, ContributionError> {
         Ok(vec![])
     }
 }
 
-struct FakeReviewPhotos;
+/// Counts calls to `for_reviews` so tests can assert the details aggregate
+/// batches every review's photos into one call instead of one lookup per
+/// review. The counter lives behind an `Arc` so a test can hold its own
+/// handle after the fake is boxed into `ContributionDeps`.
+#[derive(Default)]
+struct ReviewPhotosCalls(Mutex<u32>);
+struct FakeReviewPhotos {
+    calls: std::sync::Arc<ReviewPhotosCalls>,
+}
+impl FakeReviewPhotos {
+    fn new() -> Self {
+        Self {
+            calls: std::sync::Arc::new(ReviewPhotosCalls::default()),
+        }
+    }
+    fn calls(&self) -> std::sync::Arc<ReviewPhotosCalls> {
+        self.calls.clone()
+    }
+}
 #[async_trait]
 impl bikenest_application::ReviewPhotosReader for FakeReviewPhotos {
-    async fn photos(
+    async fn for_reviews(
         &self,
-        _id: i64,
-    ) -> Result<Vec<bikenest_application::StoredPhoto>, bikenest_application::ReaderError> {
-        Ok(vec![])
-    }
-}
-
-struct FakeDetails(Option<ParkingLocation>);
-#[async_trait]
-impl ParkingDetailsReader for FakeDetails {
-    async fn details(
-        &self,
-        _id: i64,
-    ) -> Result<Option<ParkingLocation>, bikenest_application::ReaderError> {
-        Ok(self.0.clone())
+        _ids: &[i64],
+    ) -> Result<
+        std::collections::HashMap<i64, Vec<bikenest_application::StoredPhoto>>,
+        bikenest_application::ReaderError,
+    > {
+        *self.calls.0.lock().unwrap() += 1;
+        Ok(std::collections::HashMap::new())
     }
 }
 
 fn service(
     contributions: Box<dyn ParkingContributionRepository>,
-    details: Option<ParkingLocation>,
     review: FakeReviewRepo,
     verification: FakeVerificationRepo,
     favorite: FakeFavoriteRepo,
 ) -> ContributionService {
+    service_with_photos(
+        contributions,
+        review,
+        verification,
+        favorite,
+        FakeReviewPhotos::new(),
+    )
+}
+
+fn service_with_photos(
+    contributions: Box<dyn ParkingContributionRepository>,
+    review: FakeReviewRepo,
+    verification: FakeVerificationRepo,
+    favorite: FakeFavoriteRepo,
+    review_photos: FakeReviewPhotos,
+) -> ContributionService {
     let clock = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 6, 1, 12, 0, 0).unwrap();
     ContributionService::new(ContributionDeps {
         tz: Box::new(FakeTz),
-        details: Box::new(FakeDetails(details)),
         contributions,
         reviews: Box::new(review),
         verifications: Box::new(verification),
         favorites: Box::new(favorite),
         history: Box::new(FakeHistory),
-        review_photos: Box::new(FakeReviewPhotos),
+        review_photos: Box::new(review_photos),
         rate_limiter: Box::new(AllowRateLimiter),
         audit: Box::new(RecordingAudit {
             events: Mutex::new(vec![]),
@@ -381,7 +448,6 @@ fn service(
 async fn add_location_requires_verified() {
     let svc = service(
         Box::new(FakeContributionRepo::new(vec![])),
-        None,
         FakeReviewRepo::new(),
         FakeVerificationRepo::new(),
         FakeFavoriteRepo { favorited: false },
@@ -404,7 +470,6 @@ async fn add_location_auto_derives_timezone_and_returns_duplicates() {
     }];
     let svc = service(
         Box::new(FakeContributionRepo::new(dupes)),
-        None,
         FakeReviewRepo::new(),
         FakeVerificationRepo::new(),
         FakeFavoriteRepo { favorited: false },
@@ -422,13 +487,12 @@ async fn add_location_auto_derives_timezone_and_returns_duplicates() {
 async fn add_location_is_rate_limited() {
     let svc = ContributionService::new(ContributionDeps {
         tz: Box::new(FakeTz),
-        details: Box::new(FakeDetails(None)),
         contributions: Box::new(FakeContributionRepo::new(vec![])),
         reviews: Box::new(FakeReviewRepo::new()),
         verifications: Box::new(FakeVerificationRepo::new()),
         favorites: Box::new(FakeFavoriteRepo { favorited: false }),
         history: Box::new(FakeHistory),
-        review_photos: Box::new(FakeReviewPhotos),
+        review_photos: Box::new(FakeReviewPhotos::new()),
         rate_limiter: Box::new(DenyRateLimiter),
         audit: Box::new(RecordingAudit {
             events: Mutex::new(vec![]),
@@ -446,10 +510,9 @@ async fn add_location_is_rate_limited() {
 #[tokio::test]
 async fn apply_edit_propagates_version_conflict() {
     let repo = FakeContributionRepo::new(vec![]);
-    repo.versions.lock().unwrap().insert(10, 3);
+    repo.seed(10, 3, ModerationState::Active);
     let svc = service(
         Box::new(repo),
-        None,
         FakeReviewRepo::new(),
         FakeVerificationRepo::new(),
         FakeFavoriteRepo { favorited: false },
@@ -477,13 +540,120 @@ async fn apply_edit_propagates_version_conflict() {
     assert_eq!(v, 4);
 }
 
+/// Every contribution write refuses a location moderation has taken down, in
+/// each non-ACTIVE state — and the write port is never reached.
+#[tokio::test]
+async fn writes_are_refused_for_a_location_that_is_not_active() {
+    for state in [
+        ModerationState::Removed,
+        ModerationState::Invalid,
+        ModerationState::Flagged,
+        ModerationState::PendingReview,
+    ] {
+        let repo = FakeContributionRepo::new(vec![]);
+        repo.seed(42, 7, state);
+        let ver = FakeVerificationRepo::new();
+        let vstate = ver.state();
+        let svc = service(
+            Box::new(repo),
+            FakeReviewRepo::new(),
+            ver,
+            FakeFavoriteRepo { favorited: false },
+        );
+        let user = verified_user(1);
+
+        let edit = ParkingEdit {
+            name: "new".to_string(),
+            address: "addr".to_string(),
+            description: None,
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            hours: OpeningHours::Unknown,
+            security: vec![],
+        };
+        assert!(
+            matches!(
+                svc.apply_parking_edit(&user, 42, 7, &edit).await,
+                Err(ContributionError::LocationNotActive)
+            ),
+            "edit refused in {state:?}"
+        );
+        assert!(
+            matches!(
+                svc.propose_location_change(
+                    &user,
+                    42,
+                    bikenest_domain::ProposalKind::MoveLocation,
+                    serde_json::json!({}),
+                )
+                .await,
+                Err(ContributionError::LocationNotActive)
+            ),
+            "proposal refused in {state:?}"
+        );
+        assert!(
+            matches!(
+                svc.upsert_review(
+                    &user,
+                    42,
+                    StarRating::new(5).unwrap(),
+                    &ReviewBody::new("nice").unwrap(),
+                )
+                .await,
+                Err(ContributionError::LocationNotActive)
+            ),
+            "review refused in {state:?}"
+        );
+        assert!(
+            matches!(
+                svc.record_verification(
+                    &user,
+                    &NewVerification::Existence {
+                        location_id: 42,
+                        user_id: UserId(1),
+                        result: ExistenceResult::StillExists,
+                    },
+                )
+                .await,
+                Err(ContributionError::LocationNotActive)
+            ),
+            "verification refused in {state:?}"
+        );
+
+        assert!(
+            vstate.recorded.lock().unwrap().is_empty(),
+            "no verification written in {state:?}"
+        );
+        assert!(
+            vstate.marked.lock().unwrap().is_empty(),
+            "freshness never touched in {state:?}"
+        );
+    }
+}
+
+/// A favorite is a private bookmark, not a contribution: it keeps working so a
+/// user can still un-favorite a spot that was taken down.
+#[tokio::test]
+async fn favorites_still_work_for_a_location_that_is_not_active() {
+    let repo = FakeContributionRepo::new(vec![]);
+    repo.seed(42, 7, ModerationState::Removed);
+    let svc = service(
+        Box::new(repo),
+        FakeReviewRepo::new(),
+        FakeVerificationRepo::new(),
+        FakeFavoriteRepo { favorited: false },
+    );
+    assert!(svc.toggle_favorite(UserId(1), 42).await.unwrap());
+}
+
 #[tokio::test]
 async fn record_verification_marks_freshness_only_for_still_exists() {
     let ver = FakeVerificationRepo::new();
     let vstate = ver.state();
+    let repo = FakeContributionRepo::new(vec![]);
+    repo.seed(3, 1, ModerationState::Active);
     let svc = service(
-        Box::new(FakeContributionRepo::new(vec![])),
-        None,
+        Box::new(repo),
         FakeReviewRepo::new(),
         ver,
         FakeFavoriteRepo { favorited: false },
@@ -534,19 +704,59 @@ async fn community_details_computes_confidence_and_favorite() {
     let fav = FakeFavoriteRepo { favorited: true };
     let svc = service(
         Box::new(FakeContributionRepo::new(vec![])),
-        Some(loc),
         review,
         ver,
         fav,
     );
 
-    let details = svc
-        .community_details(1, Some(UserId(1)))
-        .await
-        .unwrap()
-        .unwrap();
+    let details = svc.community_details(loc, Some(UserId(1))).await.unwrap();
     assert_eq!(details.confidence, Confidence::Conflicting);
     assert!(details.is_favorited);
+}
+
+/// The details aggregate batches every review's photos into one
+/// `for_reviews` call — never a per-review lookup, and never a redundant
+/// re-read of the location it was already handed.
+#[tokio::test]
+async fn community_details_batches_review_photos_in_one_call() {
+    let loc = location_at(1, 1).unwrap();
+    let review_photos = FakeReviewPhotos::new();
+    let calls = review_photos.calls();
+    let review = FakeReviewRepo::new();
+    review.list.lock().unwrap().extend([
+        Review {
+            id: 10,
+            location_id: 1,
+            author: Some(UserId(1)),
+            rating: StarRating::new(5).unwrap(),
+            body: ReviewBody::new("great spot").unwrap(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        },
+        Review {
+            id: 11,
+            location_id: 1,
+            author: Some(UserId(2)),
+            rating: StarRating::new(4).unwrap(),
+            body: ReviewBody::new("also good").unwrap(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        },
+    ]);
+    let svc = service_with_photos(
+        Box::new(FakeContributionRepo::new(vec![])),
+        review,
+        FakeVerificationRepo::new(),
+        FakeFavoriteRepo { favorited: false },
+        review_photos,
+    );
+
+    svc.community_details(loc, None).await.unwrap();
+    assert_eq!(
+        *calls.0.lock().unwrap(),
+        1,
+        "for_reviews must be called exactly once regardless of review count"
+    );
 }
 
 #[tokio::test]
@@ -566,6 +776,7 @@ async fn recommendation_reasons_only_surface_positive_factors() {
         timezone: tz(),
         is_open_now: false,
         photo_key: None,
+        sort_key: None,
     };
     let reasons = recommendation_reasons(
         &summary,

@@ -4,8 +4,9 @@
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{ContributionError, FavoriteRepository};
+use bikenest_application::{ContributionError, FavoriteItem, FavoriteRepository};
 use bikenest_domain::UserId;
+use chrono::{DateTime, Utc};
 
 pub struct SqlxFavoriteRepository {
     db: Db,
@@ -20,33 +21,30 @@ impl SqlxFavoriteRepository {
 #[async_trait]
 impl FavoriteRepository for SqlxFavoriteRepository {
     async fn toggle(&self, user: UserId, location_id: i64) -> Result<bool, ContributionError> {
-        let exists: (bool,) = sqlx::query_as(
-            "SELECT EXISTS(SELECT 1 FROM favorite WHERE user_id = $1 AND location_id = $2)",
+        // One statement, so a double-click cannot read the state on one pool
+        // connection and write it on another (which reported the wrong result
+        // and could leave the button out of step with the row).
+        //
+        // Both arms see the same snapshot: the INSERT never observes the
+        // DELETE's effect, so `NOT EXISTS (SELECT 1 FROM del)` — not the table
+        // — is what decides whether it runs. A returned row means "added";
+        // no row means the DELETE removed the existing favorite.
+        let row: Option<(bool,)> = sqlx::query_as(
+            r#"
+            WITH del AS (
+                DELETE FROM favorite WHERE user_id = $1 AND location_id = $2 RETURNING 1
+            )
+            INSERT INTO favorite (user_id, location_id)
+            SELECT $1, $2 WHERE NOT EXISTS (SELECT 1 FROM del)
+            RETURNING true
+            "#,
         )
         .bind(user.0)
         .bind(location_id)
-        .fetch_one(self.db.pool())
+        .fetch_optional(self.db.pool())
         .await
-        .map_err(map_err)?;
-        if exists.0 {
-            sqlx::query("DELETE FROM favorite WHERE user_id = $1 AND location_id = $2")
-                .bind(user.0)
-                .bind(location_id)
-                .execute(self.db.pool())
-                .await
-                .map_err(map_err)?;
-            Ok(false)
-        } else {
-            sqlx::query(
-                "INSERT INTO favorite (user_id, location_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            )
-            .bind(user.0)
-            .bind(location_id)
-            .execute(self.db.pool())
-            .await
-            .map_err(map_err)?;
-            Ok(true)
-        }
+        .map_err(|e| db_err("favorite.toggle", e))?;
+        Ok(row.is_some())
     }
 
     async fn is_favorited(
@@ -61,31 +59,59 @@ impl FavoriteRepository for SqlxFavoriteRepository {
         .bind(location_id)
         .fetch_one(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("favorite.is_favorited", e))?;
         Ok(row.0)
     }
 
-    async fn list(&self, user: UserId) -> Result<Vec<i64>, ContributionError> {
+    async fn list(
+        &self,
+        user: UserId,
+        after: Option<(DateTime<Utc>, i64)>,
+        limit: i64,
+    ) -> Result<Vec<FavoriteItem>, ContributionError> {
+        let limit = limit.clamp(1, 200);
         #[derive(sqlx::FromRow)]
         struct Row {
             location_id: i64,
+            created_at: DateTime<Utc>,
         }
+        // Keyset on the full sort key `(created_at, location_id)` — same
+        // shape as `photo.list_pending` — so "most recently favorited first"
+        // is preserved exactly (favorite has no row id of its own; its PK is
+        // `(user_id, location_id)`, so `location_id` alone cannot serve as a
+        // recency cursor).
+        let (after_at, after_id) = match after {
+            Some((at, id)) => (Some(at), Some(id)),
+            None => (None, None),
+        };
         let rows = sqlx::query_as::<_, Row>(
             r#"
-            SELECT location_id
-            FROM favorite
+            SELECT location_id, created_at FROM favorite
             WHERE user_id = $1
+              AND ($2::timestamptz IS NULL OR (created_at, location_id) < ($2::timestamptz, $3::bigint))
             ORDER BY created_at DESC, location_id DESC
+            LIMIT $4::bigint
             "#,
         )
         .bind(user.0)
+        .bind(after_at)
+        .bind(after_id)
+        .bind(limit)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
-        Ok(rows.into_iter().map(|r| r.location_id).collect())
+        .map_err(|e| db_err("favorite.list", e))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| FavoriteItem {
+                location_id: r.location_id,
+                created_at: r.created_at,
+            })
+            .collect())
     }
 }
 
-fn map_err(_e: sqlx::Error) -> ContributionError {
-    ContributionError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"favorite.toggle"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> ContributionError {
+    crate::db_error::classify_and_log(context, e).into()
 }

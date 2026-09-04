@@ -67,9 +67,9 @@ impl OpeningHours {
 
     /// Evaluate open/closed at `at` (UTC instant) in the location's timezone.
     ///
-    /// Handles overnight ranges: a range from a previous day whose `closes_at`
-    /// is past midnight (e.g. 22:00–02:00) still covers the early hours of the
-    /// current day.
+    /// A range whose `closes_at` is not after its `opens_at` (e.g. 22:00–02:00)
+    /// runs past midnight, so it counts twice: on its own day from `opens_at`
+    /// until midnight, and on the following day until `closes_at`.
     pub fn status_at(&self, at: DateTime<Utc>, tz: chrono_tz::Tz) -> OpenStatus {
         let OpeningHours::Weekly(rows) = self else {
             return OpenStatus::Unknown;
@@ -81,20 +81,22 @@ impl OpeningHours {
         let yesterday = if today == 1 { 7 } else { today - 1 };
 
         for (day, range) in rows {
+            let overnight = !range.all_day && range.closes_at <= range.opens_at;
             if *day == today {
                 if range.all_day {
                     return OpenStatus::Open;
                 }
-                if range.opens_at <= t && t < range.closes_at {
+                // An overnight range has no end before midnight.
+                if overnight && range.opens_at <= t {
+                    return OpenStatus::Open;
+                }
+                if !overnight && range.opens_at <= t && t < range.closes_at {
                     return OpenStatus::Open;
                 }
             }
-            // Overnight spill-over from yesterday's schedule.
-            if *day == yesterday && !range.all_day && range.closes_at <= range.opens_at {
-                // e.g. opens 22:00, closes 02:00 — still open until closes_at.
-                if t < range.closes_at {
-                    return OpenStatus::Open;
-                }
+            // Spill-over from yesterday's overnight range.
+            if *day == yesterday && overnight && t < range.closes_at {
+                return OpenStatus::Open;
             }
         }
         OpenStatus::Closed
@@ -233,6 +235,22 @@ mod tests {
         // Sat 03:00 local = 06:00 UTC → closed.
         assert_eq!(
             hours.status_at(utc(2026, 1, 10, 6, 0), sp()),
+            OpenStatus::Closed
+        );
+    }
+
+    #[test]
+    fn overnight_range_is_open_on_its_own_evening() {
+        // Same Fri 22:00 → Sat 02:00 row, read before midnight.
+        let hours = weekly(vec![(5, TimeRange::new(hms(22, 0), hms(2, 0)))]);
+        // Fri 23:00 local = Sat 02:00 UTC → open (the close is tomorrow).
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 10, 2, 0), sp()),
+            OpenStatus::Open
+        );
+        // Fri 21:00 local = Sat 00:00 UTC → not open yet.
+        assert_eq!(
+            hours.status_at(utc(2026, 1, 10, 0, 0), sp()),
             OpenStatus::Closed
         );
     }

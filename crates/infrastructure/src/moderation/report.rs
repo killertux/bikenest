@@ -76,36 +76,80 @@ impl ReportRepository for SqlxReportRepository {
         .bind(r.description.as_str())
         .fetch_one(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("report.create", e))?;
         Ok(row.id)
     }
 
-    async fn list(&self, state: Option<ReportState>) -> Result<Vec<Report>, ModerationError> {
-        let rows: Vec<ReportRow> = match state {
-            Some(s) => sqlx::query_as::<_, ReportRow>(
+    /// Oldest first (`id ASC` — the moderation queue is a FIFO work list; `id`
+    /// alone also gives a simple, exact keyset cursor with no tie-breaking
+    /// needed, unlike the old `created_at, id` order).
+    async fn list(
+        &self,
+        state: Option<ReportState>,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<Report>, ModerationError> {
+        let limit = limit.clamp(1, 200);
+        let rows: Vec<ReportRow> = match (state, after_id) {
+            (Some(s), Some(after)) => sqlx::query_as::<_, ReportRow>(
+                r#"
+                    SELECT id, reporter_id, target_type, target_id, reason, description, state,
+                           claimed_by, resolved_by, resolution_note, created_at, updated_at
+                    FROM report
+                    WHERE state = $1 AND id > $2
+                    ORDER BY id ASC
+                    LIMIT $3
+                    "#,
+            )
+            .bind(s.as_code())
+            .bind(after)
+            .bind(limit)
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| db_err("report.list", e))?,
+            (Some(s), None) => sqlx::query_as::<_, ReportRow>(
                 r#"
                     SELECT id, reporter_id, target_type, target_id, reason, description, state,
                            claimed_by, resolved_by, resolution_note, created_at, updated_at
                     FROM report
                     WHERE state = $1
-                    ORDER BY created_at, id
+                    ORDER BY id ASC
+                    LIMIT $2
                     "#,
             )
             .bind(s.as_code())
+            .bind(limit)
             .fetch_all(self.db.pool())
             .await
-            .map_err(map_err)?,
-            None => sqlx::query_as::<_, ReportRow>(
+            .map_err(|e| db_err("report.list", e))?,
+            (None, Some(after)) => sqlx::query_as::<_, ReportRow>(
                 r#"
                     SELECT id, reporter_id, target_type, target_id, reason, description, state,
                            claimed_by, resolved_by, resolution_note, created_at, updated_at
                     FROM report
-                    ORDER BY created_at, id
+                    WHERE id > $1
+                    ORDER BY id ASC
+                    LIMIT $2
                     "#,
             )
+            .bind(after)
+            .bind(limit)
             .fetch_all(self.db.pool())
             .await
-            .map_err(map_err)?,
+            .map_err(|e| db_err("report.list", e))?,
+            (None, None) => sqlx::query_as::<_, ReportRow>(
+                r#"
+                    SELECT id, reporter_id, target_type, target_id, reason, description, state,
+                           claimed_by, resolved_by, resolution_note, created_at, updated_at
+                    FROM report
+                    ORDER BY id ASC
+                    LIMIT $1
+                    "#,
+            )
+            .bind(limit)
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| db_err("report.list", e))?,
         };
         rows.into_iter().map(ReportRow::into_report).collect()
     }
@@ -122,7 +166,7 @@ impl ReportRepository for SqlxReportRepository {
         .bind(id)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("report.get", e))?;
         match row {
             Some(r) => Ok(Some(r.into_report()?)),
             None => Ok(None),
@@ -141,7 +185,7 @@ impl ReportRepository for SqlxReportRepository {
         .bind(moderator.0)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("report.claim", e))?;
         if res.rows_affected() != 1 {
             return Err(ModerationError::InvalidState);
         }
@@ -168,7 +212,7 @@ impl ReportRepository for SqlxReportRepository {
         .bind(note)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("report.resolve", e))?;
         if res.rows_affected() != 1 {
             return Err(ModerationError::InvalidState);
         }
@@ -176,6 +220,8 @@ impl ReportRepository for SqlxReportRepository {
     }
 }
 
-fn map_err(_e: sqlx::Error) -> ModerationError {
-    ModerationError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"report.create"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> ModerationError {
+    crate::db_error::classify_and_log(context, e).into()
 }

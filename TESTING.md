@@ -16,6 +16,13 @@ cargo test search_            # filter by name substring
 the DB-backed tests do — they connect to the compose database
 (`TEST_DATABASE_URL`, falling back to `DATABASE_URL`).
 
+Every `#[db_test]` installs a `tracing` subscriber (see "Tracing in tests"
+below), so a repository's error-classification logging is visible with:
+
+```bash
+RUST_LOG=info cargo test -- --nocapture
+```
+
 ## The four layers
 
 | Layer | Where | Kind | Needs DB? |
@@ -84,6 +91,154 @@ async fn within_radius_ordered_by_distance(tx: &mut TestTx) {
 `ParkingBuilder::with_fixture_tag(marker)` writes the marker into the
 `seed_key` column; `cleanup_fixture` deletes by it. Give each test a unique tag
 and a geographically separated origin so crashed runs can't cross-contaminate.
+
+The canonical example of this pattern at scale is
+`crates/infrastructure/tests/parking_test.rs::keyset_pagination_is_stable_across_inserts`:
+it commits **25** fixture rows (tagged `fix-keyset`, spread along a line so
+distance order is unambiguous), pages through the real search reader 5 rows at
+a time via the keyset cursor, and asserts every one of the 25 ids is seen
+exactly once across the pages before deleting the fixture by tag.
+
+## Tracing in tests
+
+`bikenest_test_support::init_test_tracing()` installs a `tracing_subscriber::fmt()`
+writer once per test binary (`OnceLock` + `try_init`, so calling it from many
+tests is harmless), directed at the test harness's own captured output
+(`with_test_writer()`) and filtered by `RUST_LOG` (default `warn`). `run_db_test`
+calls it before every `#[db_test]`, so it is automatic — nothing to opt into.
+
+Without this, `tracing::warn!`/`error!` lines a repository logs through
+`bikenest_infrastructure::classify_and_log` (the single place a `sqlx::Error`
+becomes a `DbFailure`) had **no destination at all**: not suppressed, simply
+dropped, because no subscriber was ever installed. That made a repository's
+error classification unverifiable from the test suite. Now:
+
+```bash
+RUST_LOG=info cargo test -p bikenest-infrastructure --test db_error_test -- --nocapture
+```
+
+prints a structured line per classified failure (`context`, `kind`, `sqlstate`,
+`constraint`, `error`) — `RUST_LOG=warn` (the default) is enough for anything
+`classify_and_log` actually logs today, since it only ever logs at `warn` or
+`error`.
+
+## Job-queue test isolation
+
+`SqlxJobRepository::claim` claims across every job `kind` — the right thing in
+production (one worker, every registered handler) but wrong for a test that
+wants to control exactly which rows it can see: a large, unscoped batch claim
+picks up *any* concurrently-running test's due rows just as readily as its own.
+
+`SqlxJobRepository::claim_kinds(batch, worker_id, lease_ttl, kinds: &[&str])` is
+the test-safe alternative — same claim, with `AND kind = ANY($kinds)` added to
+the query. `claim` is unchanged (still delegates to the same SQL with no kind
+filter), so production behavior is untouched.
+
+Every job test that calls `claim`/`claim_kinds` directly (rather than
+simulating a claim with a plain `UPDATE`, which most of
+`crates/infrastructure/tests/job_test.rs` does) seeds its rows under a kind
+unique to that test run —
+
+```rust
+let kind = format!("test.{}.{}.{}", module_path!(), "my_test_name", std::process::id());
+```
+
+— and claims through `claim_kinds(..., &[&kind])`. `concurrent_claims_are_disjoint`
+is the test this fixes most visibly: with a kind-scoped claim, nothing else in
+the suite can touch its 6 seeded rows, so its assertion is exact — *every*
+seeded row is claimed by exactly `worker-a` or `worker-b`, not merely "claimed
+by someone" — where before it had to tolerate a foreign claimer stealing a row
+out from under it.
+
+## CSP / rendered-asset consistency
+
+`crates/web/tests/csp_test.rs` (`#[db_test]`) renders a representative page set
+(`/`, `/search`, a parking page with a published photo, `/login`, `/about`, and
+`/moderation/photos` as an admin), extracts every `<img src>`, `<script src>`,
+and `<link rel="stylesheet"|"preconnect" href>` origin from each response body,
+and asserts each is covered by that same response's own
+`Content-Security-Policy` header — a relative URL by `'self'`, an absolute one
+by its exact origin appearing in the matching directive (`img-src`/`script-src`/
+`style-src`; a `preconnect` origin only has to appear *somewhere* in the CSP,
+per the task this codifies).
+
+`TestObjectStorage::presigned_get` (`crates/test-support/src/object_storage.rs`)
+signs every URL under `bikenest_infrastructure::TEST_MEDIA_ORIGIN`
+(`http://media.test.invalid` — an RFC 2606 `.invalid` host, so it can never
+resolve to anything real), and `Config::for_tests` puts that exact string in
+`security.media_hosts` — one constant, so the two can never drift apart. This
+means the rendered photo is a genuine *absolute-origin* URL, the same shape a
+real S3/MinIO presigned URL has, not a same-origin `/media/...` placeholder —
+the test additionally asserts (`assert_page_has_media_origin_img`) that the
+moderation queue (while it still holds the test's own pending upload) and the
+published parking page each render at least one `<img src>` at that origin, so
+the CSP consistency check above is proven to be exercising a real absolute
+origin, not trivially passing on `'self'` alone.
+
+The test also separately asserts, independent of any one rendered page, that
+every host in `test_config().security.media_hosts` appears in `img-src`.
+
+**Mutation evidence** (empty `Config::for_tests`'s `security.media_hosts`,
+`crates/infrastructure/src/config.rs`, then `cargo test -p bikenest-web --test
+csp_test`): the very first page checked (`/`, which renders a seeded featured
+photo) now fails inside `assert_page_is_csp_consistent`, before the test even
+reaches the parking/moderation pages:
+
+```
+/: asset http://media.test.invalid/seed/curitiba/hero-bike-parking.jpg?exp=...&sig=testsig
+  (origin http://media.test.invalid) is not allowed by img-src:
+  "'self' data: blob: https://demotiles.maplibre.org"
+```
+
+— i.e. the mutation is now caught by an ordinary rendered-page check, not only
+by the dedicated `media_hosts`-list assertion at the end of the test (which
+still also fails, redundantly). Reverting `media_hosts` makes the test pass
+again with no other change.
+
+## Hygiene / guard tests
+
+A block of plain `#[test]`s (no database) at the bottom of `crates/web/tests/http_test.rs`
+scans templates/CSS/JS on disk rather than exercising a route. Each protects a
+specific regression:
+
+| Test | Protects against |
+|---|---|
+| `no_error_colour_classes_remain_in_templates` | a `text\|bg\|border-error` utility surviving the `--color-error` → `--color-danger` rename (dead CSS, no matching class) |
+| `no_undefined_tailwind_color_tokens_remain_in_templates` | the same class of bug, generalised to every colour-utility prefix (`ring`, `from`/`to`, `fill`, `stroke`, `placeholder`, `divide`, the `hover:`/`peer-checked:`/`focus-visible:` variants, …) against every `--color-*` token `web/static/css/input.css`'s `@theme` block actually defines |
+| `base_layout_does_not_branch_on_csrf_presence` | the "signed in" check regressing onto CSRF-token presence (also true for anonymous auth pages) |
+| `web_crate_never_reads_the_process_environment` | a stray `std::env::var` reintroducing per-request/second config path outside `Config` |
+| `route_handlers_never_reach_for_infrastructure` | a handler reaching past `AppState`'s application ports for a concrete `Sqlx*`/pool/adapter |
+| `no_web_source_file_is_longer_than_1200_lines` | the router regressing back into one giant module |
+| `templates_reference_css_and_js_only_through_asset` | a literal `/static/...css\|js` path bypassing the content-hashed asset manifest |
+| `no_focus_outline_none_remains_in_templates` | `focus:outline-none` silently killing the global `:focus-visible` ring |
+| `no_tiny_text_xs_buttons_remain_in_templates` | a `text-xs` button under the WCAG 2.5.8 24×24px tap-target minimum |
+| `every_button_has_visible_text_or_an_aria_label` | a button with no accessible name |
+| `app_js_has_the_focus_trap_and_after_swap_focus_listener` | the dialog focus-trap/after-swap-focus JS regressing or moving |
+| `no_hardcoded_english_sentences_in_static_js` | translatable UI copy hardcoded into static JS instead of read from a server-rendered, already-translated `data-*` attribute |
+
+`no_undefined_tailwind_color_tokens_remain_in_templates`'s regex:
+
+```
+\b(text|bg|border|ring|outline|from|to|fill|stroke|placeholder|divide|hover:text|hover:bg|hover:border|peer-checked:bg|peer-checked:text|focus-visible:ring)-([a-z][a-z0-9-]*)(?:/\d+)?
+```
+
+Group 2 must be a token from `@theme` (e.g. `danger`, `accent-strong`), a
+Tailwind colour keyword (`white`/`black`/`transparent`/`current`/`inherit` —
+the numeric default palette is not allowlisted because nothing in this
+codebase uses it), or one of a small, commented `NON_COLOR_SUFFIXES` list for
+utilities that share a colour prefix without naming a colour (`text-sm`,
+`border-t`, `divide-y`, `outline-none`, `border-dashed`, `bg-gradient-to-b`,
+and the raw `stroke-width`/`stroke-linecap`/`stroke-linejoin` SVG attributes
+this whole-file text scan also matches). A first offender's path and utility
+are reported directly.
+
+`no_hardcoded_english_sentences_in_static_js`'s heuristic is deliberately
+narrow — a quoted, capitalised, exactly-two-word literal
+(`"[A-Z][a-z]+ [a-z]+"`) — and does not even match `app.js`'s `/* "Copy to all
+days" */` comment (four words, no quote right after the second). It does match
+`search.js`'s `ds.labelDetails || "View details"`, allowlisted by (file,
+exact text) with a comment: that string is the last-resort fallback for a
+missing translated dataset attribute, not copy shown in the normal path.
 
 ## Builders and doubles
 
@@ -188,3 +343,39 @@ falls back to pt-BR).
   OAuth, storage, geocoding, rate limiter).
 - Keep argon2 and ValKey out of the suite with `TestPasswordHasher` and the
   in-memory limiter, so tests stay fast and deterministic.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request against `main`.
+Two jobs:
+
+- **`test`**: `postgis/postgis:17-3.5` and `valkey/valkey:8` as GitHub Actions
+  `services:` (their default images boot straight from `POSTGRES_*` env / no
+  args at all); MinIO runs as a plain background `docker run ... minio/minio
+  server /data` step instead — the declarative `services:` schema has no field
+  for overriding a container's command, and MinIO's image needs `server /data`
+  as an explicit `CMD`. Steps: checkout; `pg_isready`/MinIO-health wait loops;
+  `dtolnay/rust-toolchain@master` pinned to `toolchain: "1.95.0"` (the exact
+  release the Dockerfile's `FROM rust:1.95` builds with — read off this
+  machine's own `rustc --version` while writing this, since Docker Hub's
+  `1.95` tag floats to "latest patch of 1.95.x" the same way rustup's own
+  channel resolution does) + `clippy`/`rustfmt` components — no root
+  `rust-toolchain.toml` (see the workflow comment above that step for why:
+  such a file would also repin every contributor's local `cargo`/`rustup`,
+  not just CI, for a fix that only needed to change CI); `Swatinem/rust-cache`;
+  `cargo fmt --all --check`; `cargo build --workspace
+  --all-targets`; `cargo clippy --workspace --all-targets -- -D warnings`;
+  Node 22 + `npm ci` + `npm run build:css` + `git diff --exit-code
+  web/static/css/app.css` (the committed CSS must be exactly the build
+  output); `cargo test --workspace`.
+- **`docker`**: `docker build -t bikenest .`, then a step that runs the image
+  with `APP_ENV=production` and nothing else configured (a bogus
+  `DATABASE_URL`, no S3/email/geocoder/TLS/`CSP_MEDIA_HOSTS`/ValKey) and
+  asserts it exits non-zero — `Config::validate_for_production()`'s whole
+  reason to exist (see `crates/web/src/main.rs`).
+
+This workflow has not been run (there is no way to run GitHub Actions
+locally); it was checked with `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"`
+(syntax only) and a careful manual read against this repo's Dockerfile,
+`.env.example`, and `docker-compose.yml`. Treat its first real run as the
+actual test of it.

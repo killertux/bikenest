@@ -4,6 +4,7 @@ pub mod auth;
 pub mod community;
 pub mod config;
 pub mod db;
+pub mod db_error;
 pub mod devdata;
 pub mod email;
 pub mod geocoding;
@@ -17,29 +18,43 @@ pub mod storage;
 pub mod timezone;
 
 pub use auth::{
-    Argon2PasswordHasher, FakeOAuthProvider, InMemoryRateLimiter, RealTokenGenerator, SeedOutcome,
-    SharedRateLimiter, SqlxAccountRepository, SqlxAuditLog, SqlxSessionStore, SqlxTokenStore,
-    SystemClock, ValKeyRateLimiter, rate_limiter_from_env, seed_admin,
+    AUDIT_METADATA_KEYS, Argon2PasswordHasher, FakeOAuthProvider, InMemoryRateLimiter,
+    RealTokenGenerator, SeedOutcome, SharedRateLimiter, SqlxAccountRepository, SqlxAuditLog,
+    SqlxSessionStore, SqlxTokenStore, SystemClock, ValKeyRateLimiter, rate_limiter_from_config,
+    seed_admin,
 };
 pub use community::{
     SqlxContributionHistoryReader, SqlxFavoriteRepository, SqlxParkingContributionRepository,
     SqlxReviewRepository, SqlxVerificationRepository,
 };
-pub use config::{Config, JobConfig, MapConfig, job_config_from_env, map_config_from_env};
-pub use db::Db;
-pub use email::{
-    CapturedEmail, FakeEmailProvider, ResendEmailProvider, SmtpEmailProvider,
-    from_env as email_from_env,
+pub use config::{
+    AppEnv, Config, ConfigError, DbConfig, EmailConfig, FakeOAuthConfig, GeocodeLimits,
+    GeocoderConfig, JobConfig, MapConfig, ModerationConfig, PhotoConfig, PolicySeedConfig,
+    RateLimiterBackend, RateLimiterConfig, S3Config, SecurityConfig, TEST_MEDIA_ORIGIN,
 };
-pub use geocoding::{FakeGeocoder, MapboxGeocoder, geocoder_from, geocoder_from_env};
-pub use job::{ClaimedJob, JobRegistry, JobServices, SqlxJobRepository, Worker, job_services};
+pub use db::Db;
+pub use db_error::{DbFailure, classify, classify_and_log, classify_code};
+pub use email::{
+    APP_NAME, CapturedEmail, FakeEmailProvider, InlineEmailQueue, JobEmailQueue, RenderedEmail,
+    ResendEmailProvider, SmtpEmailProvider, from_config as email_from_config,
+    render as render_email,
+};
+pub use geocoding::{
+    CachingGeocoder, FEATURED_BBOX_HALF_DEG, FEATURED_ORIGIN, FakeGeocoder, MapboxGeocoder,
+    SharedGeocoder, geocoder_from_config,
+};
+pub use job::{
+    ClaimedJob, JobRegistry, JobServices, SendEmailHandler, SqlxJobRepository, Worker, job_services,
+};
 pub use moderation::{SqlxAuditLogReader, SqlxModerationRepository, SqlxReportRepository};
-pub use parking::{SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader};
+pub use parking::{
+    SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader, SqlxSitemapReader,
+};
 pub use photo::{LocalImageProcessor, SqlxPhotoRepository, SqlxReviewPhotosReader};
 pub use privacy::{
     POLICY_LOCALES, POLICY_PLACEHOLDERS, SqlxAnonymizationRepository, SqlxExportRepository,
     SqlxPolicyReader, SqlxPrivacyRequestRepository, SqlxRetentionRepository,
     fill_policy_placeholders, seed_policy,
 };
-pub use storage::{S3ObjectStorage, SharedObjectStorage, storage_from_env};
+pub use storage::{S3ObjectStorage, SharedObjectStorage};
 pub use timezone::OfflineTimezoneResolver;

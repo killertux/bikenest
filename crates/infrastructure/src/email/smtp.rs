@@ -2,11 +2,14 @@
 //!
 //! Dev/compose points this at **Mailpit** (no TLS, no credentials); a real
 //! relay uses `SMTP_TLS=true` (STARTTLS) plus credentials. Swapping backends is
-//! a config change, not a code change (§84).
+//! a config change, not a code change.
 
+use crate::config::{ConfigError, EmailConfig};
+
+use crate::email::templates::render;
 use async_trait::async_trait;
-use bikenest_application::{EmailError, EmailProvider, OutboundEmail};
-use lettre::message::{Mailbox, MultiPart, SinglePart};
+use bikenest_application::{EmailError, EmailMessage, EmailProvider};
+use lettre::message::Mailbox;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
@@ -31,53 +34,50 @@ impl SmtpEmailProvider {
         Ok(Self { mailer, from })
     }
 
-    /// Build from the environment.
-    pub fn from_env() -> Result<Self, EmailError> {
-        let host = std::env::var("SMTP_HOST")
-            .map_err(|_| EmailError::Unexpected("SMTP_HOST not set".into()))?;
-        let port = std::env::var("SMTP_PORT")
-            .ok()
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(1025);
-        let username = std::env::var("SMTP_USERNAME").unwrap_or_default();
-        let password = std::env::var("SMTP_PASSWORD").unwrap_or_default();
-        let from =
-            std::env::var("EMAIL_FROM").unwrap_or_else(|_| "no-reply@bikenest.local".to_string());
-        let tls = std::env::var("SMTP_TLS")
-            .ok()
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        Self::new(host, port, username, password, from, tls)
+    /// Build from the parsed `SMTP_*` block.
+    pub fn from_config(config: &EmailConfig) -> Result<Self, ConfigError> {
+        let EmailConfig::Smtp {
+            host,
+            port,
+            username,
+            password,
+            tls,
+            from,
+        } = config
+        else {
+            return Err(ConfigError::invalid(
+                "EMAIL_PROVIDER",
+                "expected the smtp configuration",
+            ));
+        };
+        Self::new(
+            host.clone(),
+            *port,
+            username.clone(),
+            password.clone(),
+            from.clone(),
+            *tls,
+        )
+        .map_err(|e| ConfigError::invalid("SMTP_HOST", e.to_string()))
     }
 
-    fn message(&self, email: OutboundEmail) -> Result<Message, EmailError> {
+    /// Render `msg` in the recipient's locale and build the SMTP message.
+    fn message(&self, msg: &EmailMessage) -> Result<Message, EmailError> {
         let from: Mailbox = self
             .from
             .parse()
             .map_err(|_| EmailError::Unexpected("invalid EMAIL_FROM".into()))?;
-        let to: Mailbox = email
+        let to: Mailbox = msg
             .to
-            .to_string()
             .parse()
             .map_err(|_| EmailError::Unexpected("invalid recipient email".into()))?;
-        match email.html {
-            Some(html) => Message::builder()
-                .from(from)
-                .to(to)
-                .subject(email.subject)
-                .multipart(
-                    MultiPart::alternative()
-                        .singlepart(SinglePart::plain(email.text))
-                        .singlepart(SinglePart::html(html)),
-                )
-                .map_err(|e| EmailError::Unexpected(e.to_string())),
-            None => Message::builder()
-                .from(from)
-                .to(to)
-                .subject(email.subject)
-                .body(email.text)
-                .map_err(|e| EmailError::Unexpected(e.to_string())),
-        }
+        let rendered = render(msg);
+        Message::builder()
+            .from(from)
+            .to(to)
+            .subject(rendered.subject)
+            .body(rendered.text)
+            .map_err(|e| EmailError::Unexpected(e.to_string()))
     }
 }
 
@@ -105,8 +105,8 @@ fn build_mailer(
 
 #[async_trait]
 impl EmailProvider for SmtpEmailProvider {
-    async fn send(&self, email: OutboundEmail) -> Result<(), EmailError> {
-        let message = self.message(email)?;
+    async fn send(&self, msg: &EmailMessage) -> Result<(), EmailError> {
+        let message = self.message(msg)?;
         self.mailer
             .send(message)
             .await
@@ -118,7 +118,8 @@ impl EmailProvider for SmtpEmailProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bikenest_domain::UserEmail;
+    use bikenest_application::EmailKind;
+    use bikenest_domain::LocaleCode;
 
     fn provider() -> SmtpEmailProvider {
         SmtpEmailProvider::new(
@@ -132,32 +133,27 @@ mod tests {
         .unwrap()
     }
 
+    /// The provider renders: what goes on the wire is the catalog text for the
+    /// recipient's locale, not anything a caller passed in.
     #[test]
-    fn builds_plain_text_message() {
-        let email = OutboundEmail {
-            to: UserEmail::parse("x@example.com").unwrap(),
-            subject: "Hi".into(),
-            text: "Body\nPlain".into(),
-            html: None,
-        };
-        let msg = provider().message(email).unwrap();
-        assert!(!msg.formatted().is_empty());
-    }
-
-    #[test]
-    fn builds_alternative_multipart_when_html_present() {
-        let email = OutboundEmail {
-            to: UserEmail::parse("x@example.com").unwrap(),
-            subject: "Hi".into(),
-            text: "Body".into(),
-            html: Some("<p>Body</p>".into()),
-        };
-        let msg = provider().message(email).unwrap();
-        let bytes = msg.formatted();
-        let formatted = String::from_utf8_lossy(&bytes);
-        assert!(
-            formatted.contains("multipart/alternative"),
-            "multipart html email"
+    fn builds_a_plain_text_message_rendered_in_the_recipients_locale() {
+        let message = EmailMessage::new(
+            "x@example.com",
+            LocaleCode::PtBr,
+            EmailKind::ResetPassword {
+                link: "https://bikenest.test/password-reset/new?token=t".into(),
+            },
         );
+        let built = provider().message(&message).unwrap();
+        let bytes = built.formatted();
+        let formatted = String::from_utf8_lossy(&bytes);
+        assert!(formatted.contains("To: x@example.com"));
+        assert!(
+            formatted.contains("=?utf-8?") || formatted.contains("Redefina sua senha"),
+            "the pt-BR subject must be on the wire (encoded or literal): {formatted}"
+        );
+        // The body is quoted-printable (the pt-BR text is non-ASCII), so the
+        // link's `=` arrives as `=3D` — match the part that survives encoding.
+        assert!(formatted.contains("password-reset/new"), "{formatted}");
     }
 }

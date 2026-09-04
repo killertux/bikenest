@@ -8,37 +8,55 @@
     <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.audit.action") }}<input name="action" value="{{ action }}" class="mt-1 rounded-lg border border-border px-2 py-2"></label>
     <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.audit.target_type") }}<input name="target_type" value="{{ target_type }}" class="mt-1 rounded-lg border border-border px-2 py-2"></label>
     <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.audit.actor") }}<input name="actor" type="number" min="1" value="{{ actor }}" class="mt-1 rounded-lg border border-border px-2 py-2"></label>
-    <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.audit.from") }}<input name="from" value="{{ from }}" class="mt-1 rounded-lg border border-border px-2 py-2"></label>
-    <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.audit.to") }}<input name="to" value="{{ to }}" class="mt-1 rounded-lg border border-border px-2 py-2"></label>
-    <button type="submit" class="rounded-lg bg-accent px-3 py-2 font-medium text-white">{{ tr.t("admin.audit.filter") }}</button>
+    {# A date picker instead of a hand-typed ISO string. Values are read as UTC,
+       which is what the rows are stored in. #}
+    <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.audit.from") }}<input name="from" type="datetime-local" value="{{ from }}" class="mt-1 rounded-lg border border-border px-2 py-2"></label>
+    <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.audit.to") }}<input name="to" type="datetime-local" value="{{ to }}" class="mt-1 rounded-lg border border-border px-2 py-2"></label>
+    <button type="submit" class="rounded-lg bg-accent-strong px-3 py-2 font-medium text-white">{{ tr.t("admin.audit.filter") }}</button>
   </form>
+  <p class="mt-2 text-xs text-muted">{{ tr.t("admin.audit.utc_note") }}</p>
 
   {% if items.is_empty() %}
     <div class="mt-8 rounded-2xl border border-border p-8 text-center text-sm text-muted">{{ tr.t("admin.audit.empty") }}</div>
   {% else %}
-  <div class="mt-6 overflow-hidden rounded-2xl border border-border">
+  <div class="mt-6 overflow-x-auto rounded-2xl border border-border">
     <table class="w-full text-left text-sm">
       <thead class="bg-bg">
         <tr>
           <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.id") }}</th>
+          <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.when") }}</th>
           <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.actor") }}</th>
           <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.action") }}</th>
           <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.target") }}</th>
           <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.result") }}</th>
           <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.metadata") }}</th>
-          <th class="px-4 py-3 font-semibold">{{ tr.t("admin.audit.when") }}</th>
         </tr>
       </thead>
       <tbody>
         {% for e in items %}
         <tr class="border-t border-border align-top">
           <td class="px-4 py-3 font-mono text-xs text-muted">{{ e.id }}</td>
-          <td class="px-4 py-3">{{ e.actor_label }}</td>
+          <td class="whitespace-nowrap px-4 py-3 font-mono text-xs" title="{{ e.created_title }}">
+            {{ e.created_utc }}
+            <span class="block text-muted">{{ e.created_local }}</span>
+          </td>
+          <td class="px-4 py-3">
+            {% if let Some(url) = e.actor_url %}
+              <a href="{{ url }}" class="hover:text-accent-strong hover:underline">{{ e.actor_label }}</a>
+            {% else %}
+              {{ e.actor_label }}
+            {% endif %}
+          </td>
           <td class="px-4 py-3 font-mono text-xs">{{ e.action }}</td>
-          <td class="px-4 py-3 font-mono text-xs text-muted">{{ e.target_label }}</td>
+          <td class="px-4 py-3 font-mono text-xs">
+            {% if let Some(url) = e.target_url %}
+              <a href="{{ url }}" class="text-muted hover:text-accent-strong hover:underline">{{ e.target_label }}</a>
+            {% else %}
+              <span class="text-muted">{{ e.target_label }}</span>
+            {% endif %}
+          </td>
           <td class="px-4 py-3">{{ e.result_label }}</td>
           <td class="px-4 py-3 font-mono text-xs text-muted">{{ e.metadata }}</td>
-          <td class="px-4 py-3 text-muted">{{ e.created_label }}</td>
         </tr>
         {% endfor %}
       </tbody>

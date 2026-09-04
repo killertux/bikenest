@@ -17,6 +17,8 @@ pub type JobPayload = Value;
 /// Discriminator constants for the built-in job kinds.
 pub const JOB_RETENTION: &str = "retention";
 pub const JOB_JOBS_GC: &str = "jobs.gc";
+/// One transactional email; the payload is a serialised `EmailMessage`.
+pub const JOB_EMAIL_SEND: &str = "email.send";
 
 /// A job-run failure. `Failed` is transient (the worker retries it if the
 /// attempt budget remains); `Permanent` skips retries and dead-letters now.
@@ -40,6 +42,16 @@ pub trait JobHandler: Send + Sync {
 
     /// Runs the job. `Ok(())` = success; `Err(JobError)` = failure.
     async fn run(&self, payload: &JobPayload) -> Result<(), JobError>;
+
+    /// Called once by the worker when it gives up on a job — the attempt
+    /// budget is spent, or the failure was permanent — just before the row is
+    /// dead-lettered.
+    ///
+    /// The worker's own log line names the kind, the id and the error; this
+    /// hook is for the handler to add what only it can decode from the payload
+    /// (a failed email says *which* message to *which* domain). Default: do
+    /// nothing.
+    async fn on_dead_letter(&self, _payload: &JobPayload, _error: &str) {}
 }
 
 #[cfg(test)]
@@ -50,5 +62,7 @@ mod tests {
     fn job_kinds_are_stable() {
         assert_eq!(JOB_RETENTION, "retention");
         assert_eq!(JOB_JOBS_GC, "jobs.gc");
+        // Queued rows outlive a deploy: renaming this orphans them.
+        assert_eq!(JOB_EMAIL_SEND, "email.send");
     }
 }

@@ -59,7 +59,7 @@ fn safe_destination(dest: pulldown_cmark::CowStr<'_>) -> pulldown_cmark::CowStr<
     let allowed = d.starts_with("https://")
         || d.starts_with("http://")
         || d.starts_with("mailto:")
-        || d.starts_with('/')
+        || (d.starts_with('/') && !d.starts_with("//"))
         || d.starts_with('#');
     if allowed { dest } else { "#".into() }
 }
@@ -117,6 +117,15 @@ mod tests {
         assert!(html.contains("href=\"https://example.com\""));
         assert!(html.contains("href=\"/privacy\""));
         assert!(html.contains("href=\"mailto:x@y.z\""));
+        assert!(html.contains("href=\"#\""));
+    }
+
+    #[test]
+    fn protocol_relative_links_are_neutralised() {
+        // `//evil.example` is not site-relative — a browser resolves it against
+        // the current scheme, so it would silently leave the site.
+        let html = render_policy_markdown("[a](//evil.example)");
+        assert!(!html.contains("href=\"//evil.example\""));
         assert!(html.contains("href=\"#\""));
     }
 

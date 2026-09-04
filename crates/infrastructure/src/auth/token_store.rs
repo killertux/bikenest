@@ -45,7 +45,7 @@ impl TokenStore for SqlxTokenStore {
         .bind(expires_at)
         .execute(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("token.issue_verification", e))?;
         Ok(())
     }
 
@@ -72,7 +72,7 @@ impl TokenStore for SqlxTokenStore {
         .bind(now)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("token.consume_verification", e))?;
         Ok(row.map(|r| (UserId(r.user_id), r.email)))
     }
 
@@ -95,7 +95,7 @@ impl TokenStore for SqlxTokenStore {
         .bind(expires_at)
         .execute(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("token.issue_reset", e))?;
         Ok(())
     }
 
@@ -121,7 +121,13 @@ impl TokenStore for SqlxTokenStore {
         .bind(now)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(|_| AuthError::Internal)?;
+        .map_err(|e| db_err("token.consume_reset", e))?;
         Ok(row.map(|r| UserId(r.user_id)))
     }
+}
+
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// [`AuthError`]. `context` names the operation, e.g. `"token.issue"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> AuthError {
+    crate::db_error::classify_and_log(context, e).into()
 }

@@ -1,7 +1,7 @@
 //! Geocoders (§21, §84): the deterministic dev `FakeGeocoder` and a real
-//! `MapboxGeocoder` (**Ledger #2**; hosted OSM-derived provider, §83). Selected
-//! at wiring time by the `GEOCODER` env var (`fake` | `mapbox`) — swapping
-//! providers is a config change, never a domain/app change.
+//! `MapboxGeocoder` (hosted OSM-derived provider, §83). Selected at wiring time
+//! by the parsed `GEOCODER` setting (`fake` | `mapbox`) — swapping providers is
+//! a config change, never a domain/app change.
 //!
 //! **§77 (third-party boundary):** the geocoder is called **server-side** with
 //! only the free-text destination query. No account identity, cookie, or client
@@ -17,9 +17,31 @@
 //! renders a friendly "couldn't reach the geocoder" message (the search handler
 //! maps it to a no-results page, never a 500).
 
+use crate::config::GeocoderConfig;
+
 use async_trait::async_trait;
 use bikenest_application::{GeoHit, GeocodeError, Geocoder};
 use bikenest_domain::GeoPoint;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// Origin of the home page's featured strip: the Rua XV de Novembro landmark.
+/// The strip used to reach it by *geocoding the literal string* on every render
+/// — one provider call, billed, to resolve a constant. The home page passes
+/// these coordinates instead, which skips the geocoder altogether (explicit
+/// coordinates win over a query).
+pub const FEATURED_ORIGIN: (f64, f64) = (-25.429_700, -49.270_500);
+
+/// Half-side of the "explore the centre" browse box, in degrees: ±0.02° is
+/// ~2.2 km north–south and ~2.0 km east–west at this latitude — a downtown's
+/// worth of map, and well inside the browse span limit.
+///
+/// Every "browse the map" entry point (the nav's parking link, the home page's
+/// explore link, the empty-search prompt) is this box around
+/// [`FEATURED_ORIGIN`], so they all land on the same view instead of one
+/// hard-coded street.
+pub const FEATURED_BBOX_HALF_DEG: f64 = 0.02;
 
 // ---------------------------------------------------------------------------
 // FakeGeocoder (deterministic, dev/test only)
@@ -106,13 +128,28 @@ fn encode_path_segment(s: &str) -> String {
     out
 }
 
-/// Build the Mapbox forward-geocoding URL for a query.
-fn mapbox_url(endpoint: &str, token: &str, query: &str, limit: u32) -> String {
+/// Build the Mapbox forward-geocoding URL for a query. Deliberately excludes
+/// the access token: it is attached separately via the request builder's
+/// `.query(...)` so it never appears in a URL we might log or format into an
+/// error message (`reqwest::Error`'s `Display` embeds the full request URL).
+fn mapbox_url(endpoint: &str, query: &str, limit: u32) -> String {
     format!(
-        "{}/{}.json?access_token={}&limit={limit}",
+        "{}/{}.json?limit={limit}",
         endpoint,
-        encode_path_segment(query),
-        token
+        encode_path_segment(query)
+    )
+}
+
+/// Summarize a `reqwest::Error` for logs/error messages using only structured
+/// facts (HTTP status, timeout, connect-failure) — never the error's own
+/// `Display`/`{:?}`, which embeds the full request URL and would leak the
+/// Mapbox access token carried as a query parameter.
+fn describe_reqwest_error(e: &reqwest::Error) -> String {
+    format!(
+        "status={:?} timeout={} connect={}",
+        e.status().map(|s| s.as_u16()),
+        e.is_timeout(),
+        e.is_connect()
     )
 }
 
@@ -172,12 +209,6 @@ impl MapboxGeocoder {
             endpoint: MAPBOX_ENDPOINT.to_string(),
         }
     }
-
-    pub fn from_env() -> Result<Self, String> {
-        std::env::var("MAPBOX_ACCESS_TOKEN")
-            .map(Self::new)
-            .map_err(|_| "MAPBOX_ACCESS_TOKEN is not set".to_string())
-    }
 }
 
 #[async_trait]
@@ -187,25 +218,27 @@ impl Geocoder for MapboxGeocoder {
         if q.is_empty() {
             return Ok(None);
         }
-        let url = mapbox_url(&self.endpoint, &self.token, q, 1);
+        let url = mapbox_url(&self.endpoint, q, 1);
         let bytes = self
             .client
             .get(&url)
+            .query(&[("access_token", &self.token)])
             .send()
             .await
             .map_err(|e| {
-                tracing::warn!(error = %e, "Mapbox request failed");
+                tracing::warn!(mapbox_error = %describe_reqwest_error(&e), "Mapbox request failed");
                 GeocodeError::Unavailable
             })?
             .error_for_status()
             .map_err(|e| {
-                tracing::warn!(error = %e, "Mapbox returned a non-success status");
-                GeocodeError::Unexpected(format!("Mapbox status: {e}"))
+                let desc = describe_reqwest_error(&e);
+                tracing::warn!(mapbox_error = %desc, "Mapbox returned a non-success status");
+                GeocodeError::Unexpected(format!("Mapbox status: {desc}"))
             })?
             .bytes()
             .await
             .map_err(|e| {
-                tracing::warn!(error = %e, "Mapbox body read failed");
+                tracing::warn!(mapbox_error = %describe_reqwest_error(&e), "Mapbox body read failed");
                 GeocodeError::Unavailable
             })?;
         parse_mapbox_response(&bytes)
@@ -213,30 +246,141 @@ impl Geocoder for MapboxGeocoder {
 }
 
 // ---------------------------------------------------------------------------
-// Env selection
+// Selection
 // ---------------------------------------------------------------------------
 
-/// Build a geocoder from an explicit provider name + optional token. Separated
-/// from env so the mapping is unit-testable without mutating process globals.
-pub fn geocoder_from(provider: &str, token: Option<&str>) -> Box<dyn Geocoder> {
-    match provider.to_ascii_lowercase().as_str() {
-        "mapbox" => match token.map(ToOwned::to_owned).map(MapboxGeocoder::new) {
-            Some(g) => Box::new(g),
-            None => {
-                eprintln!("geocoder: MAPBOX_ACCESS_TOKEN is not set; falling back to FakeGeocoder");
-                Box::new(FakeGeocoder)
+// ---------------------------------------------------------------------------
+// CachingGeocoder
+// ---------------------------------------------------------------------------
+
+/// How long a resolved destination is reused. A street address does not move,
+/// and a day is short enough that a provider correction reaches us quickly.
+pub const GEOCODE_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Upper bound on remembered queries — this is a bounded cache, not a leak
+/// that grows with every distinct string anyone types into the search box.
+/// ~10k entries of (query, label, point) is well under a megabyte.
+pub const GEOCODE_CACHE_CAPACITY: usize = 10_000;
+
+/// In-process cache in front of a real geocoder.
+///
+/// Every geocode is a billable third-party call, and the search box
+/// resolves the same few dozen destinations over and over: "the city centre",
+/// a shared link making the rounds, one person paging through results. Without
+/// this, each of those is a fresh call to the provider.
+///
+/// Deliberately in-process, and therefore per-instance: it needs no store, no
+/// eviction daemon and no failure mode of its own. A shared ValKey tier (the
+/// rate limiter already talks to one) would let several instances share the
+/// savings and survive a restart — the obvious follow-up, and the reason
+/// [`Self::peek`] exists as a lookup rather than the cache being hidden inside
+/// [`Geocoder::geocode`].
+///
+/// Only *resolved* queries are remembered. A query the provider could not
+/// resolve is not cached: those are typos and junk, they must not pin a
+/// failure for a day, and the per-IP budget in the web layer is what stops
+/// anyone hammering the provider with them.
+pub struct CachingGeocoder {
+    inner: Box<dyn Geocoder>,
+    state: Mutex<Cache>,
+    ttl: Duration,
+    capacity: usize,
+}
+
+struct Cache {
+    hits: HashMap<String, (GeoHit, Instant)>,
+    /// Keys in insertion order: the bound evicts the oldest.
+    order: VecDeque<String>,
+}
+
+impl CachingGeocoder {
+    pub fn new(inner: Box<dyn Geocoder>) -> Self {
+        Self::with_limits(inner, GEOCODE_CACHE_TTL, GEOCODE_CACHE_CAPACITY)
+    }
+
+    fn with_limits(inner: Box<dyn Geocoder>, ttl: Duration, capacity: usize) -> Self {
+        Self {
+            inner,
+            state: Mutex::new(Cache {
+                hits: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+            ttl,
+            capacity,
+        }
+    }
+
+    /// The cached resolution for `query`, if one is live — without calling the
+    /// provider and without recording anything.
+    ///
+    /// The web layer checks this before charging a search against the caller's
+    /// geocode budget: a query this cache can already answer costs the
+    /// provider nothing, so it must not cost the caller anything either.
+    pub fn peek(&self, query: &str) -> Option<GeoHit> {
+        let key = normalize(query);
+        let state = self.state.lock().expect("geocode cache mutex");
+        let (hit, at) = state.hits.get(&key)?;
+        (at.elapsed() < self.ttl).then(|| hit.clone())
+    }
+
+    fn remember(&self, query: &str, hit: &GeoHit) {
+        let key = normalize(query);
+        let mut state = self.state.lock().expect("geocode cache mutex");
+        if state
+            .hits
+            .insert(key.clone(), (hit.clone(), Instant::now()))
+            .is_none()
+        {
+            state.order.push_back(key);
+        }
+        while state.order.len() > self.capacity {
+            if let Some(oldest) = state.order.pop_front() {
+                state.hits.remove(&oldest);
             }
-        },
-        _ => Box::new(FakeGeocoder),
+        }
     }
 }
 
-/// Build the geocoder selected by `GEOCODER` (`mapbox` | `fake`, default `fake`),
-/// so `cargo run` and the test harness always work without credentials.
-pub fn geocoder_from_env() -> Box<dyn Geocoder> {
-    let provider = std::env::var("GEOCODER").unwrap_or_else(|_| "fake".to_string());
-    let token = std::env::var("MAPBOX_ACCESS_TOKEN").ok();
-    geocoder_from(&provider, token.as_deref())
+#[async_trait]
+impl Geocoder for CachingGeocoder {
+    async fn geocode(&self, query: &str) -> Result<Option<GeoHit>, GeocodeError> {
+        if let Some(hit) = self.peek(query) {
+            return Ok(Some(hit));
+        }
+        let resolved = self.inner.geocode(query).await?;
+        if let Some(hit) = &resolved {
+            self.remember(query, hit);
+        }
+        Ok(resolved)
+    }
+}
+
+/// One [`CachingGeocoder`] behind the [`Geocoder`] port, so the use case and
+/// the handler that inspects the cache hold the same instance (the same shape
+/// as `SharedRateLimiter`).
+pub struct SharedGeocoder(Arc<CachingGeocoder>);
+
+impl SharedGeocoder {
+    pub fn new(inner: Arc<CachingGeocoder>) -> Self {
+        Self(inner)
+    }
+}
+
+#[async_trait]
+impl Geocoder for SharedGeocoder {
+    async fn geocode(&self, query: &str) -> Result<Option<GeoHit>, GeocodeError> {
+        self.0.geocode(query).await
+    }
+}
+
+/// Build the geocoder the parsed configuration selected. `Mapbox` carries its
+/// token, so there is no "asked for Mapbox, got the fake" path any more: a
+/// missing token is rejected while the configuration is parsed.
+pub fn geocoder_from_config(config: &GeocoderConfig) -> Box<dyn Geocoder> {
+    match config {
+        GeocoderConfig::Fake => Box::new(FakeGeocoder),
+        GeocoderConfig::Mapbox { token } => Box::new(MapboxGeocoder::new(token.clone())),
+    }
 }
 
 #[cfg(test)]
@@ -335,20 +479,193 @@ mod tests {
 
     #[test]
     fn builds_mapbox_url() {
-        let url = mapbox_url(MAPBOX_ENDPOINT, "tok", "Rua XV, 1", 1);
+        let url = mapbox_url(MAPBOX_ENDPOINT, "Rua XV, 1", 1);
         assert_eq!(
             url,
-            "https://api.mapbox.com/geocoding/v5/mapbox.places/Rua%20XV%2C%201.json?access_token=tok&limit=1"
+            "https://api.mapbox.com/geocoding/v5/mapbox.places/Rua%20XV%2C%201.json?limit=1"
+        );
+        assert!(
+            !url.contains("access_token"),
+            "the token must never be part of the formatted URL"
         );
     }
 
-    // --- env selection -----------------------------------------------------
+    // --- error mapping never leaks the access token -------------------------
 
     #[tokio::test]
-    async fn unknown_provider_is_fake() {
+    async fn describe_reqwest_error_never_contains_the_token() {
+        // Nothing listens on this loopback port, so the request fails fast with
+        // a connect error — and `reqwest::Error`'s own Display embeds the full
+        // request URL (and thus the token carried in its query string), which
+        // is exactly what `describe_reqwest_error` must never reproduce.
+        let token = "super-secret-mapbox-token";
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(200))
+            .build()
+            .unwrap();
+        let err = client
+            .get(format!("http://127.0.0.1:1/geocode?access_token={token}"))
+            .send()
+            .await
+            .expect_err("connecting to a closed port must fail");
+        assert!(
+            format!("{err}").contains(token),
+            "sanity check: reqwest's own Display does leak the token"
+        );
+        let described = describe_reqwest_error(&err);
+        assert!(
+            !described.contains(token),
+            "error summary must never contain the token: {described}"
+        );
+    }
+
+    #[tokio::test]
+    async fn geocode_error_never_leaks_the_token() {
+        let token = "super-secret-mapbox-token";
+        // Nothing listens on this loopback port: every request is a fast
+        // connect failure, and the URL passed to `.get()` would carry the
+        // token if `mapbox_url` still embedded it.
+        let geo = MapboxGeocoder {
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_millis(200))
+                .build()
+                .unwrap(),
+            token: token.to_string(),
+            endpoint: "http://127.0.0.1:1".to_string(),
+        };
+        let err = geo
+            .geocode("Rua XV de Novembro")
+            .await
+            .expect_err("connecting to a closed port must fail");
+        let rendered = format!("{err:?}");
+        assert!(
+            !rendered.contains(token),
+            "GeocodeError must never contain the token: {rendered}"
+        );
+    }
+
+    // --- selection ---------------------------------------------------------
+
+    /// A provider whose calls are counted, so a test can prove one did *not*
+    /// happen. The counter is shared, not owned: the cache takes the geocoder.
+    #[derive(Default)]
+    struct Calls(std::sync::atomic::AtomicUsize);
+
+    impl Calls {
+        fn get(&self) -> usize {
+            self.0.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    struct CountingGeocoder {
+        calls: Arc<Calls>,
+        resolves: bool,
+    }
+
+    /// A counted provider plus the handle to read its tally.
+    fn counting(resolves: bool) -> (Box<dyn Geocoder>, Arc<Calls>) {
+        let calls = Arc::new(Calls::default());
+        (
+            Box::new(CountingGeocoder {
+                calls: calls.clone(),
+                resolves,
+            }),
+            calls,
+        )
+    }
+
+    #[async_trait]
+    impl Geocoder for CountingGeocoder {
+        async fn geocode(&self, query: &str) -> Result<Option<GeoHit>, GeocodeError> {
+            self.calls
+                .0
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if !self.resolves {
+                return Ok(None);
+            }
+            Ok(Some(GeoHit {
+                label: query.trim().to_string(),
+                point: GeoPoint::new(-25.4297, -49.2705).unwrap(),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_resolved_query_is_answered_from_the_cache_next_time() {
+        let (inner, calls) = counting(true);
+        let geo = CachingGeocoder::new(inner);
+
+        let first = geo.geocode("Rua XV de Novembro").await.unwrap().unwrap();
+        // Same destination, differently typed: the key is the normalized query.
+        let second = geo.geocode("  rua xv de novembro ").await.unwrap().unwrap();
+        assert_eq!(first.point, second.point);
+        assert_eq!(calls.get(), 1, "the provider is paid once");
+        assert!(geo.peek("RUA XV DE NOVEMBRO").is_some());
+        assert!(geo.peek("somewhere else").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_query_that_does_not_resolve_is_not_remembered() {
+        let (inner, calls) = counting(false);
+        let geo = CachingGeocoder::new(inner);
+
+        assert!(geo.geocode("asdfghjkl").await.unwrap().is_none());
+        assert!(geo.peek("asdfghjkl").is_none(), "no failure is pinned");
+        assert!(geo.geocode("asdfghjkl").await.unwrap().is_none());
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_entry_expires_and_is_resolved_again() {
+        let (inner, calls) = counting(true);
+        let geo =
+            CachingGeocoder::with_limits(inner, Duration::from_millis(40), GEOCODE_CACHE_CAPACITY);
+
+        geo.geocode("Praça Tiradentes").await.unwrap();
+        assert!(geo.peek("Praça Tiradentes").is_some());
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(geo.peek("Praça Tiradentes").is_none(), "the entry aged out");
+        geo.geocode("Praça Tiradentes").await.unwrap();
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_cache_is_bounded_and_evicts_the_oldest_entry() {
+        let (inner, _calls) = counting(true);
+        let geo = CachingGeocoder::with_limits(inner, GEOCODE_CACHE_TTL, 2);
+
+        for q in ["first", "second", "third"] {
+            geo.geocode(q).await.unwrap();
+        }
+        assert!(geo.peek("first").is_none(), "the oldest entry was evicted");
+        assert!(geo.peek("second").is_some());
+        assert!(geo.peek("third").is_some());
+        assert_eq!(
+            geo.state.lock().unwrap().hits.len(),
+            2,
+            "the map never grows past the bound"
+        );
+
+        // Re-resolving a live entry refreshes it in place rather than
+        // consuming another slot.
+        geo.geocode("second").await.unwrap();
+        assert_eq!(geo.state.lock().unwrap().order.len(), 2);
+    }
+
+    #[test]
+    fn the_featured_origin_is_the_rua_xv_landmark() {
+        let (_, lat, lon) = crate::devdata::LANDMARKS
+            .iter()
+            .find(|(name, _, _)| *name == "rua xv de novembro")
+            .expect("the landmark the home page features");
+        assert_eq!((*lat, *lon), FEATURED_ORIGIN);
+    }
+
+    #[tokio::test]
+    async fn fake_config_builds_the_deterministic_fake() {
         // The returned geocoder must be the deterministic fake (resolves a
         // known landmark to its precise coordinate).
-        let geo = geocoder_from("bogus", None);
+        let geo = geocoder_from_config(&GeocoderConfig::Fake);
         let hit = geo.geocode("Rua XV de Novembro").await.unwrap().unwrap();
         assert!((hit.point.lat() - -25.429_700).abs() < 1e-5);
     }

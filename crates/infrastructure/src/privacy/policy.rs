@@ -64,7 +64,7 @@ impl PolicyReader for SqlxPolicyReader {
         .bind(locale)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("policy.current", e))?;
         match row {
             Some(r) => Ok(Some(r.into_document()?)),
             None => Ok(None),
@@ -88,11 +88,13 @@ impl PolicyReader for SqlxPolicyReader {
         .bind(locale)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("policy.history", e))?;
         rows.into_iter().map(PolicyRow::into_document).collect()
     }
 }
 
-fn map_err(_e: sqlx::Error) -> PrivacyError {
-    PrivacyError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"policy.current"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> PrivacyError {
+    crate::db_error::classify_and_log(context, e).into()
 }

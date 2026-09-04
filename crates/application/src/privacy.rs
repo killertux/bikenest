@@ -48,6 +48,13 @@ pub enum PrivacyError {
     InvalidKind,
     #[error("invalid input: {0}")]
     InvalidField(String),
+    /// Storage refused a duplicate, or a concurrent writer won the race
+    /// (unique violation, serialization failure, deadlock).
+    #[error("that change conflicts with an existing record")]
+    Conflict,
+    /// Storage is unreachable or overloaded; the same request may work shortly.
+    #[error("service temporarily unavailable")]
+    Unavailable,
     #[error("internal error")]
     Internal,
 }
@@ -323,6 +330,9 @@ pub trait PrivacyRequestRepository: Send + Sync {
 pub struct AnonymizationReport {
     pub identities: u64,
     pub roles: u64,
+    /// `user_roles.granted_by` rows that named this account (roles it granted
+    /// to *other* people) and were nulled.
+    pub roles_granted_by_anonymized: u64,
     pub sessions: u64,
     pub email_verification_tokens: u64,
     pub password_reset_tokens: u64,
@@ -339,6 +349,10 @@ pub struct AnonymizationReport {
     pub parking_photos_anonymized: u64,
     pub review_photos_anonymized: u64,
     pub audit_events_anonymized: u64,
+    /// Audit rows whose `target_id` held the account's email (failed logins,
+    /// which have no user id to record) and were rewritten to the anonymized
+    /// form.
+    pub audit_targets_anonymized: u64,
     pub privacy_requests_anonymized: u64,
 }
 
@@ -373,8 +387,13 @@ pub trait RetentionRepository: Send + Sync {
     async fn purge_expired_parked_here(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError>;
     async fn purge_expired_exports(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError>;
     /// Delete orphaned upload objects older than the orphan TTL (media sweep).
-    /// Returns the number of objects removed (best-effort).
+    /// Returns the number of objects removed. A store that cannot be listed is
+    /// an error, never a quiet zero.
     async fn purge_orphan_uploads(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError>;
+    /// Delete `PENDING_REVIEW` photo rows older than the reconciliation grace
+    /// period whose stored object does not exist — a row that can never render.
+    /// Returns the number of rows removed.
+    async fn reconcile_pending_photos(&self, now: DateTime<Utc>) -> Result<u64, PrivacyError>;
     /// Anonymize accounts inactive before `cutoff` (config-gated; TTL=0 → caller
     /// must not invoke). Returns the number of accounts anonymized.
     async fn anonymize_inactive_accounts(&self, cutoff: DateTime<Utc>)
@@ -801,7 +820,7 @@ impl RetentionJob {
         }
     }
 
-    /// Run every purge step. The six default steps always run; the two
+    /// Run every purge step. The seven default steps always run; the two
     /// config-gated steps are skipped when their TTL is `0`. Idempotent: every
     /// purge is a `DELETE WHERE expires_at < now()` so a re-run is a no-op.
     pub async fn run(&self) -> Result<RetentionSummary, PrivacyError> {
@@ -831,6 +850,10 @@ impl RetentionJob {
             (
                 "orphan_uploads",
                 self.retention.purge_orphan_uploads(now).await?,
+            ),
+            (
+                "pending_photos",
+                self.retention.reconcile_pending_photos(now).await?,
             ),
         ];
 
@@ -1105,6 +1128,9 @@ mod tests {
         async fn purge_orphan_uploads(&self, _n: DateTime<Utc>) -> Result<u64, PrivacyError> {
             Ok(6)
         }
+        async fn reconcile_pending_photos(&self, _n: DateTime<Utc>) -> Result<u64, PrivacyError> {
+            Ok(9)
+        }
         async fn anonymize_inactive_accounts(
             &self,
             _c: DateTime<Utc>,
@@ -1159,6 +1185,13 @@ mod tests {
         async fn set_password(&self, _i: UserId, _h: &str) -> Result<(), AuthError> {
             Ok(())
         }
+        async fn set_locale(
+            &self,
+            _i: UserId,
+            _l: bikenest_domain::LocaleCode,
+        ) -> Result<(), AuthError> {
+            Ok(())
+        }
         async fn link_identity(
             &self,
             _u: UserId,
@@ -1184,14 +1217,35 @@ mod tests {
         async fn roles(&self, _i: UserId) -> Result<Vec<Role>, AuthError> {
             Ok(vec![Role::User])
         }
+        async fn count_admins(&self) -> Result<i64, AuthError> {
+            Ok(2)
+        }
         async fn grant_role(&self, _i: UserId, _r: Role, _b: UserId) -> Result<(), AuthError> {
             Ok(())
         }
-        async fn revoke_role(&self, _i: UserId, _r: Role) -> Result<bool, AuthError> {
+        async fn revoke_role_guarded(&self, _i: UserId, _r: Role) -> Result<bool, AuthError> {
             Ok(true)
         }
         async fn list_users(&self) -> Result<Vec<bikenest_domain::User>, AuthError> {
             Ok(vec![])
+        }
+        async fn search_users(
+            &self,
+            _s: crate::auth::UserSearch<'_>,
+        ) -> Result<Vec<bikenest_domain::User>, AuthError> {
+            Ok(vec![])
+        }
+        async fn labels_for(
+            &self,
+            _ids: &[i64],
+        ) -> Result<std::collections::HashMap<i64, String>, AuthError> {
+            Ok(std::collections::HashMap::new())
+        }
+        async fn activity_for(
+            &self,
+            _ids: &[i64],
+        ) -> Result<std::collections::HashMap<i64, crate::auth::UserActivity>, AuthError> {
+            Ok(std::collections::HashMap::new())
         }
     }
 
@@ -1344,10 +1398,10 @@ mod tests {
             Box::new(FakeRetention),
             Box::new(FakeAudit),
             Box::new(FakeClock(now)),
-            RetentionConfig::default(), // both 0 → only 6 default steps
+            RetentionConfig::default(), // both 0 → only the 7 default steps
         );
         let summary = job.run().await.expect("retention");
-        assert_eq!(summary.steps.len(), 6);
+        assert_eq!(summary.steps.len(), 7);
         assert_eq!(summary.steps[0].purged, 1);
     }
 
@@ -1364,6 +1418,6 @@ mod tests {
             },
         );
         let summary = job.run().await.expect("retention");
-        assert_eq!(summary.steps.len(), 8);
+        assert_eq!(summary.steps.len(), 9);
     }
 }

@@ -4,9 +4,12 @@
 <!-- ======== Hero: photo + gradient, headline, search card (P1) ======== -->
 <section class="relative isolate overflow-hidden">
   <img
-    src="/static/img/hero-bike-parking.jpg"
+    src="{{ layout.asset("img/hero-bike-parking-2000.jpg") }}"
+    srcset="{{ layout.asset("img/hero-bike-parking-640.jpg") }} 640w, {{ layout.asset("img/hero-bike-parking-1024.jpg") }} 1024w, {{ layout.asset("img/hero-bike-parking-2000.jpg") }} 2000w"
+    sizes="100vw"
     alt="Rows of bicycles parked in a multi-tier parking facility"
     width="2000" height="1125"
+    fetchpriority="high"
     class="absolute inset-0 h-full w-full object-cover"
   />
   <div class="absolute inset-0 bg-gradient-to-b from-[oklch(18%_0.015_240_/_0.72)] via-[oklch(18%_0.015_240_/_0.56)] to-[oklch(18%_0.015_240_/_0.84)]" aria-hidden="true"></div>
@@ -31,10 +34,10 @@
           <input
             id="q" name="q" type="text" autocomplete="off"
             placeholder="{{ tr.t("home.search.placeholder") }}"
-            class="w-full bg-transparent py-2 text-base focus:outline-none"
+            class="w-full bg-transparent py-2 text-base"
           />
         </div>
-        <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-base font-medium text-white transition-colors hover:bg-accent-dark">
+        <button type="submit" class="inline-flex items-center justify-center gap-2 rounded-xl bg-accent-strong px-6 py-3.5 text-base font-medium text-white transition-colors hover:bg-accent-dark">
           <svg aria-hidden="true" class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg>
           {{ tr.t("home.search.button") }}
         </button>
@@ -51,6 +54,13 @@
         </button>
         <span class="text-xs text-white/70">{{ tr.t("home.search.locate_hint") }}</span>
       </div>
+      {# `homeHero` has always set `denied` on a refused/failed geolocation;
+         until now nothing rendered it, so tapping the button and denying the
+         prompt looked like the button was broken. #}
+      <p x-show="denied" role="status"
+         class="mt-3 rounded-lg bg-white/10 px-3 py-2 text-sm text-white backdrop-blur">
+        {{ tr.t("home.locate_denied") }}
+      </p>
     </div>
   </div>
 </section>
@@ -85,8 +95,8 @@
   <div class="mx-auto max-w-shell px-4 py-20 lg:py-28">
     <div class="flex flex-wrap items-end justify-between gap-4">
       <h2 class="font-display text-3xl font-bold tracking-tight sm:text-4xl">{{ tr.t("home.featured.title") }}</h2>
-      <a href="/search?q=Rua+XV+de+Novembro" class="inline-flex items-center gap-2 text-[15px] font-medium text-accent-strong hover:text-accent-dark">
-        {{ tr.t("home.featured.link") }}
+      <a href="/search?bbox={{ layout.browse_bbox() }}" class="inline-flex items-center gap-2 text-[15px] font-medium text-accent-strong hover:text-accent-dark">
+        {{ tr.t("home.explore_center") }}
         <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
       </a>
     </div>
@@ -148,7 +158,13 @@
 <section class="border-t border-border">
   <div class="mx-auto grid max-w-shell items-center gap-10 px-4 py-20 lg:grid-cols-2 lg:py-28">
     <div class="overflow-hidden rounded-2xl border border-border shadow-card">
-      <img src="/static/img/mtb-pair-rack.jpg" alt="Two bicycles resting on a metal rack" class="aspect-[4/3] w-full object-cover" />
+      <img
+        src="{{ layout.asset("img/mtb-pair-rack-800.jpg") }}"
+        srcset="{{ layout.asset("img/mtb-pair-rack-640.jpg") }} 640w, {{ layout.asset("img/mtb-pair-rack-800.jpg") }} 800w"
+        sizes="(min-width: 1024px) 50vw, 100vw"
+        loading="lazy"
+        alt="Two bicycles resting on a metal rack" class="aspect-[4/3] w-full object-cover"
+      />
     </div>
     <div>
       <p class="mb-3 font-mono text-xs uppercase tracking-[0.14em] text-accent-strong">{{ tr.t("home.community.eyebrow") }}</p>
@@ -179,7 +195,10 @@
 <!-- ======== CTA strip (closing, P1) ======== -->
 <section class="relative isolate overflow-hidden">
   <img
-    src="/static/img/cyclist-foggy-avenue.jpg"
+    src="{{ layout.asset("img/cyclist-foggy-avenue-1600.jpg") }}"
+    srcset="{{ layout.asset("img/cyclist-foggy-avenue-640.jpg") }} 640w, {{ layout.asset("img/cyclist-foggy-avenue-1024.jpg") }} 1024w, {{ layout.asset("img/cyclist-foggy-avenue-1600.jpg") }} 1600w"
+    sizes="100vw"
+    loading="lazy"
     alt="Cyclist riding down a tree-lined avenue in the morning mist"
     width="1600" height="1069"
     class="absolute inset-0 h-full w-full object-cover"
@@ -188,7 +207,7 @@
   <div class="relative mx-auto max-w-2xl px-4 py-24 text-center lg:py-28">
     <h2 class="font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">{{ tr.t("home.cta.title") }}</h2>
     <p class="mx-auto mt-4 max-w-lg text-lg text-white/85">{{ tr.t("home.cta.body") }}</p>
-    <a href="/search" class="mt-8 inline-flex items-center gap-2 rounded-xl bg-accent px-6 py-3.5 text-base font-medium text-white transition-colors hover:bg-accent-dark">
+    <a href="/search" class="mt-8 inline-flex items-center gap-2 rounded-xl bg-accent-strong px-6 py-3.5 text-base font-medium text-white transition-colors hover:bg-accent-dark">
       <svg aria-hidden="true" class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg>
       {{ tr.t("home.cta.button") }}
     </a>

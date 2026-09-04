@@ -69,7 +69,7 @@ impl PrivacyRequestRepository for SqlxPrivacyRequestRepository {
         .bind(&r.details)
         .fetch_one(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("privacy_request.create", e))?;
         Ok(row.id)
     }
 
@@ -88,7 +88,7 @@ impl PrivacyRequestRepository for SqlxPrivacyRequestRepository {
             .bind(s.as_code())
             .fetch_all(self.db.pool())
             .await
-            .map_err(map_err)?,
+            .map_err(|e| db_err("privacy_request.list", e))?,
             None => sqlx::query_as::<_, RequestRow>(
                 r#"
                     SELECT id, user_id, kind, state, details, fulfilled_by, fulfilled_at,
@@ -98,7 +98,7 @@ impl PrivacyRequestRepository for SqlxPrivacyRequestRepository {
             )
             .fetch_all(self.db.pool())
             .await
-            .map_err(map_err)?,
+            .map_err(|e| db_err("privacy_request.list", e))?,
         };
         rows.into_iter().map(RequestRow::into_request).collect()
     }
@@ -114,7 +114,7 @@ impl PrivacyRequestRepository for SqlxPrivacyRequestRepository {
         .bind(id)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("privacy_request.get", e))?;
         match row {
             Some(r) => Ok(Some(r.into_request()?)),
             None => Ok(None),
@@ -134,7 +134,7 @@ impl PrivacyRequestRepository for SqlxPrivacyRequestRepository {
         .bind(by)
         .execute(self.db.pool())
         .await
-        .map_err(map_err)?;
+        .map_err(|e| db_err("privacy_request.fulfill", e))?;
         if res.rows_affected() != 1 {
             return Err(PrivacyError::NotFound);
         }
@@ -142,6 +142,8 @@ impl PrivacyRequestRepository for SqlxPrivacyRequestRepository {
     }
 }
 
-fn map_err(_e: sqlx::Error) -> PrivacyError {
-    PrivacyError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"privacy_request.create"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> PrivacyError {
+    crate::db_error::classify_and_log(context, e).into()
 }

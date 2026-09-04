@@ -15,7 +15,7 @@ use tokio::sync::OnceCell;
 pub use bikenest_test_macros::db_test;
 
 pub mod object_storage;
-pub use object_storage::{MEDIA_BASE_PATH, TestObjectStorage};
+pub use object_storage::TestObjectStorage;
 
 // ---------------------------------------------------------------------------
 // Shared runtime + pool
@@ -39,10 +39,38 @@ fn shared_pool() -> &'static OnceCell<PgPool> {
     &POOL
 }
 
+/// Installs a `tracing` subscriber that writes to the test harness's captured
+/// output (`with_test_writer()`, so it only shows up under `--nocapture` or
+/// for a failing test), filtered by `RUST_LOG` (default `warn`).
+///
+/// Without this, every `tracing::error!`/`warn!` a repository logs through
+/// [`bikenest_infrastructure::classify_and_log`] is silently dropped: no
+/// subscriber means no destination, not "printed and ignored". `try_init` +
+/// `OnceLock` make this safe to call once per test (via [`run_db_test`]) even
+/// though every test in the binary shares the same process.
+pub fn init_test_tracing() {
+    static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    INIT.get_or_init(|| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_test_writer()
+            .try_init();
+    });
+}
+
 fn database_url() -> String {
     std::env::var("TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .unwrap_or_else(|_| "postgres://bikenest:bikenest@localhost:5432/bikenest".to_string())
+}
+
+/// The configuration the HTTP tests build their router from: a development
+/// config with every provider on its fake, pointed at the test database. Tests
+/// override individual fields rather than touching the process environment.
+pub fn test_config() -> bikenest_infrastructure::Config {
+    bikenest_infrastructure::Config::for_tests(database_url())
 }
 
 async fn connect_and_migrate() -> PgPool {
@@ -160,9 +188,77 @@ pub async fn pool() -> PgPool {
     shared_pool().get_or_init(connect_and_migrate).await.clone()
 }
 
+/// Lock id for the system-wide ADMIN set. Arbitrary but fixed; it only has to
+/// be unique among this suite's advisory locks.
+const ADMIN_SET_LOCK: i64 = 0x62_69_6b_65_00_01;
+
+/// A transaction holding the shared lock on the system's ADMIN set.
+///
+/// "Never zero administrators" is a property of the whole `user_roles` table,
+/// so a test that needs to be the *only* admin has to exclude every other
+/// writer — including the other test binaries running against the same
+/// database. `pg_advisory_xact_lock` reaches across processes and is released
+/// when the returned transaction is dropped, so a panicking test cannot wedge
+/// the suite. Hold it for as long as the exclusive state must last.
+///
+/// Every test that creates or removes an ADMIN row must take this lock, or the
+/// exclusion is one-sided: see [`hold_admin_set_lock_for_process`] for the
+/// fixture-helper side.
+pub async fn admin_set_lock(pool: &PgPool) -> Transaction<'static, Postgres> {
+    let mut tx = pool.begin().await.expect("begin admin-set lock");
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(ADMIN_SET_LOCK)
+        .execute(&mut *tx)
+        .await
+        .expect("take admin-set lock");
+    tx
+}
+
+/// Claims the ADMIN-set lock for the rest of this test process.
+///
+/// The counterpart to [`admin_set_lock`], for fixture helpers that grant ADMIN
+/// and then need the row to stay put for the remainder of their test. A
+/// transaction-scoped lock cannot express that (the helper returns long before
+/// its caller is done), so this takes a *session*-scoped lock on a dedicated
+/// connection and keeps it for the process. Idempotent: the first caller takes
+/// it, every later one returns immediately.
+pub async fn hold_admin_set_lock_for_process(pool: &PgPool) {
+    static HELD: OnceCell<()> = OnceCell::const_new();
+    HELD.get_or_init(|| async {
+        let mut conn = pool.acquire().await.expect("acquire admin-set lock conn");
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(ADMIN_SET_LOCK)
+            .execute(&mut *conn)
+            .await
+            .expect("take process admin-set lock");
+        // Leak the connection so the session — and with it the lock — outlives
+        // this call. It is one connection out of the pool for the process.
+        std::mem::forget(conn);
+    })
+    .await;
+}
+
+/// A transaction allowed to mutate `audit_events`.
+///
+/// The table is append-only (migration 0019): the trigger refuses every UPDATE
+/// and DELETE unless the transaction sets `app.audit_purge`, which the
+/// production erasure and retention-purge paths do. A test cleaning up the
+/// audit rows its own fixture wrote is the same kind of sanctioned mutation, so
+/// it says so the same way. Run the DELETE on the returned transaction and
+/// commit it.
+pub async fn audit_mutation_tx(pool: &PgPool) -> Transaction<'static, Postgres> {
+    let mut tx = pool.begin().await.expect("begin audit mutation");
+    sqlx::query("SET LOCAL app.audit_purge = 'on'")
+        .execute(&mut *tx)
+        .await
+        .expect("announce audit mutation");
+    tx
+}
+
 /// Entry point behind `#[db_test]`: runs `f` on the shared runtime with a
 /// fresh transaction; the transaction rolls back afterwards no matter what.
 pub fn run_db_test(f: impl AsyncFnOnce(&mut TestTx)) {
+    init_test_tracing();
     shared_runtime().block_on(async {
         let pool = shared_pool().get_or_init(connect_and_migrate).await;
         let mut tx = TestTx {
@@ -253,6 +349,8 @@ pub struct ParkingBuilder {
     lon: f64,
     hours_rows: Vec<(u8, chrono::NaiveTime, chrono::NaiveTime, bool)>,
     hours_unknown: bool,
+    /// IANA identifier the wall-clock hours are read in.
+    timezone: &'static str,
     /// (feature_code, state 0/1/2)
     security: Vec<(String, i16)>,
     rating_avg: Option<f64>,
@@ -279,6 +377,7 @@ impl Default for ParkingBuilder {
             lon: -46.655_881,
             hours_rows: Vec::new(),
             hours_unknown: false,
+            timezone: "America/Sao_Paulo",
             security: Vec::new(),
             rating_avg: None,
             rating_count: 0,
@@ -359,6 +458,14 @@ impl ParkingBuilder {
         self
     }
 
+    /// IANA timezone the hours are read in (default `America/Sao_Paulo`).
+    /// Coordinates are independent of it, so a fixture can sit in a test patch
+    /// and still keep a DST-observing clock.
+    pub fn with_timezone(mut self, tz: &'static str) -> Self {
+        self.timezone = tz;
+        self
+    }
+
     pub fn with_unknown_hours(mut self) -> Self {
         self.hours_unknown = true;
         self.hours_rows.clear();
@@ -427,7 +534,7 @@ impl ParkingBuilder {
                  created_at, updated_at, last_verified_at, moderation_state, seed_key, version)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                     ST_SetSRID(ST_MakePoint($10, $9), 4326)::geography,
-                    'America/Sao_Paulo', $11, $12, $13,
+                    $18, $11, $12, $13,
                     now(), now(), $14, $15, $16, $17)
             RETURNING id
             "#,
@@ -449,6 +556,7 @@ impl ParkingBuilder {
         .bind(self.moderation_state)
         .bind(self.fixture_tag.as_deref())
         .bind(self.version)
+        .bind(self.timezone)
         .fetch_one(&mut *conn)
         .await?;
         let id = row.0;
@@ -503,7 +611,7 @@ impl ParkingBuilder {
             self.parking_type,
             self.cost.clone(),
             bikenest_domain::GeoPoint::new(self.lat, self.lon).expect("builder coords"),
-            "America/Sao_Paulo".parse().expect("fixed tz"),
+            self.timezone.parse().expect("builder timezone"),
             if self.hours_unknown {
                 bikenest_domain::OpeningHours::Unknown
             } else {

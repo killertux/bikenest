@@ -55,6 +55,25 @@ impl PrivacyRequestKind {
     }
 }
 
+/// How long the operator has to answer a data-subject request, in days.
+///
+/// 15 days is LGPD art. 19's deadline for a full reply, which is the stricter
+/// of the two regimes this product serves (GDPR art. 12 allows one month) and
+/// the figure `docs/legal-review.md` already commits to. There is no env knob
+/// for it: a legal deadline is not an operator preference.
+pub const PRIVACY_REQUEST_SLA_DAYS: i64 = 15;
+
+/// Days left before a request filed at `created_at` breaches
+/// [`PRIVACY_REQUEST_SLA_DAYS`]. Negative once the deadline has passed, so the
+/// queue can show "3 days left" and "2 days overdue" from one number.
+pub fn privacy_request_days_left(
+    created_at: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> i64 {
+    let due = created_at + Duration::days(PRIVACY_REQUEST_SLA_DAYS);
+    (due - now).num_days()
+}
+
 // ---------------------------------------------------------------------------
 // Privacy request state (§72)
 // ---------------------------------------------------------------------------

@@ -1,9 +1,50 @@
-<script type="application/json" id="search-data">{{ results.map_json|safe }}</script>
+{% if oob %}
+<h1 id="search-heading" hx-swap-oob="true" class="font-display text-2xl font-bold tracking-tight sm:text-3xl">
+  {% if results.browse %}
+    {{ tr.t("search.browse.heading") }}
+  {% else if let Some(label) = results.destination_label %}
+    {{ tr.t("search.heading.near") }} <span class="text-accent-strong">“{{ label }}”</span>
+  {% else %}
+    {{ tr.t("search.heading.generic") }}
+  {% endif %}
+</h1>
+<p id="result-count" hx-swap-oob="true" aria-live="polite" class="text-sm text-muted">
+  {% if results.error.is_some() %}{% else %}{{ results.total_label }}{% endif %}
+</p>
+{# `#search-data` itself lives outside `#results` (search.html renders the
+   primary copy as a sibling, WP21 a11y pass: `role="list"` must contain only
+   `role="listitem"` children) — this fragment only re-renders it here,
+   out-of-band, so a re-search's `hx-target="#results" hx-swap="innerHTML"`
+   never leaves a second copy sitting inside the list. #}
+<script type="application/json" id="search-data" hx-swap-oob="true">{{ results.map_json|safe }}</script>
+{% endif %}
 
 {% if let Some(err) = results.error %}
-  <div class="rounded-2xl border border-border bg-surface p-8 text-center text-muted">{{ err }}</div>
+  <div class="rounded-2xl border border-border bg-surface p-8 text-center text-muted">
+    <p>{{ err }}</p>
+    <!-- The way out of every notice that has no results behind it: browse the
+         city centre's map instead of guessing at a destination. -->
+    <a
+      href="/search?bbox={{ browse_bbox() }}"
+      class="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-accent-strong px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark"
+    >
+      <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.5 9.9 3.8 4 6v15l5.9-2.2 4.2 1.7 5.9-2.3V3.7Z" /><path d="M9.9 3.8v15" /><path d="M14.1 5.5v15" /></svg>
+      {{ tr.t("search.browse.explore") }}
+    </a>
+  </div>
 {% else %}
   {% if results.items.is_empty() %}
+    {% if let Some(hint) = results.refine_hint %}
+    <!-- Browse mode, area too full to list: the map is showing grid counts,
+         so the list's job is to say why and ask for a smaller area. -->
+    <div class="rounded-2xl border border-dashed border-border bg-surface px-6 py-14 text-center">
+      <span class="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-accent/10 text-accent-strong">
+        <svg aria-hidden="true" class="h-6 w-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8" /><path d="M8 11h6" /><path d="m21 21-4.34-4.34" /></svg>
+      </span>
+      <h2 class="font-display mt-4 text-xl font-semibold">{{ results.total_label }}</h2>
+      <p class="mx-auto mt-2 max-w-sm text-[15px] text-muted">{{ hint }}</p>
+    </div>
+    {% else %}
     <!-- Empty state (P2) -->
     <div class="rounded-2xl border border-dashed border-border bg-surface px-6 py-14 text-center">
       <span class="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-accent/10 text-accent-strong">
@@ -13,18 +54,34 @@
       <p class="mx-auto mt-2 max-w-sm text-[15px] text-muted">{{ tr.t("search.empty.body") }}</p>
       <div class="mt-6 flex flex-wrap items-center justify-center gap-3">
         <a href="/search" class="rounded-xl border border-border bg-surface px-5 py-2.5 text-sm font-medium text-fg transition-colors hover:border-fg">{{ tr.t("search.filters.clear") }}</a>
+        {% if can_contribute %}
+          <a href="/parking/new" class="rounded-xl bg-accent-strong px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("nav.add_spot") }}</a>
+        {% else if !is_authenticated %}
+          <a href="/register" class="rounded-xl bg-accent-strong px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("nav.signup_to_add") }}</a>
+        {% endif %}
       </div>
     </div>
+    {% endif %}
   {% else %}
-    <div class="space-y-4">
-      {% for item in results.items %}
-        {% include "components/parking_card.html" %}
-      {% endfor %}
-    </div>
+    {% if results.browse %}
+      <p class="font-mono text-xs text-muted">{{ tr.t("search.browse.from_center") }}</p>
+    {% endif %}
+    {# No wrapper here: `#results` (search.html) is `role="list"` and already
+       carries `space-y-4` itself, so each card — `role="listitem"` in
+       components/parking_card.html — is a direct child of the list, not
+       nested inside an extra div (WP21 a11y pass). #}
+    {% for item in results.items %}
+      {% include "components/parking_card.html" %}
+    {% endfor %}
+
+    {% if let Some(hint) = results.refine_hint %}
+      <p class="mt-6 rounded-xl border border-dashed border-border bg-surface px-4 py-3 text-sm text-muted">{{ hint }}</p>
+    {% endif %}
 
     {% if let Some(url) = results.cursor_url %}
       <nav class="mt-7 flex items-center justify-end" aria-label="{{ tr.t("a11y.results_pages") }}">
-        <button
+        <a
+          href="{{ url }}"
           hx-get="{{ url }}"
           hx-target="#results"
           hx-swap="innerHTML"
@@ -33,7 +90,7 @@
         >
           {{ tr.t("search.next") }}
           <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
-        </button>
+        </a>
       </nav>
     {% endif %}
   {% endif %}

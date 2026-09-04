@@ -6,46 +6,76 @@
     <div class="mt-4 max-w-2xl rounded-lg border border-fresh/30 bg-fresh/10 px-4 py-3 text-sm text-fresh">{{ notice.as_deref().unwrap_or("") }}</div>
   {% endif %}
   {% if error.is_some() %}
-    <div class="mt-4 max-w-2xl rounded-lg border border-error/30 bg-error/10 px-4 py-3 text-sm text-error">{{ error.as_deref().unwrap_or("") }}</div>
+    <div class="mt-4 max-w-2xl rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger" role="alert">{{ error.as_deref().unwrap_or("") }}</div>
   {% endif %}
 
-  <div class="mt-6 overflow-hidden rounded-2xl border border-border">
+  <form method="get" action="/admin/users" class="mt-6 flex flex-wrap items-end gap-3 text-sm" role="search">
+    <label class="flex flex-col text-xs text-muted">{{ tr.t("admin.search.label") }}
+      <input name="q" type="search" value="{{ query }}" placeholder="{{ tr.t("admin.search.placeholder") }}"
+             class="mt-1 w-72 rounded-lg border border-border px-3 py-2 text-sm">
+    </label>
+    <button type="submit" class="rounded-lg bg-accent-strong px-3 py-2 font-medium text-white">{{ tr.t("admin.search.submit") }}</button>
+    {% if !query.is_empty() %}
+      <a href="/admin/users" class="rounded-lg border border-border px-3 py-2 text-muted hover:text-fg">{{ tr.t("admin.search.clear") }}</a>
+    {% endif %}
+  </form>
+
+  {% if users.is_empty() %}
+    <div class="mt-8 rounded-2xl border border-border p-8 text-center text-sm text-muted">{{ tr.t("admin.users_empty") }}</div>
+  {% else %}
+  <div class="mt-6 overflow-x-auto rounded-2xl border border-border">
     <table class="w-full text-left text-sm">
       <thead class="bg-bg">
         <tr>
           <th class="px-4 py-3 font-semibold">{{ tr.t("admin.user") }}</th>
           <th class="px-4 py-3 font-semibold">{{ tr.t("admin.state") }}</th>
           <th class="px-4 py-3 font-semibold">{{ tr.t("admin.roles") }}</th>
+          <th class="px-4 py-3 font-semibold">{{ tr.t("admin.last_active") }}</th>
+          <th class="px-4 py-3 font-semibold">{{ tr.t("admin.contributions") }}</th>
           <th class="px-4 py-3 font-semibold">{{ tr.t("admin.actions") }}</th>
         </tr>
       </thead>
       <tbody>
         {% for u in users %}
-        <tr class="border-t border-border">
+        <tr class="border-t border-border align-top">
           <td class="px-4 py-3">
-            <span class="font-medium">{{ u.email }}</span>
-            {% if !u.is_verified %}<span class="ml-2 rounded-full bg-aging/10 px-2 py-0.5 text-xs text-aging">{{ tr.t("account.unverified") }}</span>{% endif %}
+            {% if !u.display_name.is_empty() %}
+              <span class="block font-medium">{{ u.display_name }}</span>
+            {% endif %}
+            {# Masked by default: managing roles does not require every address
+               on screen. The full value is one click away, in place. #}
+            <span x-data="revealEmail" class="inline-flex items-center gap-2">
+              <span x-show="!shown" class="font-mono text-xs text-muted">{{ u.email_masked }}</span>
+              <span x-show="shown" x-cloak class="font-mono text-xs">{{ u.email }}</span>
+              <button type="button" @click="toggle" x-text="label" :aria-label="label"
+                      aria-label="{{ tr.t("admin.email.show") }}"
+                      class="btn-compact rounded border border-border px-1.5 text-[11px] text-muted hover:text-fg"
+                      data-show="{{ tr.t("admin.email.show") }}" data-hide="{{ tr.t("admin.email.hide") }}">{{ tr.t("admin.email.show") }}</button>
+            </span>
+            {% if !u.is_verified %}<span class="ml-1 rounded-full bg-aging/10 px-2 py-0.5 text-xs text-aging">{{ tr.t("account.unverified") }}</span>{% endif %}
           </td>
           <td class="px-4 py-3 text-muted">{{ u.state_label }}</td>
           <td class="px-4 py-3 text-muted">{{ u.roles_label }}</td>
+          <td class="whitespace-nowrap px-4 py-3 font-mono text-xs text-muted" title="{{ u.last_active_title }}">{{ u.last_active_label }}</td>
+          <td class="px-4 py-3 font-mono text-xs text-muted">{{ u.contributions }}</td>
           <td class="px-4 py-3">
             <div class="flex flex-wrap gap-2">
               {% if u.has_moderator %}
-                <form action="/admin/users/{{ u.id }}/role" method="post" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="role" value="MODERATOR"><button type="submit" class="rounded border border-border px-2 py-1 text-xs text-muted hover:text-fg">{{ tr.t("admin.revoke_moderator") }}</button></form>
+                <form action="/admin/users/{{ u.id }}/role" method="post" hx-confirm="{{ u.confirm_revoke_moderator }}" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="role" value="MODERATOR"><button type="submit" class="rounded border border-border btn-compact px-2 text-xs text-muted hover:text-fg">{{ tr.t("admin.revoke_moderator") }}</button></form>
               {% else %}
-                <form action="/admin/users/{{ u.id }}/role" method="post" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><input type="hidden" name="action" value="grant"><input type="hidden" name="role" value="MODERATOR"><button type="submit" class="rounded bg-accent/10 px-2 py-1 text-xs font-medium text-accent-strong">{{ tr.t("admin.grant_moderator") }}</button></form>
+                <form action="/admin/users/{{ u.id }}/role" method="post" hx-confirm="{{ u.confirm_grant_moderator }}" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><input type="hidden" name="action" value="grant"><input type="hidden" name="role" value="MODERATOR"><button type="submit" class="rounded bg-accent/10 btn-compact px-2 text-xs font-medium text-accent-strong">{{ tr.t("admin.grant_moderator") }}</button></form>
               {% endif %}
               {% if u.has_admin %}
-                <form action="/admin/users/{{ u.id }}/role" method="post" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="role" value="ADMIN"><button type="submit" class="rounded border border-border px-2 py-1 text-xs text-muted hover:text-fg">{{ tr.t("admin.revoke_admin") }}</button></form>
+                <form action="/admin/users/{{ u.id }}/role" method="post" hx-confirm="{{ u.confirm_revoke_admin }}" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="role" value="ADMIN"><button type="submit" class="rounded border border-border btn-compact px-2 text-xs text-muted hover:text-fg">{{ tr.t("admin.revoke_admin") }}</button></form>
               {% else %}
-                <form action="/admin/users/{{ u.id }}/role" method="post" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><input type="hidden" name="action" value="grant"><input type="hidden" name="role" value="ADMIN"><button type="submit" class="rounded bg-accent/10 px-2 py-1 text-xs font-medium text-accent-strong">{{ tr.t("admin.grant_admin") }}</button></form>
+                <form action="/admin/users/{{ u.id }}/role" method="post" hx-confirm="{{ u.confirm_grant_admin }}" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><input type="hidden" name="action" value="grant"><input type="hidden" name="role" value="ADMIN"><button type="submit" class="rounded bg-accent/10 btn-compact px-2 text-xs font-medium text-accent-strong">{{ tr.t("admin.grant_admin") }}</button></form>
               {% endif %}
               {% if u.state == "SUSPENDED" %}
-                <form action="/admin/users/{{ u.id }}/restore" method="post" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><button type="submit" class="rounded bg-fresh/10 px-2 py-1 text-xs font-medium text-fresh">{{ tr.t("admin.restore") }}</button></form>
+                <form action="/admin/users/{{ u.id }}/restore" method="post" hx-confirm="{{ u.confirm_restore }}" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><button type="submit" class="rounded bg-fresh/10 btn-compact px-2 text-xs font-medium text-fresh">{{ tr.t("admin.restore") }}</button></form>
               {% else %}
-                <form action="/admin/users/{{ u.id }}/suspend" method="post" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><button type="submit" class="rounded bg-error/10 px-2 py-1 text-xs font-medium text-error">{{ tr.t("admin.suspend") }}</button></form>
+                <form action="/admin/users/{{ u.id }}/suspend" method="post" hx-confirm="{{ u.confirm_suspend }}" class="inline"><input type="hidden" name="csrf" value="{{ layout.csrf }}"><button type="submit" class="rounded bg-danger/10 btn-compact px-2 text-xs font-medium text-danger">{{ tr.t("admin.suspend") }}</button></form>
               {% endif %}
-              <a href="/admin/users/{{ u.id }}/contributions" class="rounded border border-border px-2 py-1 text-xs text-muted hover:text-fg">{{ tr.t("admin.contrib_link") }}</a>
+              <a href="/admin/users/{{ u.id }}/contributions" class="rounded border border-border btn-compact px-2 text-xs text-muted hover:text-fg">{{ tr.t("admin.contrib_link") }}</a>
             </div>
           </td>
         </tr>
@@ -53,5 +83,11 @@
       </tbody>
     </table>
   </div>
+  {% if let Some(next) = next_url %}
+    <div class="mt-4">
+      <a href="{{ next }}" class="rounded-lg border border-border px-4 py-2 text-sm text-muted hover:text-fg">{{ tr.t("pagination.more") }}</a>
+    </div>
+  {% endif %}
+  {% endif %}
 </section>
 {% endblock %}

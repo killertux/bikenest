@@ -1,5 +1,8 @@
-use bikenest_infrastructure::{Config, Db};
-use bikenest_web::app_router;
+use bikenest_infrastructure::{Config, Db, S3ObjectStorage};
+use bikenest_web::{RouterDeps, app_router_with};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -7,11 +10,18 @@ async fn main() {
     // Load .env from the workspace root if present (dev convenience; §10).
     dotenvy::dotenv().ok();
 
+    // The single configuration read of the whole process: every knob below,
+    // and everything the router and the worker use, comes from this value.
+    let config = Config::from_env().unwrap_or_else(|err| {
+        eprintln!("configuration error: {err}");
+        eprintln!("hint: copy .env.example to .env and adjust values");
+        std::process::exit(1);
+    });
+
     // Logging (§86): JSON structured in production (machine-parseable, forwarded to
     // a log driver/aggregator), human-readable in dev. `RUST_LOG` overrides the level.
-    let app_env = std::env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    if app_env == "production" {
+    if config.app_env.is_production() {
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .json()
@@ -22,13 +32,22 @@ async fn main() {
         tracing_subscriber::fmt().with_env_filter(filter).init();
     }
 
-    let config = Config::from_env().unwrap_or_else(|err| {
-        eprintln!("configuration error: {err}");
-        eprintln!("hint: copy .env.example to .env and adjust values");
+    // The subcommand is read up front so production validation can run before
+    // any connection attempt: a misconfigured deploy sees the whole list of
+    // missing settings first, not a database error.
+    let subcommand = std::env::args().nth(1);
+    if matches!(subcommand.as_deref(), None | Some("serve"))
+        && let Err(problems) = config.validate_for_production()
+    {
+        eprintln!("refusing to start: APP_ENV=production requires the following settings");
+        for problem in &problems {
+            eprintln!("  - {problem}");
+        }
+        eprintln!("see docs/deployment.md (startup validation) and .env.example");
         std::process::exit(1);
-    });
+    }
 
-    let db = Db::connect(&config.database_url)
+    let db = Db::connect_with(&config.database_url, &config.db)
         .await
         .unwrap_or_else(|err| {
             eprintln!("database connection error: {err}");
@@ -36,17 +55,20 @@ async fn main() {
         });
 
     // Subcommand dispatch: default = serve the app.
-    match std::env::args().nth(1).as_deref() {
+    match subcommand.as_deref() {
         Some("seed-mock") => {
             // Explicit, reproducible migrations first (§10).
             db.migrate().await.unwrap_or_else(|err| {
                 eprintln!("migration error: {err}");
                 std::process::exit(1);
             });
-            let storage = bikenest_infrastructure::storage_from_env();
-            match bikenest_infrastructure::parking::seed_mock(&db, &storage).await {
+            let storage = S3ObjectStorage::from_config(&config.storage);
+            let processor = bikenest_infrastructure::LocalImageProcessor::new(config.photo);
+            match bikenest_infrastructure::parking::seed_mock(&db, &storage, &processor).await {
                 Ok(n) => {
-                    println!("seeded {n} mock parking locations + photos (Ledger #1/#7, dev only)");
+                    println!(
+                        "seeded {n} mock parking locations + photos + reviews (dev only); every photo verified retrievable"
+                    );
                 }
                 Err(err) => {
                     eprintln!("seed error: {err}");
@@ -54,18 +76,18 @@ async fn main() {
                 }
             }
         }
-        // Ledger #10: idempotent, env-driven admin bootstrap (never HTTP).
+        // Idempotent admin bootstrap from the configured credentials (never HTTP).
         Some("seed-admin") => {
             db.migrate().await.unwrap_or_else(|err| {
                 eprintln!("migration error: {err}");
                 std::process::exit(1);
             });
-            match bikenest_infrastructure::seed_admin(&db).await {
+            match bikenest_infrastructure::seed_admin(&db, &config.admin_seed).await {
                 Ok(bikenest_infrastructure::auth::seed::SeedOutcome::Created) => {
-                    println!("admin account created (Ledger #10)");
+                    println!("admin account created");
                 }
                 Ok(bikenest_infrastructure::auth::seed::SeedOutcome::Updated) => {
-                    println!("admin account updated (Ledger #10)");
+                    println!("admin account updated");
                 }
                 Err(err) => {
                     eprintln!("seed-admin error: {err}");
@@ -79,15 +101,11 @@ async fn main() {
                 eprintln!("migration error: {err}");
                 std::process::exit(1);
             });
-            let media_root = std::env::var("MEDIA_ROOT")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::path::PathBuf::from("media"));
-            let storage = bikenest_infrastructure::storage_from_env();
+            let storage = S3ObjectStorage::from_config(&config.storage);
             let retention = bikenest_infrastructure::SqlxRetentionRepository::new(
                 db.clone(),
                 config.retention,
-                std::sync::Arc::new(storage),
-                media_root,
+                Arc::new(storage),
             );
             let job = bikenest_application::RetentionJob::new(
                 Box::new(retention),
@@ -118,27 +136,12 @@ async fn main() {
                 eprintln!("migration error: {err}");
                 std::process::exit(1);
             });
-            let version =
-                std::env::var("POLICY_VERSION").unwrap_or_else(|_| "2026-09-03.1".to_string());
-            let effective_at = std::env::var("POLICY_EFFECTIVE_AT")
-                .ok()
-                .and_then(|v| {
-                    chrono::DateTime::parse_from_rfc3339(&v)
-                        .ok()
-                        .map(|d| d.with_timezone(&chrono::Utc))
-                })
-                .unwrap_or_else(chrono::Utc::now);
+            let version = config.policy.version.clone();
+            let effective_at = config.policy.effective_at;
             // §70: controller identity + contact come from the environment
             // (POLICY_OPERATOR_*, POLICY_CONTACT_EMAIL) and are substituted
             // into the {{TOKEN}}s of policies/*.md. Never seed with a hole.
-            let lookup = |token: &str| -> Option<String> {
-                bikenest_infrastructure::POLICY_PLACEHOLDERS
-                    .iter()
-                    .find(|(t, _)| *t == token)
-                    .and_then(|(_, var)| std::env::var(var).ok())
-                    .map(|v| v.trim().to_string())
-                    .filter(|v| !v.is_empty())
-            };
+            let lookup = |token: &str| -> Option<String> { config.policy.placeholder(token) };
             let mut ok = true;
             for locale in bikenest_infrastructure::POLICY_LOCALES {
                 for kind_code in ["privacy", "terms", "cookies"] {
@@ -200,6 +203,14 @@ async fn main() {
 }
 
 async fn serve(config: Config, db: Db) {
+    // Production validation already ran in `main` (before the database
+    // connection). Development runs on fakes by design; say which ones, once.
+    for fake in config.fakes_in_use() {
+        tracing::warn!(component = fake, "development fake in use");
+    }
+
+    let config = Arc::new(config);
+
     // Explicit, reproducible migrations on startup (dev workflow; §10).
     if let Err(err) = db.migrate().await {
         eprintln!("migration error: {err}");
@@ -207,28 +218,105 @@ async fn serve(config: Config, db: Db) {
     }
     tracing::info!(migrations = "applied", "database ready");
 
+    let deps = RouterDeps::from_config(&config).unwrap_or_else(|err| {
+        eprintln!("provider configuration error: {err}");
+        std::process::exit(1);
+    });
+
+    // One shutdown signal for the whole process: SIGTERM/SIGINT cancels it, the
+    // HTTP server stops accepting and drains, and the worker leaves its poll
+    // loop after finishing whatever job it holds.
+    let shutdown = CancellationToken::new();
+
     // Background worker (plans/m9-background-jobs.md): a tokio task that claims
     // and runs durable one-shot + recurring jobs. Disable with `JOBS_ENABLED=false`
     // for web-only instances (or to run jobs elsewhere).
-    if config.jobs.enabled {
-        let storage: std::sync::Arc<dyn bikenest_application::ObjectStorage> =
-            std::sync::Arc::new(bikenest_infrastructure::storage_from_env());
-        let services = bikenest_infrastructure::job_services(db.clone(), &config, storage);
+    let worker_task = if config.jobs.enabled {
+        let storage: Arc<dyn bikenest_application::ObjectStorage> =
+            Arc::new(S3ObjectStorage::from_config(&config.storage));
+        // The worker gets the same provider instance the router holds, so the
+        // `email.send` handler mails through the configured relay/ESP rather
+        // than a second copy of it.
+        let services =
+            bikenest_infrastructure::job_services(db.clone(), &config, storage, deps.email.clone());
         let worker =
             bikenest_infrastructure::Worker::new(services.repo, services.registry, config.jobs);
-        tokio::spawn(worker.run());
         tracing::info!(jobs = "enabled", "background worker started");
+        Some(tokio::spawn(worker.run(shutdown.child_token())))
     } else {
         tracing::info!(jobs = "disabled", "background worker not started");
-    }
+        None
+    };
 
-    let app = app_router(db, config.probe_timeout);
-    let listener = tokio::net::TcpListener::bind(&config.bind_addr)
+    let bind_addr = config.bind_addr.clone();
+    let app = app_router_with(config, db, deps);
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
         .unwrap_or_else(|err| {
-            eprintln!("failed to bind {}: {err}", config.bind_addr);
+            eprintln!("failed to bind {bind_addr}: {err}");
             std::process::exit(1);
         });
-    tracing::info!(addr = %config.bind_addr, "bikenest listening");
-    axum::serve(listener, app).await.expect("server error");
+    tracing::info!(addr = %bind_addr, "bikenest listening");
+
+    // `into_make_service_with_connect_info` is what puts the TCP peer address in
+    // the request extensions; without it `ClientIp` has no address to trust and
+    // every caller would share one rate-limit bucket.
+    let service = app.into_make_service_with_connect_info::<SocketAddr>();
+    let signal = shutdown.clone();
+    let server = axum::serve(listener, service).with_graceful_shutdown(async move {
+        wait_for_terminate().await;
+        tracing::info!("shutdown signal received; draining");
+        signal.cancel();
+    });
+    if let Err(err) = server.await {
+        tracing::error!(error = %err, "server error");
+    }
+
+    // In-flight requests are done. Give the worker a bounded grace period to
+    // finish the job it may still be running rather than killing it mid-write.
+    if let Some(task) = worker_task {
+        match tokio::time::timeout(WORKER_SHUTDOWN_GRACE, task).await {
+            Ok(Ok(())) => tracing::info!("background worker drained"),
+            Ok(Err(e)) => tracing::warn!(error = %e, "background worker task failed"),
+            Err(_) => tracing::warn!(
+                grace_secs = WORKER_SHUTDOWN_GRACE.as_secs(),
+                "background worker did not finish in time; exiting anyway"
+            ),
+        }
+    }
+    tracing::info!("bikenest stopped cleanly");
+}
+
+/// How long an in-flight background job may take to finish once shutdown has
+/// been signalled. Container runtimes typically SIGKILL ~10 s after SIGTERM, so
+/// this is an upper bound, not a promise.
+const WORKER_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Resolves on SIGTERM (what a container runtime sends) or SIGINT (Ctrl-C).
+async fn wait_for_terminate() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            // Without a SIGTERM handler, Ctrl-C is the only way out; never
+            // resolve here or the server would shut down immediately.
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot install SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
 }

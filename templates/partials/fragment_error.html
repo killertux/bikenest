@@ -1,0 +1,4 @@
+{# Minimal error state for htmx endpoints whose success response is not a
+   toast (the favorite button, for one): the swap replaces the control with a
+   message the screen reader announces. #}
+<div class="rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger" role="alert">{{ message }}</div>

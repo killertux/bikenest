@@ -1,8 +1,8 @@
-//! Search use cases: `SearchParking` (§21/§31–§34) and `GetParkingDetails` (§24).
+//! Search use cases: `SearchParking` and `GetParkingDetails`.
 
 use crate::ports::{
-    FreshnessConfig, GeoHit, GeocodeError, Geocoder, ParkingDetailsReader, ParkingSearchReader,
-    ReaderError, SearchInput, SearchPage, SearchRequest,
+    BoundsPage, BoundsQuery, FreshnessConfig, GeoHit, GeocodeError, Geocoder, ParkingDetailsReader,
+    ParkingSearchReader, ReaderError, SearchInput, SearchPage, SearchRequest,
 };
 use bikenest_domain::{FreshnessCategory, GeoPoint};
 
@@ -13,15 +13,27 @@ pub enum SearchError {
     MissingDestination,
     #[error("origin coordinates are invalid")]
     InvalidOrigin,
+    /// Browse mode: the bounding box is missing, malformed, inside out, off
+    /// the globe, or larger than [`crate::ports::MAX_BROWSE_SPAN_DEG`].
+    #[error("the map area is not a valid bounding box")]
+    InvalidBounds,
+    /// Browse mode has no pages: a cursor alongside a bounding box is a URL
+    /// that cannot be answered, not an empty page.
+    #[error("browse results are not paginated")]
+    BoundsNotPaginated,
     #[error(transparent)]
     Geocode(#[from] GeocodeError),
     #[error(transparent)]
     Read(#[from] ReaderError),
 }
 
-/// Recommendation weights (§34). Hardcoded defaults for M1 — **Ledger #8**
-/// (make configurable in M7). All sub-scores are 0..1, missing input → 0.5
-/// (§34: missing information is never automatically the worst value).
+/// Recommendation weights. All sub-scores are 0..1, and missing input scores
+/// a neutral 0.5: absent information is never automatically the worst value.
+///
+/// The score is computed by the search reader, as that query's sort key, so
+/// these weights are bound into the SQL rather than applied in Rust: a score
+/// assembled after a page is read can only rank the rows that page happened
+/// to contain.
 #[derive(Debug, Clone, Copy)]
 pub struct RecommendationConfig {
     pub w_distance: f64,
@@ -29,8 +41,6 @@ pub struct RecommendationConfig {
     pub w_rating: f64,
     pub w_freshness: f64,
     pub w_verification: f64,
-    /// Fetch cap for candidates scored in memory (see ports).
-    pub candidate_cap: usize,
 }
 
 pub const DEFAULT_RECOMMENDATION_CONFIG: RecommendationConfig = RecommendationConfig {
@@ -39,76 +49,20 @@ pub const DEFAULT_RECOMMENDATION_CONFIG: RecommendationConfig = RecommendationCo
     w_rating: 0.20,
     w_freshness: 0.15,
     w_verification: 0.05,
-    candidate_cap: 500,
 };
 
-/// Deterministic recommendation score for one summary row (§34).
-/// Same input → same output; ties broken by (score DESC, id ASC).
-pub fn recommendation_score(
-    item: &crate::ports::ParkingSummary,
-    radius_m: u32,
-    now: chrono::DateTime<chrono::Utc>,
-    weights: &RecommendationConfig,
-    freshness: &FreshnessConfig,
-) -> f64 {
-    // Distance: closer is better within the search radius.
-    let d = (item.distance_m / radius_m as f64).clamp(0.0, 1.0);
-    let distance_score = 1.0 - d;
-
-    // Security: share of the initial catalog (§28) explicitly confirmed.
-    // No confirmed attributes → neutral (unknown is not "bad").
-    let yes = item.security_yes.len() as f64;
-    let security_score = if yes > 0.0 { (yes / 8.0).min(1.0) } else { 0.5 };
-
-    // Rating: normalized 0..5; no reviews → neutral.
-    let rating_score = item.rating.avg().map(|a| a / 5.0).unwrap_or(0.5);
-
-    // Freshness: category → monotone score; never verified → neutral.
-    let category = bikenest_domain::categorize(item.last_verified_at, now, &freshness.thresholds);
-    let freshness_score = match category {
-        FreshnessCategory::Fresh => 1.0,
-        FreshnessCategory::RecentlyVerified => 0.75,
-        FreshnessCategory::Aging => 0.5,
-        FreshnessCategory::Stale => 0.25,
-        FreshnessCategory::VeryStale => 0.1,
-        FreshnessCategory::Never => 0.5,
-    };
-
-    // Verification confidence: ever verified → 1.0; never → neutral (§34).
-    let verification_score = if item.last_verified_at.is_some() {
-        1.0
-    } else {
-        0.5
-    };
-
-    weights.w_distance * distance_score
-        + weights.w_security * security_score
-        + weights.w_rating * rating_score
-        + weights.w_freshness * freshness_score
-        + weights.w_verification * verification_score
-}
-
-/// Use case: search parking near a destination (§21, §31–§34).
+/// Use case: search parking near a destination.
 pub struct SearchParking {
     geocoder: Box<dyn Geocoder>,
     reader: Box<dyn ParkingSearchReader>,
-    recommendation: RecommendationConfig,
-    freshness: FreshnessConfig,
 }
 
 impl SearchParking {
-    pub fn new(
-        geocoder: Box<dyn Geocoder>,
-        reader: Box<dyn ParkingSearchReader>,
-        recommendation: RecommendationConfig,
-        freshness: FreshnessConfig,
-    ) -> Self {
-        Self {
-            geocoder,
-            reader,
-            recommendation,
-            freshness,
-        }
+    /// The reader carries the recommendation weights and freshness thresholds
+    /// (it computes the sort key), so this use case holds no scoring config of
+    /// its own: origin resolution and cursor handling are all it decides.
+    pub fn new(geocoder: Box<dyn Geocoder>, reader: Box<dyn ParkingSearchReader>) -> Self {
+        Self { geocoder, reader }
     }
 
     /// Executes the search. Returns the result page plus the geocode hit when
@@ -119,12 +73,41 @@ impl SearchParking {
         input: SearchInput,
     ) -> Result<(SearchPage, Option<GeoHit>), SearchError> {
         let (request, geohit) = self.resolve(input).await?;
-        let page = if request.sort == crate::ports::Sort::Recommended {
-            self.recommended_page(&request).await?
-        } else {
-            self.sql_page(&request).await?
-        };
+        let page = self.page(&request).await?;
         Ok((page, geohit))
+    }
+
+    /// Browse: everything inside the map's own viewport.
+    ///
+    /// The complement of [`Self::execute`] — no destination, no geocode, no
+    /// radius, no cursor. The filters are the same ones a radius search takes,
+    /// so panning the map keeps whatever the viewer had narrowed down to.
+    ///
+    /// Distances on the result rows are measured from the box's centre (the
+    /// reader computes them), which is what makes "300 m" mean anything on a
+    /// list that has no destination.
+    /// Returns the validated box alongside its contents: the view layer needs
+    /// the box it actually queried (to frame the map), and re-parsing the raw
+    /// parameter up there would put the validation rule in two places.
+    pub async fn browse(
+        &self,
+        input: &SearchInput,
+    ) -> Result<(BoundsQuery, BoundsPage), SearchError> {
+        if input
+            .cursor
+            .as_deref()
+            .is_some_and(|c| !c.trim().is_empty())
+        {
+            return Err(SearchError::BoundsNotPaginated);
+        }
+        let query = BoundsQuery::parse(
+            input.bbox.as_deref().unwrap_or_default(),
+            input.filters(),
+            crate::ports::BROWSE_MARKER_CAP,
+        )
+        .ok_or(SearchError::InvalidBounds)?;
+        let page = self.reader.in_bounds(&query).await?;
+        Ok((query, page))
     }
 
     /// Origin resolution (§21/§22): explicit coordinates win over the query;
@@ -172,7 +155,9 @@ impl SearchParking {
         Ok((request, geohit))
     }
 
-    async fn sql_page(&self, request: &SearchRequest) -> Result<SearchPage, SearchError> {
+    /// One page, for every sort: the reader orders and limits, this only turns
+    /// the last row's key into the next cursor.
+    async fn page(&self, request: &SearchRequest) -> Result<SearchPage, SearchError> {
         // Fetch one extra row to know whether a next page exists (§32).
         let mut page = self
             .reader
@@ -181,11 +166,12 @@ impl SearchParking {
         let next_cursor = if page.items.len() > request.page_size {
             page.items.truncate(request.page_size);
             let last = page.items.last().expect("non-empty");
+            // The anchor is the key the reader itself computed for this row;
+            // recomputing it here would risk disagreeing with the SQL keyset
+            // predicate and paginating in circles.
             Some(crate::ports::Cursor {
                 sort: request.sort,
-                v: last
-                    .sort_key(request.sort)
-                    .expect("SQL sorts always have a key"),
+                v: last.sort_key.expect("SQL sorts always carry a key"),
                 id: last.id,
             })
         } else {
@@ -195,63 +181,6 @@ impl SearchParking {
             total: page.total,
             next_cursor,
             items: page.items,
-        })
-    }
-
-    /// Recommended sort: score a capped candidate set in memory (§34),
-    /// deterministic ordering, ties by (score DESC, id ASC).
-    async fn recommended_page(&self, request: &SearchRequest) -> Result<SearchPage, SearchError> {
-        let candidates = self
-            .reader
-            .search(request, self.recommendation.candidate_cap, false)
-            .await?;
-        let now = chrono::Utc::now();
-        let mut scored: Vec<(f64, crate::ports::ParkingSummary)> = candidates
-            .items
-            .into_iter()
-            .map(|item| {
-                let s = recommendation_score(
-                    &item,
-                    request.radius_m,
-                    now,
-                    &self.recommendation,
-                    &self.freshness,
-                );
-                (s, item)
-            })
-            .collect();
-        scored.sort_by(|a, b| {
-            b.0.partial_cmp(&a.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.1.id.cmp(&b.1.id))
-        });
-
-        // Advance past the cursor (score, id) if one is present.
-        if let Some(c) = request.cursor {
-            scored.retain(|(s, item)| *s > c.v || (*s == c.v && item.id > c.id));
-        }
-
-        let total = candidates.total;
-        let has_more = scored.len() > request.page_size;
-        let mut scored_items = scored;
-        scored_items.truncate(request.page_size);
-        let next_cursor = if has_more {
-            scored_items
-                .last()
-                .map(|(score, last)| crate::ports::Cursor {
-                    sort: request.sort,
-                    v: *score,
-                    id: last.id,
-                })
-        } else {
-            None
-        };
-        let items: Vec<crate::ports::ParkingSummary> =
-            scored_items.into_iter().map(|(_, item)| item).collect();
-        Ok(SearchPage {
-            items,
-            total,
-            next_cursor,
         })
     }
 }

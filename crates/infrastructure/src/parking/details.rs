@@ -1,7 +1,7 @@
 //! SQL-backed parking details (REQUIREMENTS §24, §28, §29).
 
 use crate::Db;
-use crate::parking::search::map_db_err;
+use crate::parking::search::reader_err;
 use async_trait::async_trait;
 use bikenest_application::{ParkingDetailsReader, ReaderError};
 use bikenest_domain::{
@@ -75,7 +75,7 @@ impl ParkingDetailsReader for SqlxParkingDetailsReader {
         .bind(id)
         .fetch_optional(self.db.pool())
         .await
-        .map_err(map_db_err)?
+        .map_err(|e| reader_err("details.details", e))?
         else {
             return Ok(None);
         };
@@ -90,7 +90,7 @@ impl ParkingDetailsReader for SqlxParkingDetailsReader {
         .bind(id)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_db_err)?;
+        .map_err(|e| reader_err("details.details", e))?;
 
         let security_rows = sqlx::query_as::<_, SecurityRow>(
             r#"
@@ -103,7 +103,7 @@ impl ParkingDetailsReader for SqlxParkingDetailsReader {
         .bind(id)
         .fetch_all(self.db.pool())
         .await
-        .map_err(map_db_err)?;
+        .map_err(|e| reader_err("details.details", e))?;
 
         to_domain(row, hours_rows, security_rows).map(Some)
     }

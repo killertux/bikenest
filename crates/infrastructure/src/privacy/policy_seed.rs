@@ -100,7 +100,7 @@ pub async fn seed_policy(
     .bind(version)
     .fetch_one(db.pool())
     .await
-    .map_err(map_err)?;
+    .map_err(|e| db_err("policy_seed.seed_policy", e))?;
     if exists {
         return Ok(());
     }
@@ -117,7 +117,7 @@ pub async fn seed_policy(
     .bind(effective_at)
     .execute(db.pool())
     .await
-    .map_err(map_err)?;
+    .map_err(|e| db_err("policy_seed.seed_policy", e))?;
 
     // Insert the new current version.
     sqlx::query(
@@ -133,13 +133,15 @@ pub async fn seed_policy(
     .bind(content)
     .execute(db.pool())
     .await
-    .map_err(map_err)?;
+    .map_err(|e| db_err("policy_seed.seed_policy", e))?;
 
     Ok(())
 }
 
-fn map_err(_e: sqlx::Error) -> PrivacyError {
-    PrivacyError::Internal
+/// Classify + log the sqlx error (SQLSTATE, constraint), then map it onto
+/// the feature error. `context` names the operation, e.g. `"policy_seed.insert"`.
+fn db_err(context: &'static str, e: sqlx::Error) -> PrivacyError {
+    crate::db_error::classify_and_log(context, e).into()
 }
 
 #[cfg(test)]

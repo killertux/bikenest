@@ -50,7 +50,14 @@ pub struct MockParking {
     pub hours_unknown: bool,
     /// (feature_code, state) — 0 unknown, 1 yes, 2 no.
     pub security: Vec<(&'static str, i16)>,
+    /// Target average the seeder approximates when synthesizing the backing
+    /// `review` rows (`rating_count` reviews via [`star_ratings_for`]). Never
+    /// written to `parking_location.rating_avg` directly — the seeder always
+    /// recomputes that column from the real reviews it inserts, so a rating
+    /// never appears without reviews behind it.
     pub rating_avg: Option<f64>,
+    /// How many backing reviews to synthesize for this location (0 = no
+    /// reviews, no rating).
     pub rating_count: i64,
     /// Days since last verification (relative to seed time).
     pub verified_days_ago: Option<i64>,
@@ -69,6 +76,97 @@ fn paid(cents: i64, currency: &str, unit: PricingUnit) -> Cost {
             unit,
         )),
     }
+}
+
+/// Seeded community reviewers (email, display name): the seeder finds-or-
+/// creates these `users` rows and authors the backing `review` rows for every
+/// [`MockParking::rating_count`] (Problem #2 — a rating never appears without
+/// real reviews behind it). 25 entries comfortably covers the highest seeded
+/// `rating_count` (21) with room to spare; `users` has no `seed_key` column,
+/// so re-seeding finds them by email instead of deleting/reinserting.
+pub const REVIEW_AUTHORS: &[(&str, &str)] = &[
+    ("mariana.silva@seed.bikenest.dev", "Mariana Silva"),
+    ("joao.pereira@seed.bikenest.dev", "João Pereira"),
+    ("ana.souza@seed.bikenest.dev", "Ana Souza"),
+    ("carlos.oliveira@seed.bikenest.dev", "Carlos Oliveira"),
+    ("beatriz.santos@seed.bikenest.dev", "Beatriz Santos"),
+    ("lucas.almeida@seed.bikenest.dev", "Lucas Almeida"),
+    ("fernanda.costa@seed.bikenest.dev", "Fernanda Costa"),
+    ("rafael.gomes@seed.bikenest.dev", "Rafael Gomes"),
+    ("juliana.ribeiro@seed.bikenest.dev", "Juliana Ribeiro"),
+    ("marcos.carvalho@seed.bikenest.dev", "Marcos Carvalho"),
+    ("patricia.martins@seed.bikenest.dev", "Patrícia Martins"),
+    ("diego.rocha@seed.bikenest.dev", "Diego Rocha"),
+    ("camila.barbosa@seed.bikenest.dev", "Camila Barbosa"),
+    ("bruno.teixeira@seed.bikenest.dev", "Bruno Teixeira"),
+    ("larissa.pinto@seed.bikenest.dev", "Larissa Pinto"),
+    ("thiago.cardoso@seed.bikenest.dev", "Thiago Cardoso"),
+    ("amanda.moreira@seed.bikenest.dev", "Amanda Moreira"),
+    ("felipe.araujo@seed.bikenest.dev", "Felipe Araújo"),
+    ("gabriela.correia@seed.bikenest.dev", "Gabriela Correia"),
+    ("vinicius.melo@seed.bikenest.dev", "Vinícius Melo"),
+    ("bianca.dias@seed.bikenest.dev", "Bianca Dias"),
+    ("gustavo.nascimento@seed.bikenest.dev", "Gustavo Nascimento"),
+    ("isabela.freitas@seed.bikenest.dev", "Isabela Freitas"),
+    ("rodrigo.lima@seed.bikenest.dev", "Rodrigo Lima"),
+    ("carolina.azevedo@seed.bikenest.dev", "Carolina Azevedo"),
+];
+
+/// Distribute `count` integer star ratings (1..=5) whose sum rounds to
+/// `avg * count`, so the `review` rows the seeder inserts approximate the
+/// dataset's intended average once real reviews back it (Problem #2). Pure
+/// and deterministic — no I/O.
+pub fn star_ratings_for(avg: f64, count: i64) -> Vec<u8> {
+    if count <= 0 {
+        return Vec::new();
+    }
+    let count = count as usize;
+    let target_sum = (avg * count as f64).round() as i64;
+    let target_sum = target_sum.clamp(count as i64, count as i64 * 5);
+    let base = (target_sum / count as i64) as u8;
+    let remainder = (target_sum % count as i64) as usize;
+    let mut stars = vec![base; count];
+    for s in stars.iter_mut().take(remainder) {
+        *s += 1;
+    }
+    stars
+}
+
+/// A short pt-BR review sentence for a given star rating, cycling through a
+/// few variants per level so a location's reviews don't all read identically.
+pub fn review_body_for(star: u8, i: usize) -> &'static str {
+    const FIVE: &[&str] = &[
+        "Excelente, super recomendo!",
+        "Muito seguro e bem localizado.",
+        "Perfeito para deixar a bike, sem preocupação.",
+    ];
+    const FOUR: &[&str] = &[
+        "Bom paraciclo, só faltou mais iluminação.",
+        "Estrutura boa, acesso fácil.",
+        "Gostei, costumo usar toda semana.",
+    ];
+    const THREE: &[&str] = &[
+        "Razoável, cumpre a função.",
+        "Ok, nada excepcional.",
+        "Serve, mas podia ser melhor cuidado.",
+    ];
+    const TWO: &[&str] = &[
+        "Estrutura antiga, poderia melhorar.",
+        "Pouca vaga no horário de pico.",
+        "Meio escondido, difícil de achar.",
+    ];
+    const ONE: &[&str] = &[
+        "Vaga insuficiente, sempre lotado.",
+        "Não recomendo, sem nenhuma segurança.",
+    ];
+    let pool: &[&str] = match star {
+        5 => FIVE,
+        4 => FOUR,
+        3 => THREE,
+        2 => TWO,
+        _ => ONE,
+    };
+    pool[i % pool.len()]
 }
 
 /// The bike photos bundled under `web/static/img/`, cycled across the dataset so
@@ -529,6 +627,341 @@ pub fn mock_parkings() -> Vec<MockParking> {
             verified_days_ago: Some(48),
             photo: Some("mtb-pair-rack.jpg"),
         },
+        // Additional downtown spots, all within ~800 m of the "Rua XV de
+        // Novembro" fake-geocoder centroid (Problem #3): with the 9 existing
+        // locations already inside 1 km, this brings the total past the P2
+        // default page size (20), so the default search reaches a second
+        // page. `verified_days_ago` spans every freshness bucket (including
+        // `None`, never verified) so the recently-verified sort is meaningful.
+        MockParking {
+            name: "Racks Rua Marechal Deodoro",
+            address: "R. Marechal Deodoro, 500",
+            description: "Suportes em frente ao prédio histórico.",
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            lat: -25.427_322,
+            lon: -49.273_300,
+            hours: (1..=7).map(|d| (d, (6, 0), (22, 0), false)).collect(),
+            hours_unknown: false,
+            security: vec![("well_lit", 1), ("cctv", 0)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: None,
+            photo: None,
+        },
+        MockParking {
+            name: "Paraciclo Rua Riachuelo",
+            address: "R. Riachuelo, 300",
+            description: "Paraciclo na calçada, movimento constante.",
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            lat: -25.427_033,
+            lon: -49.272_808,
+            hours: (1..=7).map(|d| (d, (0, 0), (23, 59), true)).collect(),
+            hours_unknown: false,
+            security: vec![("cctv", 1)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(2),
+            photo: Some("street-rack-mint-bike.jpg"),
+        },
+        MockParking {
+            name: "Bicicletário Praça Zacarias",
+            address: "Praça Zacarias, s/n",
+            description: "Bicicletário coberto ao lado da praça.",
+            parking_type: ParkingType::Indoor,
+            cost: paid(800, "BRL", PricingUnit::Day),
+            lat: -25.426_947,
+            lon: -49.272_131,
+            hours: (1..=6).map(|d| (d, (7, 0), (21, 0), false)).collect(),
+            hours_unknown: false,
+            security: vec![("indoor", 1), ("cctv", 1), ("staffed", 1)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(5),
+            photo: Some("hero-bike-parking.jpg"),
+        },
+        MockParking {
+            name: "Racks Rua Comendador Araújo",
+            address: "R. Comendador Araújo, 250",
+            description: "Racks junto às lojas do térreo.",
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            lat: -25.427_133,
+            lon: -49.271_369,
+            hours: (1..=7).map(|d| (d, (0, 0), (23, 59), true)).collect(),
+            hours_unknown: false,
+            security: vec![("well_lit", 1)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(12),
+            photo: None,
+        },
+        MockParking {
+            name: "Paraciclo Alameda Dr. Muricy",
+            address: "Al. Dr. Muricy, 100",
+            description: "Paraciclo na alameda arborizada.",
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            lat: -25.427_623,
+            lon: -49.270_651,
+            hours: (1..=5).map(|d| (d, (7, 0), (19, 0), false)).collect(),
+            hours_unknown: false,
+            security: vec![("cctv", 0), ("well_lit", 1)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(25),
+            photo: Some("square-bike-rows.jpg"),
+        },
+        MockParking {
+            name: "Bikes Rua Emiliano Perneta",
+            address: "R. Emiliano Perneta, 700",
+            description: "Armários no subsolo do edifício comercial.",
+            parking_type: ParkingType::Locker,
+            cost: paid(400, "BRL", PricingUnit::Hour),
+            lat: -25.428_400,
+            lon: -49.270_117,
+            hours: (1..=6).map(|d| (d, (6, 0), (22, 0), false)).collect(),
+            hours_unknown: false,
+            security: vec![("restricted_access", 1), ("indoor", 1)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: None,
+            photo: None,
+        },
+        MockParking {
+            name: "Racks Rua Voluntários da Pátria",
+            address: "R. Voluntários da Pátria, 445",
+            description: "Racks junto à ciclofaixa da rua.",
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            lat: -25.429_399,
+            lon: -49.269_894,
+            hours: (1..=7).map(|d| (d, (0, 0), (23, 59), true)).collect(),
+            hours_unknown: false,
+            security: vec![],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(35),
+            photo: Some("mtb-pair-rack.jpg"),
+        },
+        MockParking {
+            name: "Bicicletário Rua Ébano Pereira",
+            address: "R. Ébano Pereira, 90",
+            description: "Vagas mensalistas com controle de acesso.",
+            parking_type: ParkingType::Secured,
+            cost: paid(1000, "BRL", PricingUnit::Month),
+            lat: -25.430_512,
+            lon: -49.270_081,
+            hours: (1..=5).map(|d| (d, (6, 0), (21, 0), false)).collect(),
+            hours_unknown: false,
+            security: vec![
+                ("dedicated_locking_point", 1),
+                ("controlled_access", 1),
+                ("cctv", 1),
+            ],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(50),
+            photo: Some("cyclist-foggy-avenue.jpg"),
+        },
+        MockParking {
+            name: "Paraciclo Rua José Loureiro",
+            address: "R. José Loureiro, 480",
+            description: "Paraciclo simples, uso livre.",
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            lat: -25.431_598,
+            lon: -49.270_728,
+            hours: (1..=7).map(|d| (d, (0, 0), (23, 59), true)).collect(),
+            hours_unknown: false,
+            security: vec![("well_lit", 0)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(70),
+            photo: None,
+        },
+        MockParking {
+            name: "Racks Rua Trajano Reis",
+            address: "R. Trajano Reis, 60",
+            description: "Racks próximos ao comércio popular.",
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            lat: -25.432_501,
+            lon: -49.271_825,
+            hours: (1..=6).map(|d| (d, (6, 0), (20, 0), false)).collect(),
+            hours_unknown: false,
+            security: vec![("cctv", 1)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(85),
+            photo: Some("street-rack-mint-bike.jpg"),
+        },
+        MockParking {
+            name: "Bikes Rua Barão do Rio Branco",
+            address: "R. Barão do Rio Branco, 300",
+            description: "Vagas cobertas no estacionamento do edifício.",
+            parking_type: ParkingType::ParkingFacility,
+            cost: paid(300, "BRL", PricingUnit::Day),
+            lat: -25.433_071,
+            lon: -49.273_300,
+            hours: (1..=7).map(|d| (d, (5, 0), (23, 0), false)).collect(),
+            hours_unknown: false,
+            security: vec![("cctv", 1), ("well_lit", 1), ("staffed", 0)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(100),
+            photo: Some("hero-bike-parking.jpg"),
+        },
+        MockParking {
+            name: "Bicicletário Rua Desembargador Motta",
+            address: "R. Desembargador Motta, 300",
+            description: "Bicicletário no saguão do edifício comercial.",
+            parking_type: ParkingType::Indoor,
+            cost: Cost::Free,
+            lat: -25.433_184,
+            lon: -49.275_021,
+            hours: vec![],
+            hours_unknown: true,
+            security: vec![("indoor", 1)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(130),
+            photo: None,
+        },
+        MockParking {
+            name: "Racks Rua Conselheiro Laurindo",
+            address: "R. Conselheiro Laurindo, 200",
+            description: "Racks na calçada larga, sombreados.",
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            lat: -25.432_760,
+            lon: -49.276_808,
+            hours: (1..=7).map(|d| (d, (0, 0), (23, 59), true)).collect(),
+            hours_unknown: false,
+            security: vec![],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(160),
+            photo: Some("mtb-pair-rack.jpg"),
+        },
+        MockParking {
+            name: "Paraciclo Rua Presidente Faria",
+            address: "R. Pres. Faria, 100",
+            description: "Paraciclo próximo à entrada do parque.",
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            lat: -25.431_779,
+            lon: -49.278_450,
+            hours: (1..=7).map(|d| (d, (6, 0), (22, 0), false)).collect(),
+            hours_unknown: false,
+            security: vec![("well_lit", 1)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: None,
+            photo: Some("square-bike-rows.jpg"),
+        },
+        MockParking {
+            name: "Bikes Praça Carlos Gomes",
+            address: "Praça Carlos Gomes, s/n",
+            description: "Vaga vigiada junto ao teatro.",
+            parking_type: ParkingType::Secured,
+            cost: paid(900, "BRL", PricingUnit::Day),
+            lat: -25.430_288,
+            lon: -49.279_733,
+            hours: (1..=6).map(|d| (d, (7, 0), (20, 0), false)).collect(),
+            hours_unknown: false,
+            security: vec![("security_guard", 1), ("cctv", 1), ("indoor", 1)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(190),
+            photo: Some("cyclist-foggy-avenue.jpg"),
+        },
+        MockParking {
+            name: "Racks Rua Cruz Machado",
+            address: "R. Cruz Machado, 100",
+            description: "Racks simples, sem cobertura.",
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            lat: -25.428_400,
+            lon: -49.280_263,
+            hours: (1..=7).map(|d| (d, (0, 0), (23, 59), true)).collect(),
+            hours_unknown: false,
+            security: vec![("cctv", 0), ("well_lit", 0)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(220),
+            photo: None,
+        },
+        MockParking {
+            name: "Bicicletário Rua Inácio Lustosa",
+            address: "R. Inácio Lustosa, 300",
+            description: "Vagas cobertas junto ao estacionamento.",
+            parking_type: ParkingType::ParkingFacility,
+            cost: paid(500, "BRL", PricingUnit::Day),
+            lat: -25.426_401,
+            lon: -49.280_111,
+            hours: (1..=7).map(|d| (d, (6, 0), (22, 0), false)).collect(),
+            hours_unknown: false,
+            security: vec![("restricted_access", 1), ("cctv", 1)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(260),
+            photo: Some("street-rack-mint-bike.jpg"),
+        },
+        MockParking {
+            name: "Paraciclo Rua Saldanha Marinho",
+            address: "R. Saldanha Marinho, 100",
+            description: "Paraciclo pequeno, uso livre.",
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            lat: -25.424_493,
+            lon: -49.279_255,
+            hours: (1..=5).map(|d| (d, (8, 0), (18, 0), false)).collect(),
+            hours_unknown: false,
+            security: vec![("well_lit", 1)],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: None,
+            photo: None,
+        },
+        MockParking {
+            name: "Racks Rua Doutor Faivre",
+            address: "R. Dr. Faivre, 300",
+            description: "Racks junto ao ponto de ônibus.",
+            parking_type: ParkingType::Rack,
+            cost: Cost::Free,
+            lat: -25.422_877,
+            lon: -49.277_743,
+            hours: (1..=7).map(|d| (d, (0, 0), (23, 59), true)).collect(),
+            hours_unknown: false,
+            security: vec![],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(340),
+            photo: Some("mtb-pair-rack.jpg"),
+        },
+        MockParking {
+            name: "Bikes Rua Duque de Caxias",
+            address: "R. Duque de Caxias, 150",
+            description: "Armários mensalistas com controle de acesso.",
+            parking_type: ParkingType::Locker,
+            cost: paid(2000, "BRL", PricingUnit::Month),
+            lat: -25.421_736,
+            lon: -49.275_697,
+            hours: (1..=5).map(|d| (d, (6, 0), (20, 0), false)).collect(),
+            hours_unknown: false,
+            security: vec![
+                ("dedicated_locking_point", 1),
+                ("indoor", 1),
+                ("controlled_access", 1),
+                ("cctv", 1),
+            ],
+            rating_avg: None,
+            rating_count: 0,
+            verified_days_ago: Some(400),
+            photo: Some("hero-bike-parking.jpg"),
+        },
     ]
 }
 
@@ -536,4 +969,56 @@ pub fn mock_parkings() -> Vec<MockParking> {
 /// sentinel — kept for callers that want a stable image for any index.
 pub fn photo_for_index(i: usize) -> &'static str {
     PHOTOS[i % PHOTOS.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn star_ratings_sum_matches_rounded_target_and_stays_in_bounds() {
+        for (avg, count) in [(4.6, 12), (4.1, 7), (3.8, 4), (4.9, 21), (3.0, 1), (4.0, 9)] {
+            let stars = star_ratings_for(avg, count);
+            assert_eq!(stars.len(), count as usize);
+            assert!(stars.iter().all(|s| (1..=5).contains(s)));
+            let sum: i64 = stars.iter().map(|s| i64::from(*s)).sum();
+            assert_eq!(sum, (avg * count as f64).round() as i64);
+        }
+    }
+
+    #[test]
+    fn star_ratings_empty_for_zero_count() {
+        assert!(star_ratings_for(4.5, 0).is_empty());
+    }
+
+    #[test]
+    fn review_author_pool_covers_the_highest_seeded_rating_count() {
+        let max_count = mock_parkings()
+            .iter()
+            .map(|m| m.rating_count)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            REVIEW_AUTHORS.len() as i64 >= max_count,
+            "need at least {max_count} distinct authors, have {}",
+            REVIEW_AUTHORS.len()
+        );
+    }
+
+    #[test]
+    fn at_least_25_active_mock_locations_within_1km_of_the_centroid() {
+        // Mirrors the `ST_DWithin` check the db_test runs against the seeded
+        // rows; this is the cheap, DB-less version (Problem #3).
+        const CENTROID: (f64, f64) = (-25.4284, -49.2733);
+        fn meters(lat: f64, lon: f64) -> f64 {
+            let dlat = (lat - CENTROID.0) * 111_320.0;
+            let dlon = (lon - CENTROID.1) * 111_320.0 * CENTROID.0.to_radians().cos();
+            (dlat * dlat + dlon * dlon).sqrt()
+        }
+        let within = mock_parkings()
+            .iter()
+            .filter(|m| meters(m.lat, m.lon) <= 1000.0)
+            .count();
+        assert!(within >= 25, "only {within} mock locations within 1 km");
+    }
 }

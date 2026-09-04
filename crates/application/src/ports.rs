@@ -29,15 +29,15 @@ pub trait Geocoder: Send + Sync {
 // Search criteria
 // ---------------------------------------------------------------------------
 
-/// Radius allowlist (§31). Default 1 km.
-pub const RADIUS_OPTIONS_M: &[u32] = &[250, 500, 1000, 2000];
+/// Radius allowlist: a search radius is one of these or the default, never a
+/// free number, so no URL can ask the database for the whole country. 5 km is
+/// the widest a *radius* goes — past that the honest answer is browse mode's
+/// bounding box, not a bigger circle.
+pub const RADIUS_OPTIONS_M: &[u32] = &[250, 500, 1000, 2000, 5000];
 pub const DEFAULT_RADIUS_M: u32 = 1000;
 /// Page size defaults/limits (§32).
 pub const DEFAULT_PAGE_SIZE: usize = 20;
 pub const MAX_PAGE_SIZE: usize = 100;
-/// Hard cap on candidates fetched for the in-memory "recommended" sort
-/// (plans/m1-search-map.md §2); the total count is unaffected (SQL window).
-pub const RECOMMENDED_CANDIDATE_CAP: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sort {
@@ -161,6 +161,10 @@ pub struct SearchInput {
     pub sort: Option<String>,
     pub page_size: Option<usize>,
     pub cursor: Option<String>,
+    /// Browse mode: a raw `west,south,east,north` bounding box (WGS84) from the
+    /// map, parsed and validated by [`BoundsQuery::parse`]. Only honoured when
+    /// there is no destination to search around (see `SearchParking::browse`).
+    pub bbox: Option<String>,
 }
 
 impl SearchInput {
@@ -231,8 +235,16 @@ impl SearchRequest {
         let mut types = filters.types.clone();
         types.sort_by_key(|t| t.as_code());
         types.dedup();
-        let mut security_all = filters.security_all.clone();
-        security_all.retain(|c| !c.trim().is_empty());
+        // Unknown codes are dropped, not matched: an unknown code can never be
+        // confirmed on any location, so keeping it would silently turn the
+        // whole search into "no results" — a stale or hand-edited URL degrades
+        // to the results it can still honour instead.
+        let mut security_all: Vec<String> = filters
+            .security_all
+            .iter()
+            .map(|c| c.trim().to_string())
+            .filter(|c| bikenest_domain::is_known_security_code(c))
+            .collect();
         security_all.sort();
         security_all.dedup();
         Self {
@@ -274,27 +286,16 @@ pub struct ParkingSummary {
     /// The web layer resolves this to a presigned URL for the card; `None`
     /// falls back to a positional illustrative image.
     pub photo_key: Option<String>,
-}
-
-impl ParkingSummary {
-    /// Normalized ascending sort key for SQL keyset pagination (§32).
-    /// distance → itself; the other sorts negate so ascending works for all.
-    /// The `Recommended` sort paginates on its own score, computed by the
-    /// application layer, so it has no SQL-side key.
-    pub fn sort_key(&self, sort: Sort) -> Option<f64> {
-        match sort {
-            Sort::Recommended => None,
-            Sort::Distance => Some(self.distance_m),
-            Sort::Security => Some(-(self.security_yes.len() as f64)),
-            Sort::Rating => Some(-self.rating.avg().unwrap_or(2.5)),
-            Sort::RecentlyVerified => Some(
-                -self
-                    .last_verified_at
-                    .map(|t| t.timestamp_millis() as f64)
-                    .unwrap_or(0.0),
-            ),
-        }
-    }
+    /// Normalized ascending keyset sort key, exactly as the search reader
+    /// computed it for this request's sort — distance keeps its value, the
+    /// other sorts negate. The next-page cursor is built from this value,
+    /// so it must never be recomputed in Rust: any rounding or unit mismatch
+    /// with the SQL expression would make the keyset predicate skip or repeat
+    /// rows. Only the distance sort's key is a distance — and even there it is
+    /// the sphere distance the GIST index orders on, not [`Self::distance_m`].
+    /// `None` for summaries no cursor can be minted from: anything not read by
+    /// the search reader, and browse-mode rows (a viewport has no next page).
+    pub sort_key: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -306,6 +307,128 @@ pub struct SearchPage {
     pub next_cursor: Option<Cursor>,
 }
 
+// ---------------------------------------------------------------------------
+// Browse mode: "what is inside the map I am looking at"
+// ---------------------------------------------------------------------------
+
+/// Most markers a browse answer may carry. Past this the reader clusters
+/// instead: a viewport holding thousands of spots is a zoom-out, not a page,
+/// and neither the browser nor the reader should pay for markers nobody can
+/// tell apart.
+pub const BROWSE_MARKER_CAP: usize = 200;
+
+/// How many of those markers the accessible list shows. Browse is not
+/// paginated (there is no stable keyset over "what the map shows"), so the
+/// list is the nearest [`BROWSE_LIST_CAP`] to the centre and the UI asks for a
+/// smaller area instead of a next page.
+pub const BROWSE_LIST_CAP: usize = 50;
+
+/// Largest bounding box a browse request may ask for, per axis, in degrees.
+/// One degree of latitude is ~111 km — beyond that the answer is always a
+/// cluster map, so a wider box only buys a more expensive count.
+pub const MAX_BROWSE_SPAN_DEG: f64 = 1.0;
+
+/// Columns of the clustering grid a browse answer is snapped to when it has
+/// too many rows to draw individually. The cell is the box's *width* divided
+/// by this, so a cluster map always reads as a ~12-column grid whatever the
+/// zoom.
+pub const BROWSE_GRID_COLUMNS: f64 = 12.0;
+
+/// A validated map viewport plus the same filters a radius search takes.
+///
+/// Constructed only through [`BoundsQuery::parse`], so no unbounded,
+/// inside-out or off-globe box can reach the reader.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoundsQuery {
+    pub west: f64,
+    pub south: f64,
+    pub east: f64,
+    pub north: f64,
+    pub filters: Filters,
+    /// Marker cap for this query — [`BROWSE_MARKER_CAP`] in production; tests
+    /// lower it to exercise clustering without inserting hundreds of rows.
+    pub limit: usize,
+}
+
+impl BoundsQuery {
+    /// Parses `west,south,east,north` (WGS84 degrees) as the map writes it.
+    ///
+    /// `None` — a 400 to the caller — when the box is not four finite numbers,
+    /// is off the globe (`|lat| > 90`, `|lon| > 180`), is inside out
+    /// (`west >= east` / `south >= north`), or spans more than
+    /// [`MAX_BROWSE_SPAN_DEG`] on either axis. An antimeridian-crossing box is
+    /// "inside out" by this rule and is rejected rather than silently split.
+    pub fn parse(raw: &str, filters: Filters, limit: usize) -> Option<Self> {
+        let parts: Vec<f64> = raw
+            .split(',')
+            .map(|p| p.trim().parse::<f64>())
+            .collect::<Result<_, _>>()
+            .ok()?;
+        let [west, south, east, north] = parts[..] else {
+            return None;
+        };
+        if ![west, south, east, north].iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        if west.abs() > 180.0 || east.abs() > 180.0 || south.abs() > 90.0 || north.abs() > 90.0 {
+            return None;
+        }
+        if west >= east || south >= north {
+            return None;
+        }
+        if east - west > MAX_BROWSE_SPAN_DEG || north - south > MAX_BROWSE_SPAN_DEG {
+            return None;
+        }
+        Some(Self {
+            west,
+            south,
+            east,
+            north,
+            filters,
+            limit: limit.clamp(1, BROWSE_MARKER_CAP),
+        })
+    }
+
+    /// The box's centre — what browse-mode distances are measured from, since
+    /// there is no destination to be near.
+    pub fn center(&self) -> GeoPoint {
+        GeoPoint::new(
+            (self.south + self.north) / 2.0,
+            (self.west + self.east) / 2.0,
+        )
+        .expect("a validated bounds' midpoint is on the globe")
+    }
+
+    /// Side of the clustering grid cell, in degrees: the box's width over
+    /// [`BROWSE_GRID_COLUMNS`]. Square in degrees (not in metres), which is
+    /// what keeps the grid aligned with the box the viewer is looking at.
+    pub fn cell_deg(&self) -> f64 {
+        (self.east - self.west) / BROWSE_GRID_COLUMNS
+    }
+}
+
+/// One clustering-grid cell that held more than one location: the mean
+/// position of its members, and how many there were.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cluster {
+    pub lat: f64,
+    pub lon: f64,
+    pub count: i64,
+}
+
+/// What is inside a viewport.
+///
+/// Either `items` (at most [`BoundsQuery::limit`], nearest the centre first)
+/// or `clusters` — never both: past the cap individual markers are replaced by
+/// grid counts whose `count`s sum to `total`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoundsPage {
+    pub items: Vec<ParkingSummary>,
+    /// Everything matching inside the box, cap or no cap.
+    pub total: usize,
+    pub clusters: Vec<Cluster>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ReaderError {
     #[error("database unavailable")]
@@ -314,19 +437,40 @@ pub enum ReaderError {
     Unexpected(String),
 }
 
-/// Port: keyset-paginated nearby search over `parking_location` (§31–§32).
+/// Port: the two ways to read `parking_location` for results — a
+/// keyset-paginated search around a destination, and a whole map viewport.
 #[async_trait]
 pub trait ParkingSearchReader: Send + Sync {
-    /// Applies criteria (except `Recommended` sorting, which the use case
-    /// performs in the application layer over a capped candidate set).
-    /// Ignores `cursor` unless `cursor.sort == Sort::Distance` etc. — i.e.
-    /// applies it when it matches the SQL sort; the use case coordinates this.
+    /// Applies every criterion and every sort, `Recommended` included: the
+    /// reader owns the sort key, so all five sorts paginate through the same
+    /// keyset predicate and nothing is re-ranked after the page is read.
+    /// `apply_cursor` gates the keyset predicate; the use case only sets it
+    /// once it has checked that the cursor was minted for this sort.
     async fn search(
         &self,
         request: &SearchRequest,
         limit: usize,
         apply_cursor: bool,
     ) -> Result<SearchPage, ReaderError>;
+
+    /// Browse mode: everything inside a map viewport, nearest the box's centre
+    /// first, capped at `query.limit` — or, when more rows match than that,
+    /// the same rows as counts on a grid ([`BoundsPage::clusters`]).
+    ///
+    /// Not a radius search with a square: there is no origin to be near, no
+    /// sort to choose and no cursor to follow, so it answers with a whole
+    /// viewport rather than a page of one.
+    async fn in_bounds(&self, query: &BoundsQuery) -> Result<BoundsPage, ReaderError>;
+}
+
+/// Port: the ids of every publicly listed location, for the sitemap.
+///
+/// Its own port rather than a reuse of [`ParkingSearchReader`]: the sitemap
+/// wants every ACTIVE id in a stable order, with none of the search criteria,
+/// ranking or pagination that reader exists to apply.
+#[async_trait]
+pub trait SitemapReader: Send + Sync {
+    async fn active_parking_ids(&self) -> Result<Vec<i64>, ReaderError>;
 }
 
 /// Port: full aggregate for the details page (§24).
@@ -359,11 +503,17 @@ pub trait ParkingPhotoReader: Send + Sync {
     async fn photos(&self, location_id: i64) -> Result<Vec<StoredPhoto>, ReaderError>;
 }
 
-/// Port: approved photos attached to a *review* (D3 §38), in display order.
+/// Port: approved photos attached to *reviews*, in display order.
 /// Only `APPROVED` review photos render on the review card.
 #[async_trait]
 pub trait ReviewPhotosReader: Send + Sync {
-    async fn photos(&self, review_id: i64) -> Result<Vec<StoredPhoto>, ReaderError>;
+    /// Batched form of "approved photos for this review, in order" for every
+    /// review on a details page — one query instead of one per review.
+    /// Review ids absent from the map have no approved photos.
+    async fn for_reviews(
+        &self,
+        review_ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, Vec<StoredPhoto>>, ReaderError>;
 }
 
 /// Shared freshness configuration for view-building use cases.

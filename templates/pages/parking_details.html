@@ -22,7 +22,7 @@
       {{ tr.t("moderation.banner") }} <span class="font-mono text-xs">{{ moderation_state }}</span>
       <span class="ml-2">
         {% if moderation_state == "INVALID" || moderation_state == "REMOVED" %}
-        <a href="/moderation/parking/{{ id }}/restore" class="rounded border border-border px-2 py-1 text-xs text-muted hover:text-fg">{{ tr.t("moderation.restore") }}</a>
+        <a href="/moderation/parking/{{ id }}/restore" class="btn-compact rounded border border-border px-2 text-xs text-muted hover:text-fg">{{ tr.t("moderation.restore") }}</a>
         {% endif %}
       </span>
     </div>
@@ -45,7 +45,7 @@
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-          <a href="{{ google_url }}" target="_blank" rel="noopener" class="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">
+          <a href="{{ google_url }}" target="_blank" rel="noopener" class="inline-flex items-center gap-2 rounded-xl bg-accent-strong px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">
             <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /><circle cx="12" cy="10" r="3" /></svg>
             {{ tr.t("details.navigate.google") }}
           </a>
@@ -67,8 +67,12 @@
       <section class="mt-8">
         {% if gallery.is_empty() %}
           <div class="rounded-2xl border border-dashed border-border bg-surface px-6 py-12 text-center">
-            <p class="font-display text-base font-semibold">{{ tr.t("details.gallery.empty") }}</p>
-            <p class="mx-auto mt-1.5 max-w-sm text-sm text-muted">{{ tr.t("details.gallery.empty_hint") }}</p>
+            {% if can_contribute %}
+              <p class="font-display text-base font-semibold">{{ tr.t("gallery.empty_can_upload") }}</p>
+            {% else %}
+              <p class="font-display text-base font-semibold">{{ tr.t("details.gallery.empty") }}</p>
+              <p class="mx-auto mt-1.5 max-w-sm text-sm text-muted">{{ tr.t("details.gallery.empty_hint") }}</p>
+            {% endif %}
           </div>
         {% else %}
           <div class="grid gap-3 sm:grid-cols-4">
@@ -78,6 +82,7 @@
                 @click="openLightbox"
                 data-src="{{ photo.url }}"
                 data-alt="{{ photo.alt }}"
+                aria-label="{{ tr.t("gallery.view_photo") }}"
                 class="{% if loop.first %}sm:col-span-4 aspect-[16/9]{% else %}aspect-square{% endif %} overflow-hidden rounded-2xl border border-border"
               >
                 <img src="{{ photo.thumb_url }}" alt="{{ photo.alt }}" loading="lazy" class="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
@@ -85,7 +90,13 @@
             {% endfor %}
           </div>
           <!-- Lightbox -->
-          <div x-show="galleryOpen" x-cloak @keydown.escape.window="closeLightbox" class="fixed inset-0 z-50 flex items-center justify-center bg-[oklch(18%_0.015_240_/_0.85)] p-4" @click="closeLightbox">
+          <div
+            id="photo-lightbox" x-show="galleryOpen" x-cloak
+            role="dialog" aria-modal="true" aria-labelledby="photo-lightbox-title"
+            @keydown.escape.window="closeLightbox" @keydown.tab="trapTab"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-[oklch(18%_0.015_240_/_0.85)] p-4" @click="closeLightbox"
+          >
+            <h2 id="photo-lightbox-title" class="sr-only">{{ tr.t("a11y.dialog_photo_title") }}</h2>
             <img :src="gallerySrc" :alt="galleryAlt" class="max-h-[90vh] max-w-full rounded-xl" @click.stop />
             <button @click="closeLightbox" aria-label="{{ tr.t("a11y.close") }}" class="absolute right-5 top-5 grid h-10 w-10 place-items-center rounded-full bg-white/90 text-fg">✕</button>
           </div>
@@ -97,7 +108,12 @@
       <section class="mt-8">
         <h2 class="font-display text-lg font-semibold">{{ tr.t("photo.upload.title") }}</h2>
         <p class="mt-1 text-sm text-muted">{{ tr.t("photo.upload.hint") }}</p>
-        <form action="/parking/{{ id }}/photo" method="post" enctype="multipart/form-data"
+        {# `?csrf=` on the action is the no-JS token source: the CSRF middleware
+           must not drain a multipart body (the handler's `Multipart` extractor
+           needs it), so it reads the query instead. With JS the `hx-headers`
+           X-CSRF-Token below is used and the query value is simply redundant. #}
+        <form action="/parking/{{ id }}/photo?csrf={{ layout.csrf }}" method="post"
+              enctype="multipart/form-data"
               hx-post="/parking/{{ id }}/photo"
               hx-target="#photo-upload-result"
               hx-swap="innerHTML"
@@ -106,9 +122,9 @@
               class="mt-4 flex flex-wrap items-center gap-3">
           <input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required class="text-sm" />
           <input type="text" name="alt" maxlength="500" placeholder="{{ tr.t("photo.upload.title") }}" class="rounded-lg border border-border bg-bg px-3 py-2 text-sm" />
-          <button type="submit" class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark">{{ tr.t("photo.upload.submit") }}</button>
+          <button type="submit" class="rounded-lg bg-accent-strong px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark">{{ tr.t("photo.upload.submit") }}</button>
         </form>
-        <div id="photo-upload-result" class="mt-3" aria-live="polite"></div>
+        <div id="photo-upload-result" class="mt-3" aria-live="polite" tabindex="-1"></div>
       </section>
       {% endif %}
 
@@ -122,7 +138,7 @@
           </div>
           <div class="rounded-2xl border border-border bg-surface p-4">
             <p class="text-xs uppercase tracking-wide text-muted">{{ tr.t("details.facts.freshness") }}</p>
-            <p class="mt-1 font-medium">{{ freshness_label }} · {{ verified_label }}</p>
+            <p class="mt-1 font-medium">{% if freshness_code == "never" %}{{ freshness_label }}{% else %}{{ freshness_label }} · {{ verified_label }}{% endif %}</p>
           </div>
           <div class="rounded-2xl border border-border bg-surface p-4">
             <p class="text-xs uppercase tracking-wide text-muted">{{ tr.t("details.facts.rating") }}</p>
@@ -206,7 +222,7 @@
                   <div class="flex items-center gap-3">
                     {% if is_authenticated %}
                     <button type="button" @click="report('review', {{ r.id }})"
-                            class="text-xs text-muted hover:text-error">{{ tr.t("report.action") }}</button>
+                            class="btn-compact text-xs text-muted hover:text-danger">{{ tr.t("report.action") }}</button>
                     {% endif %}
                     <span class="text-xs text-muted">{{ r.created_label }}</span>
                   </div>
@@ -238,19 +254,32 @@
 
       <div class="rounded-2xl border border-border bg-surface p-4">
         <div class="flex flex-col gap-2 text-sm">
-          <a href="{{ google_url }}" target="_blank" rel="noopener" class="rounded-lg bg-accent px-4 py-2 text-center font-medium text-white hover:bg-accent-dark">{{ tr.t("details.navigate.google") }}</a>
+          <a href="{{ google_url }}" target="_blank" rel="noopener" class="rounded-lg bg-accent-strong px-4 py-2 text-center font-medium text-white hover:bg-accent-dark">{{ tr.t("details.navigate.google") }}</a>
           <a href="{{ osm_url }}" target="_blank" rel="noopener" class="rounded-lg border border-border px-4 py-2 text-center hover:border-accent">{{ tr.t("details.navigate.osm") }}</a>
         </div>
+      </div>
+
+      <!-- Add a nearby spot (WP12): the map above only ever shows this one
+           listing, so this is the entry point to add whatever it doesn't cover. -->
+      <div class="rounded-2xl border border-dashed border-border bg-surface p-4 text-sm">
+        <p class="text-muted">{{ tr.t("details.add_nearby") }}</p>
+        {% if can_contribute %}
+          <a href="/parking/new" class="mt-2 inline-flex items-center gap-2 rounded-lg bg-accent-strong px-3 py-2 text-sm font-medium text-white hover:bg-accent-dark">{{ tr.t("nav.add_spot") }}</a>
+        {% else if is_authenticated %}
+          <a href="/account" class="mt-2 inline-block text-xs text-muted hover:text-fg">{{ tr.t("nav.verify_to_contribute") }}</a>
+        {% else %}
+          <a href="/register" class="mt-2 inline-flex items-center gap-2 rounded-lg bg-accent-strong px-3 py-2 text-sm font-medium text-white hover:bg-accent-dark">{{ tr.t("nav.signup_to_add") }}</a>
+        {% endif %}
       </div>
 
       <!-- Confidence (M3 §106) -->
       <div class="rounded-2xl border border-border bg-surface p-4 text-sm">
         <div class="flex items-center justify-between gap-2">
           <h2 class="font-display text-sm font-semibold">{{ tr.t("confidence.title") }}</h2>
-          <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if confidence_code == "recently_verified" || confidence_code == "verified" %}bg-fresh/10 text-fresh{% else if confidence_code == "conflicting" %}bg-error/10 text-error{% else if confidence_code == "stale" %}bg-stale/10 text-stale{% else %}bg-bg text-muted{% endif %}">{{ confidence_label }}</span>
+          <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if confidence_code == "recently_verified" || confidence_code == "verified" %}bg-fresh/10 text-fresh{% else if confidence_code == "conflicting" %}bg-danger/10 text-danger{% else if confidence_code == "stale" %}bg-stale/10 text-stale{% else %}bg-bg text-muted{% endif %}">{{ confidence_label }}</span>
         </div>
         {% if disputed %}
-          <div class="mt-2 rounded-lg border border-error/30 bg-error/10 px-3 py-2 text-xs text-error">
+          <div class="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
             {{ tr.t("confidence.disputed") }}
           </div>
           {% if !dispute_items.is_empty() %}
@@ -267,7 +296,7 @@
       <!-- Verification panel (M3 §39) -->
       <div class="rounded-2xl border border-border bg-surface p-4 text-sm">
         <h2 class="font-display text-sm font-semibold">{{ tr.t("verification.title") }}</h2>
-        <div id="verification-panel" class="mt-2">
+        <div id="verification-panel" class="mt-2" aria-live="polite" tabindex="-1">
           {% if can_contribute %}
             <div class="grid gap-2">
               <form action="/parking/{{ id }}/verify" method="post" hx-post="/parking/{{ id }}/verify" hx-target="#verification-panel" hx-swap="innerHTML" class="contents">
@@ -280,7 +309,7 @@
                 <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
                 <input type="hidden" name="kind" value="existence" />
                 <input type="hidden" name="result" value="no_longer_exists" />
-                <button type="submit" class="rounded-lg border border-error/30 px-3 py-2 text-sm text-error hover:border-error">{{ tr.t("verify.no_longer_exists") }}</button>
+                <button type="submit" class="rounded-lg border border-danger/30 px-3 py-2 text-sm text-danger hover:border-danger">{{ tr.t("verify.no_longer_exists") }}</button>
               </form>
               <form action="/parking/{{ id }}/verify" method="post" hx-post="/parking/{{ id }}/verify" hx-target="#verification-panel" hx-swap="innerHTML" class="contents">
                 <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
@@ -315,41 +344,40 @@
         {% endif %}
       </div>
 
-      <!-- Favorite (M3 §42) -->
+      <!-- Favorite. One definition, in the partial the toggle endpoint
+           also answers with — a second copy here drifted out of sync with it. -->
       {% if is_authenticated %}
-        <div id="favorite-button">
-          <form action="/parking/{{ id }}/favorite" method="post">
-            <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
-            <button type="submit"
-              hx-post="/parking/{{ id }}/favorite"
-              hx-target="#favorite-button"
-              hx-swap="outerHTML"
-              class="w-full inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition-colors {% if is_favorited %}border-accent bg-accent-soft text-accent-strong{% else %}border-border text-muted hover:text-fg{% endif %}">
-              <svg aria-hidden="true" class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5" /></svg>
-              {% if is_favorited %}{{ tr.t("favorites.saved") }}{% else %}{{ tr.t("favorites.save") }}{% endif %}
-            </button>
-          </form>
-        </div>
+        {% let csrf = layout.csrf.as_str() %}
+        {% include "partials/favorite_button.html" %}
       {% endif %}
     </aside>
   </div>
 </div>
 
 {% if is_authenticated %}
-<!-- Report modal (M5 §43). Any `bikenest:report` event sets the target; the
-     modal posts to /reports with the resolved target_type + target_id. -->
+<!-- Report modal. Any `bikenest:report` event sets the target; the modal
+     posts to /reports with the resolved target_type + target_id. The feedback
+     lands *inside* the modal (it used to target a container at the bottom of
+     the page, off-screen behind the overlay) and the modal closes only on a
+     2xx — see `reportModal.afterRequest` in web/static/js/app.js. -->
 <div x-data="reportModal" data-report-id="{{ id }}"
-     @window:bikenest:report.window="openReport">
+     @bikenest:report.window="openReport"
+     @keydown.escape.window="close">
   <div x-show="open" x-cloak
        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
        @click.self="close">
-    <form action="/reports" method="post" hx-post="/reports" hx-target="#report-feedback" hx-swap="innerHTML"
+    <form
+          id="report-modal" action="/reports" method="post" hx-post="/reports"
+          hx-target="#report-modal-feedback" hx-swap="innerHTML"
+          role="dialog" aria-modal="true" aria-labelledby="report-modal-title"
+          @keydown.tab="trapTab"
           class="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-xl"
-          @submit="submitClose">
+          @htmx:after:request="afterRequest">
       <input type="hidden" name="csrf" value="{{ layout.csrf }}">
       <input type="hidden" name="target_type" :value="type">
       <input type="hidden" name="target_id" :value="tid">
-      <h2 class="font-display text-lg font-bold">{{ tr.t("report.title") }}</h2>
+      <input type="hidden" name="page" value="/parking/{{ id }}">
+      <h2 id="report-modal-title" class="font-display text-lg font-bold">{{ tr.t("report.title") }}</h2>
       <label class="mt-4 block text-sm font-medium">{{ tr.t("report.reason") }}
         <select name="reason" required class="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm">
           {% for r in reason_options %}<option value="{{ r.value }}">{{ r.label }}</option>{% endfor %}
@@ -359,19 +387,29 @@
         <textarea name="description" rows="4" maxlength="1000"
                   class="mt-1 w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm"></textarea>
       </label>
+      <div id="report-modal-feedback" class="mt-4" role="status" aria-live="polite" tabindex="-1"></div>
       <div class="mt-4 flex justify-end gap-2">
         <button type="button" @click="close"
                 class="rounded-lg border border-border px-4 py-2 text-sm text-muted hover:text-fg">{{ tr.t("report.cancel") }}</button>
-        <button type="submit" class="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white">{{ tr.t("report.submit") }}</button>
+        <button type="submit" class="rounded-lg bg-accent-strong px-4 py-2 text-sm font-medium text-white">{{ tr.t("report.submit") }}</button>
       </div>
     </form>
   </div>
 </div>
-<div id="report-feedback" hx-swap-oob="true"></div>
+{% endif %}
+{% endblock %}
+
+{% block head %}
+<!-- MapLibre base styles (map clipping, canvas layout, control/attribution
+     positioning). Must load before map.css so the page's map overrides win. -->
+<link rel="stylesheet" href="{{ layout.asset("vendor/maplibre-gl.css") }}">
+<link rel="stylesheet" href="{{ layout.asset("css/map.css") }}">
+{% if !layout.map_style_url.is_empty() %}
+<link rel="preconnect" href="{{ layout.tile_origin() }}" crossorigin>
 {% endif %}
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/vendor/maplibre-gl.js"></script>
-<script src="/static/js/details-map.js"></script>
+<script src="{{ layout.asset("vendor/maplibre-gl.js") }}"></script>
+<script src="{{ layout.asset("js/details-map.js") }}"></script>
 {% endblock %}

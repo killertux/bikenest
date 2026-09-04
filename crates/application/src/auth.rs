@@ -3,14 +3,15 @@
 //! calls [`AuthService`] for every auth/account/role action.
 
 use crate::audit::{AuditEvent, AuditLog};
-use crate::email::{EmailProvider, OutboundEmail};
+use crate::email::{EmailKind, EmailMessage, EmailQueue};
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use async_trait::async_trait;
 use bikenest_domain::{
-    AccountState, AuthenticationProvider, CsrfToken, Password, PasswordPolicy, ProviderIdentity,
-    Role, SessionId, User, UserEmail, UserId, VerificationToken,
+    AccountState, AuthenticationProvider, CsrfToken, LocaleCode, Password, PasswordPolicy,
+    ProviderIdentity, Role, SessionId, User, UserEmail, UserId, VerificationToken,
 };
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -42,8 +43,17 @@ pub enum AuthError {
     ProviderFailed,
     #[error("you are not permitted to perform this action")]
     Unauthorized,
-    #[error("you cannot remove your own last admin role")]
+    /// The revoke would leave the system with no ADMIN at all — refused
+    /// whether the actor is demoting themselves or another admin.
+    #[error("the system must keep at least one admin")]
     RefuseAdminSelfRevoke,
+    /// Storage refused a duplicate, or a concurrent writer won the race
+    /// (unique violation, serialization failure, deadlock).
+    #[error("that change conflicts with an existing record")]
+    Conflict,
+    /// Storage is unreachable or overloaded; the same request may work shortly.
+    #[error("service temporarily unavailable")]
+    Unavailable,
     #[error("internal error")]
     Internal,
 }
@@ -122,6 +132,33 @@ pub struct NewAccount<'a> {
     pub display_name: Option<&'a str>,
     pub password_hash: &'a str,
     pub state: AccountState,
+    /// The language the signup happened in. Persisted on the row so the
+    /// verification mail — and every later message, sent by a background job
+    /// with no request in scope — is written in it.
+    pub locale: LocaleCode,
+}
+
+/// Activity counters the admin user list shows next to each account, so a
+/// suspend/grant decision is not made from an email address alone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UserActivity {
+    /// Newest `sessions.last_seen_at` for the account; `None` for an account
+    /// that has never signed in (or whose sessions have been purged).
+    pub last_active_at: Option<DateTime<Utc>>,
+    /// Locations added, edits, proposals, reviews, verifications and photos —
+    /// the same events the C5 contribution feed lists, counted.
+    pub contributions: i64,
+}
+
+/// One page of the admin user list, `limit`-capped, newest account first.
+#[derive(Debug, Clone, Default)]
+pub struct UserSearch<'a> {
+    /// Case-insensitive substring of email or display name. `None` lists all.
+    pub query: Option<&'a str>,
+    /// Keyset cursor: the smallest id already shown (the list runs `id DESC`,
+    /// so the next page is `id < after_id`).
+    pub after_id: Option<i64>,
+    pub limit: i64,
 }
 
 /// Port: account + role persistence. `Account` is the domain `User` with its
@@ -144,6 +181,9 @@ pub trait AccountRepository: Send + Sync {
         email: &UserEmail,
     ) -> Result<(), AuthError>;
     async fn set_password(&self, id: UserId, hash: &str) -> Result<(), AuthError>;
+    /// Persist the account's reading language (the header language toggle, for
+    /// a signed-in user). Transactional email is rendered from this value.
+    async fn set_locale(&self, id: UserId, locale: LocaleCode) -> Result<(), AuthError>;
     async fn link_identity(
         &self,
         user_id: UserId,
@@ -157,10 +197,29 @@ pub trait AccountRepository: Send + Sync {
         subject: &str,
     ) -> Result<Option<IdentityRecord>, AuthError>;
     async fn roles(&self, id: UserId) -> Result<Vec<Role>, AuthError>;
+    /// How many accounts currently hold ADMIN. Backs the "never zero admins"
+    /// guard, which a per-user role list cannot answer.
+    async fn count_admins(&self) -> Result<i64, AuthError>;
     async fn grant_role(&self, id: UserId, role: Role, by: UserId) -> Result<(), AuthError>;
-    async fn revoke_role(&self, id: UserId, role: Role) -> Result<bool, AuthError>;
+    /// Revoke `role` from `id`, refusing any revoke that would leave the system
+    /// with zero administrators. Returns whether a row was removed.
+    ///
+    /// The guard and the delete are **one transaction** that locks the ADMIN
+    /// rows: counting admins and then deleting as two statements is a race, and
+    /// two admins demoting each other at the same moment both pass a count of
+    /// two. Refusal is [`AuthError::RefuseAdminSelfRevoke`].
+    async fn revoke_role_guarded(&self, id: UserId, role: Role) -> Result<bool, AuthError>;
     /// All accounts (for the admin user list).
     async fn list_users(&self) -> Result<Vec<User>, AuthError>;
+    /// One keyset page of the admin user list, optionally filtered by a
+    /// search term. Replaces loading every account to render a table.
+    async fn search_users(&self, search: UserSearch<'_>) -> Result<Vec<User>, AuthError>;
+    /// Display labels ("Ada Lovelace", else the email) for a batch of ids —
+    /// **one** query for a whole page of audit rows or privacy requests, not
+    /// one per row. Ids that no longer exist are absent from the map.
+    async fn labels_for(&self, ids: &[i64]) -> Result<HashMap<i64, String>, AuthError>;
+    /// Last-seen + contribution counters for a batch of ids (one query).
+    async fn activity_for(&self, ids: &[i64]) -> Result<HashMap<i64, UserActivity>, AuthError>;
 }
 
 /// A resolved server-side session.
@@ -305,7 +364,7 @@ pub struct AuthService {
     hasher: Box<dyn PasswordHasher>,
     tokens_gen: Box<dyn TokenGenerator>,
     clock: Box<dyn Clock>,
-    email: Box<dyn EmailProvider>,
+    email: Box<dyn EmailQueue>,
     oauth: Box<dyn OAuthProvider>,
     rate_limiter: Box<dyn RateLimiter>,
     audit: Box<dyn AuditLog>,
@@ -322,7 +381,7 @@ impl AuthService {
         hasher: Box<dyn PasswordHasher>,
         tokens_gen: Box<dyn TokenGenerator>,
         clock: Box<dyn Clock>,
-        email: Box<dyn EmailProvider>,
+        email: Box<dyn EmailQueue>,
         oauth: Box<dyn OAuthProvider>,
         rate_limiter: Box<dyn RateLimiter>,
         audit: Box<dyn AuditLog>,
@@ -364,30 +423,54 @@ impl AuthService {
         )
     }
 
-    /// Assemble the verification email for a token link.
-    fn verification_email(&self, to: &UserEmail, token: &VerificationToken) -> OutboundEmail {
-        let link = self.verification_link(token);
-        OutboundEmail {
-            to: to.clone(),
-            subject: "Verify your email".to_string(),
-            text: format!(
-                "Welcome to BikeNest. Confirm your email address to activate your account:\n\n{link}\n\nIf you did not create an account, you can ignore this email."
-            ),
-            html: None,
-        }
+    /// Describe the verification email for a token link. Subject and body are
+    /// *not* built here: the message names its kind and locale, and the
+    /// provider renders both from the catalog when it sends.
+    fn verification_email(
+        &self,
+        to: &UserEmail,
+        locale: LocaleCode,
+        token: &VerificationToken,
+    ) -> EmailMessage {
+        EmailMessage::new(
+            to.as_str(),
+            locale,
+            EmailKind::VerifyEmail {
+                link: self.verification_link(token),
+            },
+        )
     }
 
-    /// Assemble the password-reset email for a token link.
-    fn reset_email(&self, to: &UserEmail, token: &VerificationToken) -> OutboundEmail {
-        let link = self.reset_link(token);
-        OutboundEmail {
-            to: to.clone(),
-            subject: "Reset your password".to_string(),
-            text: format!(
-                "We received a request to reset your password. Choose a new one here:\n\n{link}\n\nIf you did not ask for this, you can safely ignore this email."
-            ),
-            html: None,
-        }
+    /// Describe the "confirm your new address" email of an email change.
+    fn change_email_message(
+        &self,
+        to: &UserEmail,
+        locale: LocaleCode,
+        token: &VerificationToken,
+    ) -> EmailMessage {
+        EmailMessage::new(
+            to.as_str(),
+            locale,
+            EmailKind::ConfirmEmailChange {
+                link: self.verification_link(token),
+            },
+        )
+    }
+
+    /// Describe the password-reset email for a token link.
+    fn reset_email(
+        &self,
+        to: &UserEmail,
+        locale: LocaleCode,
+        token: &VerificationToken,
+    ) -> EmailMessage {
+        EmailMessage::new(
+            to.as_str(),
+            locale,
+            EmailKind::ResetPassword {
+                link: self.reset_link(token),
+            },
+        )
     }
 
     async fn allowed(
@@ -416,6 +499,7 @@ impl AuthService {
         raw_email: &str,
         display_name: Option<&str>,
         raw_password: &str,
+        locale: LocaleCode,
     ) -> Result<(), AuthError> {
         self.allowed(
             &format!("register:ip:{ip}"),
@@ -446,6 +530,7 @@ impl AuthService {
                 display_name,
                 password_hash: &hash,
                 state: AccountState::PendingEmailVerification,
+                locale,
             })
             .await?;
 
@@ -453,8 +538,17 @@ impl AuthService {
         self.tokens
             .issue_verification(user_id, email.as_str(), &token, now)
             .await?;
+        // Hand the mail to the queue, never to a provider: a slow or broken
+        // ESP can no longer hold this request open, nor fail it *after* the
+        // account and token exist. The durable queue is one INSERT into the
+        // same database that just wrote those two rows, but not in the same
+        // transaction — the repository ports expose none — so a crash in
+        // between can still leave an account with no mail queued. That is
+        // recoverable by design: the address is unverified, and "resend
+        // verification" issues a fresh token. An enqueue *error* fails the
+        // whole registration, so nobody is told to watch an empty inbox.
         self.email
-            .send(self.verification_email(&email, &token))
+            .enqueue(self.verification_email(&email, locale, &token))
             .await?;
         self.audit
             .record(AuditEvent::success(
@@ -486,9 +580,15 @@ impl AuthService {
         // to `Active`, and (when changing) switch `users.email` + the password
         // identity subject in a single transaction — one login-lookup key, never
         // divergent (§2, §20).
+        // Someone may have claimed the address between the request and the
+        // click: that is "email taken", not an internal failure.
         self.accounts
             .confirm_email(user_id, now, &new_email)
-            .await?;
+            .await
+            .map_err(|e| match e {
+                AuthError::Conflict => AuthError::EmailTaken,
+                other => other,
+            })?;
         if is_change_email {
             // An email change is a security event: invalidate every session so
             // a stale credential on the old address can't keep a session alive.
@@ -535,7 +635,7 @@ impl AuthService {
             .issue_verification(user.id, email.as_str(), &token, self.now())
             .await?;
         self.email
-            .send(self.verification_email(email, &token))
+            .enqueue(self.verification_email(email, user.locale, &token))
             .await?;
         Ok(())
     }
@@ -690,7 +790,9 @@ impl AuthService {
         };
         let token = VerificationToken::new(self.tokens_gen.generate());
         self.tokens.issue_reset(user.id, &token, self.now()).await?;
-        self.email.send(self.reset_email(email, &token)).await?;
+        self.email
+            .enqueue(self.reset_email(email, user.locale, &token))
+            .await?;
         Ok(())
     }
 
@@ -796,12 +898,18 @@ impl AuthService {
         {
             return Err(AuthError::InvalidCredentials);
         }
+        // Reject a taken address here rather than at confirm time: the unique
+        // index would otherwise fire only after the mail was sent and the
+        // single-use token spent, leaving the user with no way forward.
+        if self.accounts.find_by_email(new_email).await?.is_some() {
+            return Err(AuthError::EmailTaken);
+        }
         let token = VerificationToken::new(self.tokens_gen.generate());
         self.tokens
             .issue_verification(user_id, new_email.as_str(), &token, self.now())
             .await?;
         self.email
-            .send(self.verification_email(new_email, &token))
+            .enqueue(self.change_email_message(new_email, user.locale, &token))
             .await?;
         self.audit
             .record(AuditEvent::success(
@@ -812,6 +920,14 @@ impl AuthService {
             ))
             .await?;
         Ok(())
+    }
+
+    /// Persist the language a signed-in user just chose with the header
+    /// toggle. The cookie already switched the interface; this is what makes
+    /// the *next* transactional email — rendered by a background job, with no
+    /// request and no `Accept-Language` in scope — speak the same language.
+    pub async fn set_locale(&self, user_id: UserId, locale: LocaleCode) -> Result<(), AuthError> {
+        self.accounts.set_locale(user_id, locale).await
     }
 
     // -----------------------------------------------------------------------
@@ -864,6 +980,10 @@ impl AuthService {
                 display_name: None,
                 password_hash: "",
                 state,
+                // No page was rendered for this signup (it is a provider
+                // callback), so the account starts on the product default and
+                // the language toggle updates it on the first visit.
+                locale: LocaleCode::default(),
             })
             .await?;
         self.accounts
@@ -942,8 +1062,11 @@ impl AuthService {
         Ok(())
     }
 
-    /// Revoke a role. Requires an ADMIN actor; refuses to remove the actor's
-    /// own last ADMIN.
+    /// Revoke a role. Requires an ADMIN actor; refuses any revoke that would
+    /// leave the system without an admin — self-demotion and demoting another
+    /// admin alike. Self-demotion is allowed whenever a second admin remains.
+    /// The last-admin check is atomic with the delete (see
+    /// [`AccountRepository::revoke_role_guarded`]).
     pub async fn revoke_role(
         &self,
         actor: &AuthenticatedUser,
@@ -956,14 +1079,11 @@ impl AuthService {
         if role == Role::User {
             return Err(AuthError::Unauthorized);
         }
-        if target == actor.id && role == Role::Admin {
-            let roles = self.accounts.roles(actor.id).await?;
-            let admin_count = roles.iter().filter(|r| **r == Role::Admin).count();
-            if admin_count <= 1 {
-                return Err(AuthError::RefuseAdminSelfRevoke);
-            }
-        }
-        let removed = self.accounts.revoke_role(target, role).await?;
+        // The "never zero admins" rule is enforced by the repository, in the
+        // same transaction as the delete and holding a lock on the ADMIN rows.
+        // Counting here and deleting after would let two admins demote each
+        // other concurrently: both read a count of two, both delete.
+        let removed = self.accounts.revoke_role_guarded(target, role).await?;
         if removed {
             self.audit
                 .record(AuditEvent::success(
@@ -1043,6 +1163,45 @@ impl AuthService {
     pub async fn list_users(&self) -> Result<Vec<AuthenticatedUser>, AuthError> {
         let users = self.accounts.list_users().await?;
         Ok(users.iter().map(AuthenticatedUser::from_user).collect())
+    }
+
+    /// One searched, keyset-paginated page of the admin user list. `limit` is
+    /// clamped by the repository.
+    pub async fn search_users(
+        &self,
+        query: Option<&str>,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<AuthenticatedUser>, AuthError> {
+        let query = query.map(str::trim).filter(|q| !q.is_empty());
+        let users = self
+            .accounts
+            .search_users(UserSearch {
+                query,
+                after_id,
+                limit,
+            })
+            .await?;
+        Ok(users.iter().map(AuthenticatedUser::from_user).collect())
+    }
+
+    /// Display labels for a batch of user ids (audit rows, privacy requests).
+    pub async fn user_labels(&self, ids: &[i64]) -> Result<HashMap<i64, String>, AuthError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.accounts.labels_for(ids).await
+    }
+
+    /// Last-active + contribution counters for a batch of user ids.
+    pub async fn user_activity(
+        &self,
+        ids: &[i64],
+    ) -> Result<HashMap<i64, UserActivity>, AuthError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.accounts.activity_for(ids).await
     }
 
     pub async fn resolve_session(

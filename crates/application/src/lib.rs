@@ -26,20 +26,21 @@ pub use audit::{
 pub use auth::{
     AccountRepository, AuthError, AuthService, AuthenticatedUser, Clock, IdentityRecord,
     LoginOutcome, NewAccount, OAuthProvider, PasswordHasher, ResolvedSession, Session,
-    SessionStore, TokenGenerator, TokenStore,
+    SessionStore, TokenGenerator, TokenStore, UserActivity, UserSearch,
 };
 pub use community::{
     AddParkingLocationOutcome, AttributeSummary, CommunityParkingDetails, ContributionDeps,
     ContributionError, ContributionHistoryReader, ContributionItem, ContributionService,
-    DuplicateCandidate, FavoriteRepository, NewParkingLocation, NewProposal, NewVerification,
-    ParkingContributionRepository, ParkingEdit, Reason, Review, ReviewRepository,
+    DuplicateCandidate, FavoriteItem, FavoriteRepository, NewParkingLocation, NewProposal,
+    NewVerification, ParkingContributionRepository, ParkingEdit, Reason, Review, ReviewRepository,
     VerificationRepository, recommendation_reasons,
 };
-pub use email::{EmailError, EmailProvider, OutboundEmail};
-pub use jobs::{JOB_JOBS_GC, JOB_RETENTION, JobError, JobHandler, JobPayload};
+pub use email::{EmailError, EmailKind, EmailMessage, EmailProvider, EmailQueue};
+pub use jobs::{JOB_EMAIL_SEND, JOB_JOBS_GC, JOB_RETENTION, JobError, JobHandler, JobPayload};
 pub use moderation::{
     ModerationDeps, ModerationError, ModerationRepository, ModerationService, NewReport, Proposal,
-    ProposalApplication, Report, ReportRepository,
+    ProposalApplication, ProposalField, ProposalOverride, QueueCounts, REVIEW_EXCERPT_CHARS,
+    Report, ReportRepository, ReportTargetPreview, review_excerpt,
 };
 pub use photo::{
     ImageProcessor, NewPendingPhoto, PendingPhoto, PhotoDeps, PhotoError, PhotoForModeration,
@@ -47,9 +48,10 @@ pub use photo::{
     UploadedPhoto,
 };
 pub use ports::{
-    CostFilter, Cursor, Filters, FreshnessConfig, GeoHit, GeocodeError, Geocoder,
-    ParkingDetailsReader, ParkingPhotoReader, ParkingSearchReader, ParkingSummary, ReaderError,
-    ReviewPhotosReader, SearchInput, SearchPage, SearchRequest, Sort, StoredPhoto,
+    BROWSE_LIST_CAP, BROWSE_MARKER_CAP, BoundsPage, BoundsQuery, Cluster, CostFilter, Cursor,
+    Filters, FreshnessConfig, GeoHit, GeocodeError, Geocoder, ParkingDetailsReader,
+    ParkingPhotoReader, ParkingSearchReader, ParkingSummary, ReaderError, ReviewPhotosReader,
+    SearchInput, SearchPage, SearchRequest, SitemapReader, Sort, StoredPhoto,
 };
 pub use privacy::{
     AnonymizationReport, AnonymizationRepository, Export, ExportAccount, ExportDownload,
@@ -63,9 +65,9 @@ pub use privacy::{
 pub use rate_limit::{RateLimitError, RateLimiter};
 pub use search::{
     DEFAULT_RECOMMENDATION_CONFIG, DetailsError, GetParkingDetails, ParkingDetailsView,
-    RecommendationConfig, SearchError, SearchParking, recommendation_score,
+    RecommendationConfig, SearchError, SearchParking,
 };
-pub use storage::{ObjectStorage, PutObject, StorageError};
+pub use storage::{ObjectInfo, ObjectPage, ObjectStorage, PutObject, StorageError};
 pub use timezone::{TimezoneError, TimezoneResolver};
 
 /// Port: probe a required dependency (initially, the database).

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/domain",
     "crates/application",
+    "crates/i18n",
     "crates/infrastructure",
     "crates/web",
     "crates/test-support",
@@ -17,11 +18,17 @@ license = "UNLICENSED"
 [workspace.dependencies]
 bikenest-domain = { path = "crates/domain" }
 bikenest-application = { path = "crates/application" }
+# The message catalog: shared by the web layer (pages) and infrastructure
+# (transactional emails rendered in the recipient's stored locale).
+bikenest-i18n = { path = "crates/i18n" }
 bikenest-infrastructure = { path = "crates/infrastructure" }
 bikenest-web = { path = "crates/web" }
 bikenest-test-support = { path = "crates/test-support" }
 
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# `CancellationToken`: one shutdown signal shared by the HTTP server and the
+# background worker.
+tokio-util = { version = "0.7", default-features = false }
 async-trait = "0.1"
 thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
@@ -30,7 +37,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "regis
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "migrate", "chrono"] }
 axum = "0.8"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["fs", "trace"] }
+# `compression-gzip`/`compression-br`: `CompressionLayer` on the whole router
+# (WP14). `set-header`: `SetResponseHeaderLayer` for the plain `/static/...`
+# short-cache `Cache-Control` (the hashed `/static/h/...` path sets its own
+# immutable header directly in the handler).
+tower-http = { version = "0.6", features = ["fs", "trace", "compression-gzip", "compression-br", "set-header"] }
 askama = "0.14"
 
 [workspace.lints.rust]

@@ -5,25 +5,40 @@
     <h1 class="font-display text-2xl font-bold tracking-tight">{{ tr.t("auth.register_title") }}</h1>
     <p class="mt-2 text-muted">{{ tr.t("auth.register_subtitle") }}</p>
     {% if error.is_some() %}
-      <div class="mt-4 rounded-lg border border-error/30 bg-error/10 px-4 py-3 text-sm text-error">{{ error.as_deref().unwrap_or("") }}</div>
+      <div class="mt-4 rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger" role="alert">{{ error.as_deref().unwrap_or("") }}</div>
     {% endif %}
     <form action="/register" method="post" class="mt-6 space-y-4">
       <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
       <div>
         <label for="email" class="mb-1 block text-sm font-medium">{{ tr.t("auth.email") }}</label>
-        <input id="email" name="email" type="email" value="{{ email }}" required autocomplete="email" class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
+        <input id="email" name="email" type="email" value="{{ email }}" required autocomplete="email"
+               {% if let Some(msg) = field_errors.err("email") %}aria-invalid="true" aria-describedby="email-error"{% endif %}
+               class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
+        {% if let Some(msg) = field_errors.err("email") %}
+          <p id="email-error" role="alert" class="mt-1 text-sm text-danger">{{ msg }}</p>
+        {% endif %}
       </div>
       <div>
         <label for="display_name" class="mb-1 block text-sm font-medium">{{ tr.t("auth.display_name") }}</label>
-        <input id="display_name" name="display_name" type="text" value="{{ display_name }}" autocomplete="name" class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
+        <input id="display_name" name="display_name" type="text" value="{{ display_name }}" autocomplete="name"
+               {% if let Some(msg) = field_errors.err("display_name") %}aria-invalid="true" aria-describedby="display_name-error"{% endif %}
+               class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
+        {% if let Some(msg) = field_errors.err("display_name") %}
+          <p id="display_name-error" role="alert" class="mt-1 text-sm text-danger">{{ msg }}</p>
+        {% endif %}
       </div>
       <div>
         <label for="password" class="mb-1 block text-sm font-medium">{{ tr.t("auth.password") }}</label>
-        <input id="password" name="password" type="password" required minlength="8" autocomplete="new-password" class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
+        <input id="password" name="password" type="password" required minlength="8" autocomplete="new-password"
+               {% if let Some(msg) = field_errors.err("password") %}aria-invalid="true" aria-describedby="password-error"{% endif %}
+               class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
         <p class="mt-1 text-xs text-muted">{{ tr.t("auth.password_hint") }}</p>
+        {% if let Some(msg) = field_errors.err("password") %}
+          <p id="password-error" role="alert" class="mt-1 text-sm text-danger">{{ msg }}</p>
+        {% endif %}
       </div>
       <p class="text-xs leading-relaxed text-muted">{{ tr.t("auth.legal_prefix") }} <a href="/terms" class="font-medium text-accent-strong hover:underline">{{ tr.t("nav.terms") }}</a> {{ tr.t("auth.legal_middle") }} <a href="/privacy" class="font-medium text-accent-strong hover:underline">{{ tr.t("nav.privacy") }}</a>.</p>
-      <button type="submit" class="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("auth.signup") }}</button>
+      <button type="submit" class="w-full rounded-lg bg-accent-strong px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("auth.signup") }}</button>
     </form>
     <p class="mt-4 text-sm text-muted">{{ tr.t("auth.have_account") }} <a href="/login" class="font-medium text-accent-strong hover:underline">{{ tr.t("auth.login") }}</a></p>
   </div>

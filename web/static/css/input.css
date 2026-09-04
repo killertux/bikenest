@@ -5,12 +5,17 @@
    max-w-shell are generated. */
 @import "tailwindcss";
 
+/* The results column's width is set only by Alpine (`searchFilters.resultsClass`
+   in web/static/js/app.js), so search.html carries neither literal. Naming them
+   here keeps them generated no matter how the scanner treats a .js file. */
+@source inline("lg:col-span-7 lg:col-span-12");
+
 @theme {
   /* Color — OKLch, hue 240 cool-neutral base, hue 170 accent */
   --color-bg: oklch(98% 0.004 240);            /* page background */
   --color-surface: oklch(100% 0 0);            /* cards, panels */
   --color-fg: oklch(20% 0.02 240);             /* primary text */
-  --color-muted: oklch(50% 0.018 240);         /* secondary text */
+  --color-muted: oklch(45% 0.018 240);         /* secondary text (≈7:1 on --color-bg) */
   --color-border: oklch(90% 0.006 240);        /* hairline borders */
 
   --color-accent: oklch(56% 0.12 170);         /* brand green-teal */
@@ -47,6 +52,30 @@ body {
   font-size: 16px;
   line-height: 1.6;
   text-rendering: optimizeLegibility;
+}
+
+/* Focus — never remove, never dim (design-system/colors_and_type.css §7,
+   ported verbatim). Plain CSS outside any `@layer`, so it always wins over
+   a Tailwind utility on the same element regardless of source order or
+   specificity — including a stray `outline-none`/`focus:outline-none` that
+   was never meant to suppress the *keyboard* focus ring in the first place
+   (WP21 accessibility pass). */
+:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* A minimum 24×24 CSS px pointer target (WCAG 2.5.8) for the handful of
+   dense, `text-xs`-scale controls (moderation queue row actions, the
+   admin email reveal toggle) whose Tailwind padding alone left them
+   shorter than that. Centers content itself so it drops onto any
+   button/anchor regardless of that element's own `display`. */
+.btn-compact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.5rem;
 }
 
 /* Legal pages: policies/*.md rendered by crates/web/src/markdown.rs into

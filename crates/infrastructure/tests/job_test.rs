@@ -8,10 +8,11 @@
 //! `claim` calls; the one real `claim` test asserts only the `SKIP LOCKED`
 //! disjointness property, which holds regardless of concurrent claims.
 
-use bikenest_infrastructure::{Db, SqlxJobRepository};
+use bikenest_infrastructure::{Db, JobConfig, JobRegistry, SqlxJobRepository, Worker};
 use bikenest_test_support::{db_test, pool};
 use chrono::{Duration, Utc};
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 async fn db() -> Db {
     Db::from_pool(pool().await)
@@ -87,7 +88,7 @@ async fn finish_success_completes_oneshot(_tx: &mut bikenest_test_support::TestT
     .unwrap();
     assert_eq!(claimed.rows_affected(), 1);
 
-    r.finish_success(id, None, now).await.unwrap();
+    r.finish_success(id, "w", None, now).await.unwrap();
 
     let (state, finished): (String, Option<chrono::DateTime<Utc>>) =
         sqlx::query_as("SELECT state, finished_at FROM background_job WHERE id=$1")
@@ -111,7 +112,7 @@ async fn finish_success_reschedules_recurring(_tx: &mut bikenest_test_support::T
         .unwrap();
     // Claim + mark the row as recurring.
     sqlx::query(
-        "UPDATE background_job SET state='running', schedule='{\"every_seconds\": 60}'::jsonb, attempts=1 WHERE id=$1",
+        "UPDATE background_job SET state='running', claimed_by='w', schedule='{\"every_seconds\": 60}'::jsonb, attempts=1 WHERE id=$1",
     )
     .bind(id)
     .execute(&pool().await)
@@ -119,7 +120,7 @@ async fn finish_success_reschedules_recurring(_tx: &mut bikenest_test_support::T
     .unwrap();
 
     let next = now + Duration::seconds(60);
-    r.finish_success(id, Some(next), now).await.unwrap();
+    r.finish_success(id, "w", Some(next), now).await.unwrap();
 
     let (state, attempts, run_at): (String, i32, chrono::DateTime<Utc>) =
         sqlx::query_as("SELECT state, attempts, run_at FROM background_job WHERE id=$1")
@@ -142,15 +143,17 @@ async fn retry_then_dead_letter(_tx: &mut bikenest_test_support::TestTx) {
         .await
         .unwrap()
         .unwrap();
-    sqlx::query("UPDATE background_job SET state='running', attempts=1 WHERE id=$1")
-        .bind(id)
-        .execute(&pool().await)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE background_job SET state='running', claimed_by='w', attempts=1 WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&pool().await)
+    .await
+    .unwrap();
 
     // Attempt 1 < max(2) → retry (state pending, future run_at, last_error set).
     let run_at = now + Duration::seconds(60);
-    r.retry(id, "boom", run_at).await.unwrap();
+    r.retry(id, "w", "boom", run_at).await.unwrap();
     let (state, last_error): (String, Option<String>) =
         sqlx::query_as("SELECT state, last_error FROM background_job WHERE id=$1")
             .bind(id)
@@ -161,12 +164,14 @@ async fn retry_then_dead_letter(_tx: &mut bikenest_test_support::TestTx) {
     assert_eq!(last_error.as_deref(), Some("boom"));
 
     // Attempt 2 == max(2) → dead-letter (state failed, finished_at set).
-    sqlx::query("UPDATE background_job SET state='running', attempts=2 WHERE id=$1")
-        .bind(id)
-        .execute(&pool().await)
-        .await
-        .unwrap();
-    r.fail(id, "boom-again").await.unwrap();
+    sqlx::query(
+        "UPDATE background_job SET state='running', claimed_by='w', attempts=2 WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+    r.fail(id, "w", "boom-again").await.unwrap();
     let (state, finished): (String, Option<chrono::DateTime<Utc>>) =
         sqlx::query_as("SELECT state, finished_at FROM background_job WHERE id=$1")
             .bind(id)
@@ -241,11 +246,20 @@ async fn gc_deletes_only_old_terminal_rows(_tx: &mut bikenest_test_support::Test
 async fn concurrent_claims_are_disjoint(_tx: &mut bikenest_test_support::TestTx) {
     let r = repo().await;
     let now = Utc::now();
+    // A kind unique to this test run: `claim_kinds` scopes both workers to it,
+    // so no concurrently-running test (in this binary or another) can crowd
+    // our rows out, or be crowded out by our large batch. That is what lets
+    // the assertions below be exact instead of "claimed by *someone*".
+    let kind = format!(
+        "test.{}.concurrent_claims_are_disjoint.{}",
+        module_path!(),
+        std::process::id()
+    );
     // Seed a handful of due, unique-kind rows.
     let mut ids = Vec::new();
     for i in 0..6 {
         let id = r
-            .enqueue("jobtest.disjoint", &json!({"i": i}), now, Some(5), None)
+            .enqueue(&kind, &json!({"i": i}), now, Some(5), None)
             .await
             .unwrap()
             .unwrap();
@@ -253,22 +267,33 @@ async fn concurrent_claims_are_disjoint(_tx: &mut bikenest_test_support::TestTx)
     }
 
     // Two workers claim concurrently, each with a large batch so the whole due
-    // set is covered (avoids a concurrent test's due rows crowding ours out).
+    // set is covered — safe now that `claim_kinds` confines both to our kind.
     let repo_a = r.clone();
     let repo_b = r.clone();
+    let (kind_a, kind_b) = (kind.clone(), kind.clone());
     let a = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let b = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let (a2, b2) = (a.clone(), b.clone());
     let h1 = tokio::spawn(async move {
         let got = repo_a
-            .claim(1000, "worker-a", std::time::Duration::from_secs(60))
+            .claim_kinds(
+                1000,
+                "worker-a",
+                std::time::Duration::from_secs(60),
+                &[&kind_a],
+            )
             .await
             .unwrap();
         *a2.lock().await = got;
     });
     let h2 = tokio::spawn(async move {
         let got = repo_b
-            .claim(1000, "worker-b", std::time::Duration::from_secs(60))
+            .claim_kinds(
+                1000,
+                "worker-b",
+                std::time::Duration::from_secs(60),
+                &[&kind_b],
+            )
             .await
             .unwrap();
         *b2.lock().await = got;
@@ -285,10 +310,16 @@ async fn concurrent_claims_are_disjoint(_tx: &mut bikenest_test_support::TestTx)
         "two workers must never claim the same job ({ids_a:?} vs {ids_b:?})"
     );
 
-    // Each of OUR rows was claimed exactly once (state running, attempts 1, held by a
-    // worker). We only assert on our own rows: the claim also picks up OTHER
-    // concurrently-running tests' due rows, which those tests may delete before we
-    // inspect them (hence no assertion over the full union).
+    // Kind-scoped claims mean nothing else could have touched these rows:
+    // every one of them must be claimed by exactly worker-a or worker-b, no
+    // more, no less.
+    let all_ids: std::collections::HashSet<i64> = ids.iter().copied().collect();
+    let claimed: std::collections::HashSet<i64> = ids_a.union(&ids_b).copied().collect();
+    assert_eq!(
+        claimed, all_ids,
+        "every seeded row must be claimed by exactly worker-a or worker-b"
+    );
+
     for id in &ids {
         let (state, attempts, claimed_by): (String, i32, Option<String>) =
             sqlx::query_as("SELECT state, attempts, claimed_by FROM background_job WHERE id=$1")
@@ -298,16 +329,363 @@ async fn concurrent_claims_are_disjoint(_tx: &mut bikenest_test_support::TestTx)
                 .unwrap();
         assert_eq!(state, "running");
         assert_eq!(attempts, 1);
-        assert!(claimed_by.is_some(), "claimed row must be held by a worker");
+        assert!(
+            matches!(claimed_by.as_deref(), Some("worker-a") | Some("worker-b")),
+            "claimed row must be held by one of this test's own workers, got {claimed_by:?}"
+        );
     }
-    let missing: Vec<i64> = ids
-        .iter()
-        .copied()
-        .filter(|id| !ids_a.contains(id) && !ids_b.contains(id))
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "all seeded rows were claimed by exactly one worker, but missed: {missing:?}"
+    clear_kind(&kind).await;
+}
+
+#[db_test]
+async fn claim_reclaims_a_crashed_workers_running_job(_tx: &mut bikenest_test_support::TestTx) {
+    let r = repo().await;
+    let now = Utc::now();
+    let kind = format!(
+        "test.{}.claim_reclaims_a_crashed_workers_running_job.{}",
+        module_path!(),
+        std::process::id()
     );
-    clear_kind("jobtest.disjoint").await;
+    let id = r
+        .enqueue(&kind, &json!({}), now, Some(5), None)
+        .await
+        .unwrap()
+        .unwrap();
+    // Simulate a worker that claimed the job and then crashed: state left
+    // 'running' with a lease that already expired.
+    sqlx::query(
+        "UPDATE background_job SET state='running', claimed_by='dead-worker',
+            lease_expires_at=now() - interval '1 second', attempts=1 WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+
+    // `claim_kinds` scopes this call to our own unique kind, so — unlike the
+    // unscoped `claim` — nothing else in the suite can compete for this row.
+    let claimed = r
+        .claim_kinds(10, "worker-b", std::time::Duration::from_secs(60), &[&kind])
+        .await
+        .unwrap();
+    let we_claimed_it = claimed.iter().any(|j| j.id == id);
+
+    let (state, claimed_by, attempts, lease_expires_at): (
+        String,
+        Option<String>,
+        i32,
+        Option<chrono::DateTime<Utc>>,
+    ) = sqlx::query_as(
+        "SELECT state, claimed_by, attempts, lease_expires_at FROM background_job WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    assert_eq!(state, "running");
+    assert_ne!(
+        claimed_by.as_deref(),
+        Some("dead-worker"),
+        "the crashed worker's stale claim must have been superseded"
+    );
+    assert!(attempts >= 2, "reclaim increments attempts again");
+    assert!(
+        lease_expires_at.is_some_and(|t| t > Utc::now()),
+        "the reclaiming worker holds a fresh, unexpired lease"
+    );
+    // Kind-scoped, so `worker-b` must be the one that reclaimed it — no other
+    // actor in the suite can hold this kind.
+    assert!(
+        we_claimed_it,
+        "worker-b's claim_kinds is scoped to our own kind; it must be the reclaimer"
+    );
+    assert_eq!(claimed_by.as_deref(), Some("worker-b"));
+    assert_eq!(attempts, 2);
+
+    // A second claim right after must NOT pick it up again — it now holds a
+    // fresh, unexpired lease (held by worker-b).
+    let claimed_again = r
+        .claim_kinds(10, "worker-c", std::time::Duration::from_secs(60), &[&kind])
+        .await
+        .unwrap();
+    assert!(
+        !claimed_again.iter().any(|j| j.id == id),
+        "a freshly (re)claimed job must not be claimed again"
+    );
+
+    clear_kind(&kind).await;
+}
+
+#[db_test]
+async fn finish_success_is_a_noop_for_the_wrong_claimant(_tx: &mut bikenest_test_support::TestTx) {
+    let r = repo().await;
+    let now = Utc::now();
+    let id = r
+        .enqueue("jobtest.zombie", &json!({}), now, Some(5), None)
+        .await
+        .unwrap()
+        .unwrap();
+    // The row is currently (re)claimed by "worker-b" (as if worker-a's original
+    // claim expired and was reassigned).
+    sqlx::query(
+        "UPDATE background_job SET state='running', claimed_by='worker-b',
+            lease_expires_at=now()+interval '60 seconds', attempts=2 WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+
+    // The zombie worker-a wakes up and tries to finish its stale claim.
+    r.finish_success(id, "worker-a", None, now).await.unwrap();
+
+    let (state, claimed_by): (String, Option<String>) =
+        sqlx::query_as("SELECT state, claimed_by FROM background_job WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "running", "wrong claimant's write must not apply");
+    assert_eq!(claimed_by.as_deref(), Some("worker-b"));
+
+    clear_kind("jobtest.zombie").await;
+}
+
+/// Graceful shutdown (WP7): cancelling the token while the worker sits in its
+/// idle poll must return from `run` well inside one poll interval — not after
+/// it — and must leave nothing claimed.
+///
+/// `batch_size` 0 makes `claim` a `LIMIT 0` query, so the worker only ever
+/// idle-polls and cannot disturb rows other tests own.
+#[db_test]
+async fn cancelling_the_token_stops_an_idle_worker(_tx: &mut bikenest_test_support::TestTx) {
+    let config = JobConfig {
+        enabled: true,
+        // Far longer than the test may take: if cancellation did not interrupt
+        // the sleep, the timeout below would fire instead.
+        poll_interval: std::time::Duration::from_secs(60),
+        batch_size: 0,
+        ..JobConfig::default()
+    };
+    let worker = Worker::new(
+        repo().await,
+        std::sync::Arc::new(JobRegistry::new(Vec::new(), Vec::new())),
+        config,
+    );
+    let worker_id = worker.id().to_string();
+
+    let token = CancellationToken::new();
+    let handle = tokio::spawn(worker.run(token.clone()));
+    // Let the loop reach its idle sleep before signalling.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let started = std::time::Instant::now();
+    token.cancel();
+    tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+        .await
+        .expect("run must return promptly after cancellation, not after the poll interval")
+        .expect("worker task must not panic");
+    assert!(
+        started.elapsed() < config.poll_interval,
+        "returned only after the full poll interval: {:?}",
+        started.elapsed()
+    );
+
+    let running: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM background_job WHERE state = 'running' AND claimed_by = $1",
+    )
+    .bind(&worker_id)
+    .fetch_one(&pool().await)
+    .await
+    .unwrap();
+    assert_eq!(running, 0, "a stopped worker must leave no job running");
+}
+
+// ---------------------------------------------------------------------------
+// email.send: the queued transactional email
+// ---------------------------------------------------------------------------
+
+use async_trait::async_trait;
+use bikenest_application::{
+    EmailError, EmailKind, EmailMessage, EmailProvider, EmailQueue, JobError, JobHandler,
+};
+use bikenest_domain::LocaleCode;
+use bikenest_infrastructure::email::idempotency_key;
+use bikenest_infrastructure::{FakeEmailProvider, JobEmailQueue, SendEmailHandler};
+use std::sync::Arc;
+
+/// A token nothing else in the suite (or a previous run) can collide with:
+/// the idempotency key is derived from it, and the key is UNIQUE forever.
+fn unique_token(tag: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("emailtest-{tag}-{nanos}")
+}
+
+fn verify_message(token: &str) -> EmailMessage {
+    EmailMessage::new(
+        "ada@example.com",
+        LocaleCode::PtBr,
+        EmailKind::VerifyEmail {
+            link: format!("http://localhost:8080/verify-email?token={token}"),
+        },
+    )
+}
+
+async fn row_for_key(key: &str) -> Option<(i64, serde_json::Value, i32)> {
+    sqlx::query_as(
+        "SELECT id, payload, max_attempts FROM background_job WHERE idempotency_key = $1",
+    )
+    .bind(key)
+    .fetch_optional(&pool().await)
+    .await
+    .unwrap()
+}
+
+async fn delete_job(id: i64) {
+    sqlx::query("DELETE FROM background_job WHERE id = $1")
+        .bind(id)
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+/// Simulate a claim with a direct `UPDATE` rather than calling `claim` — which
+/// is not scoped by kind and would race the other tests in this file.
+async fn simulate_claim(id: i64, worker: &str, attempt: i32) {
+    sqlx::query(
+        "UPDATE background_job SET state='running', claimed_by=$2,
+            lease_expires_at=now()+interval '60 seconds', attempts=$3 WHERE id=$1",
+    )
+    .bind(id)
+    .bind(worker)
+    .bind(attempt)
+    .execute(&pool().await)
+    .await
+    .unwrap();
+}
+
+/// A provider that always fails, so the queue's retry path is exercised.
+struct BrokenProvider;
+#[async_trait]
+impl EmailProvider for BrokenProvider {
+    async fn send(&self, _msg: &EmailMessage) -> Result<(), EmailError> {
+        Err(EmailError::Unavailable)
+    }
+}
+
+/// The idempotency key is what stops a double-submitted form (or a retried
+/// request) from mailing the same verification link twice: the second enqueue
+/// collapses onto the existing row. A *fresh* token is a different message and
+/// must still get its own job.
+#[db_test]
+async fn queueing_one_message_twice_creates_a_single_job(_tx: &mut bikenest_test_support::TestTx) {
+    let queue = JobEmailQueue::new(repo().await, 3);
+    let msg = verify_message(&unique_token("dedupe"));
+
+    queue.enqueue(msg.clone()).await.unwrap();
+    queue.enqueue(msg.clone()).await.unwrap();
+
+    let key = idempotency_key(&msg);
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM background_job WHERE idempotency_key = $1")
+            .bind(&key)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(n, 1, "the same token must never be queued twice");
+
+    // Running that single job delivers exactly one message, rendered in the
+    // locale the payload carries.
+    let (id, payload, max_attempts) = row_for_key(&key).await.expect("queued row");
+    assert_eq!(
+        max_attempts, 3,
+        "the row carries the configured attempt budget"
+    );
+    let mail = FakeEmailProvider::with_root(None);
+    SendEmailHandler::new(Arc::new(mail.clone()))
+        .run(&payload)
+        .await
+        .unwrap();
+    assert_eq!(mail.emails().len(), 1);
+    assert_eq!(mail.emails()[0].subject, "Confirme seu e-mail no BikeNest");
+
+    // A re-send issues a new token → a new job, not a swallowed duplicate.
+    let resend = verify_message(&unique_token("dedupe-resend"));
+    queue.enqueue(resend.clone()).await.unwrap();
+    let resend_key = idempotency_key(&resend);
+    assert_ne!(resend_key, key);
+    let (resend_id, _, _) = row_for_key(&resend_key).await.expect("second job queued");
+
+    delete_job(id).await;
+    delete_job(resend_id).await;
+}
+
+/// A provider outage is transient: the job is retried while its budget lasts
+/// and dead-lettered when it runs out. The stored error names the message kind
+/// and the recipient's domain — never the address, never the link.
+#[db_test]
+async fn a_failing_email_send_is_retried_then_dead_lettered(
+    _tx: &mut bikenest_test_support::TestTx,
+) {
+    // A deliberately small budget (production's default is 5).
+    let jobs = repo().await;
+    let queue = JobEmailQueue::new(jobs.clone(), 2);
+    let msg = verify_message(&unique_token("deadletter"));
+    queue.enqueue(msg.clone()).await.unwrap();
+
+    let key = idempotency_key(&msg);
+    let (id, payload, max_attempts) = row_for_key(&key).await.expect("queued row");
+    assert_eq!(max_attempts, 2);
+    let handler = SendEmailHandler::new(Arc::new(BrokenProvider));
+
+    // Attempt 1 of 2 → within budget → requeued with the error recorded.
+    simulate_claim(id, "worker-mail", 1).await;
+    let first = handler.run(&payload).await.unwrap_err();
+    assert!(
+        matches!(first, JobError::Failed(_)),
+        "a provider outage must be retryable, not permanent: {first:?}"
+    );
+    let run_at = Utc::now() + Duration::seconds(30);
+    jobs.retry(id, "worker-mail", &first.to_string(), run_at)
+        .await
+        .unwrap();
+    let (state, attempts): (String, i32) =
+        sqlx::query_as("SELECT state, attempts FROM background_job WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "pending", "still retryable");
+    assert_eq!(attempts, 1);
+
+    // Attempt 2 == the budget → the worker dead-letters instead of retrying.
+    simulate_claim(id, "worker-mail", 2).await;
+    let last = handler.run(&payload).await.unwrap_err();
+    handler.on_dead_letter(&payload, &last.to_string()).await;
+    jobs.fail(id, "worker-mail", &last.to_string())
+        .await
+        .unwrap();
+
+    let (state, finished, last_error): (String, Option<chrono::DateTime<Utc>>, Option<String>) =
+        sqlx::query_as("SELECT state, finished_at, last_error FROM background_job WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool().await)
+            .await
+            .unwrap();
+    assert_eq!(state, "failed", "a spent budget dead-letters the job");
+    assert!(finished.is_some());
+    let recorded = last_error.unwrap_or_default();
+    assert!(
+        recorded.contains("verify") && recorded.contains("example.com"),
+        "the dead-letter row must say what failed and to which domain: {recorded}"
+    );
+    assert!(
+        !recorded.contains("ada@") && !recorded.contains("token="),
+        "no address and no live link in a stored error: {recorded}"
+    );
+
+    delete_job(id).await;
 }

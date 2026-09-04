@@ -1,0 +1,37 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<div class="mx-auto max-w-shell px-4 py-10 lg:px-8">
+  <div class="mx-auto max-w-2xl">
+    <h1 class="font-display text-2xl font-bold tracking-tight">{{ tr.t("new.confirm.title") }}</h1>
+    <p class="mt-2 text-muted">{{ tr.t("new.confirm.body") }}</p>
+
+    <ul class="mt-6 space-y-3">
+      {% for d in duplicates %}
+        <li class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface px-4 py-3">
+          <div>
+            <p class="font-medium">{{ d.name }}</p>
+            <p class="text-xs text-muted">{{ d.distance_label }} · {{ d.similarity_label }}</p>
+          </div>
+          <a href="/parking/{{ d.id }}" class="rounded-lg border border-border px-3 py-1.5 text-sm font-medium hover:border-accent">{{ tr.t("new.confirm.is_this") }}</a>
+        </li>
+      {% endfor %}
+    </ul>
+
+    {# Nothing has been written yet: the whole submission travels back in
+       hidden inputs, so "create it anyway" is one POST and "go back" loses
+       nothing either. #}
+    <form action="/parking/new" method="post" class="mt-6">
+      <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+      <input type="hidden" name="confirm" value="1" />
+      {% for f in fields %}
+        <input type="hidden" name="{{ f.name }}" value="{{ f.value }}" />
+      {% endfor %}
+      <button type="submit" class="w-full rounded-lg bg-accent-strong px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("new.confirm.create_anyway") }}</button>
+    </form>
+
+    <p class="mt-4 text-sm">
+      <a href="/parking/new" class="text-muted underline hover:text-fg">{{ tr.t("new.confirm.back") }}</a>
+    </p>
+  </div>
+</div>
+{% endblock %}

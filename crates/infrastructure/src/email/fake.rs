@@ -1,21 +1,27 @@
-//! In-memory capturing fake (`EMAIL_PROVIDER=fake`, **Ledger #4**). Records
-//! every [`OutboundEmail`] in memory (inspectable in tests via
-//! [`FakeEmailProvider::emails`]) and, in dev, appends a capture to
-//! `<MEDIA_ROOT>/outbox/` plus `tracing::info!`s the message so the flow can be
-//! followed without a real provider.
+//! In-memory capturing fake (`EMAIL_PROVIDER=fake`). Renders each message
+//! exactly as the real providers do and records the result in memory
+//! (inspectable in tests via [`FakeEmailProvider::emails`]) — so a test can
+//! assert the subject a pt-BR recipient would actually have read. When given
+//! an outbox root it also appends a capture to `<root>/outbox/` and
+//! `tracing::info!`s the message, so the flow can be followed without a real
+//! provider.
 
+use crate::email::templates::render;
 use async_trait::async_trait;
-use bikenest_application::{EmailError, EmailProvider, OutboundEmail};
+use bikenest_application::{EmailError, EmailMessage, EmailProvider};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// An email this fake has sent.
+/// An email this fake has sent, as rendered.
 #[derive(Debug, Clone)]
 pub struct CapturedEmail {
     pub to: String,
     pub subject: String,
     pub text: String,
-    pub html: Option<String>,
+    /// Locale it was rendered in (`pt-BR` / `en`).
+    pub locale: String,
+    /// Message kind (`verify` / `reset` / `change`).
+    pub kind: String,
 }
 
 #[derive(Clone)]
@@ -25,20 +31,11 @@ pub struct FakeEmailProvider {
 }
 
 impl FakeEmailProvider {
-    /// A fake that captures in-memory and writes a dev outbox under
-    /// `MEDIA_ROOT` (defaults to `<repo>/media`).
+    /// A fake that only captures in memory. The dev outbox on disk is opt-in
+    /// via [`FakeEmailProvider::with_root`], which the wiring passes the
+    /// configured media root.
     pub fn new() -> Self {
-        Self::with_root(
-            std::env::var("MEDIA_ROOT")
-                .ok()
-                .map(PathBuf::from)
-                .or_else(|| {
-                    Some(PathBuf::from(concat!(
-                        env!("CARGO_MANIFEST_DIR"),
-                        "/../../media"
-                    )))
-                }),
-        )
+        Self::with_root(None)
     }
 
     /// A fake with an explicit outbox root (or `None` for in-memory capture
@@ -61,12 +58,22 @@ impl FakeEmailProvider {
         self.emails().iter().find_map(|e| token_from(&e.text, path))
     }
 
-    async fn record(&self, email: &OutboundEmail) {
+    /// The subject of the first captured message of `kind`, if any.
+    pub fn subject_for_kind(&self, kind: &str) -> Option<String> {
+        self.emails()
+            .into_iter()
+            .find(|e| e.kind == kind)
+            .map(|e| e.subject)
+    }
+
+    async fn record(&self, msg: &EmailMessage) {
+        let rendered = render(msg);
         let captured = CapturedEmail {
-            to: email.to.to_string(),
-            subject: email.subject.clone(),
-            text: email.text.clone(),
-            html: email.html.clone(),
+            to: msg.to.clone(),
+            subject: rendered.subject,
+            text: rendered.text,
+            locale: msg.locale.as_str().to_string(),
+            kind: msg.kind.code().to_string(),
         };
         if let Ok(mut cap) = self.capture.lock() {
             cap.push(captured.clone());
@@ -81,15 +88,15 @@ impl FakeEmailProvider {
             ));
             let body = format!(
                 "To: {}\nSubject: {}\n\n{}\n",
-                email.to, email.subject, email.text
+                captured.to, captured.subject, captured.text
             );
             if tokio::fs::create_dir_all(&dir).await.is_ok()
                 && tokio::fs::write(&file, body).await.is_ok()
             {
-                tracing::info!(to = %email.to, subject = %email.subject, "fake email captured (Ledger #4)");
+                tracing::info!(to = %captured.to, subject = %captured.subject, "fake email captured");
             }
         } else {
-            tracing::info!(to = %email.to, subject = %email.subject, "fake email captured (Ledger #4)");
+            tracing::info!(to = %captured.to, subject = %captured.subject, "fake email captured");
         }
     }
 }
@@ -102,8 +109,8 @@ impl Default for FakeEmailProvider {
 
 #[async_trait]
 impl EmailProvider for FakeEmailProvider {
-    async fn send(&self, email: OutboundEmail) -> Result<(), EmailError> {
-        self.record(&email).await;
+    async fn send(&self, msg: &EmailMessage) -> Result<(), EmailError> {
+        self.record(msg).await;
         Ok(())
     }
 }
@@ -130,21 +137,29 @@ fn token_from(text: &str, path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bikenest_domain::UserEmail;
+    use bikenest_application::EmailKind;
+    use bikenest_domain::LocaleCode;
 
     #[tokio::test]
-    async fn captures_email_and_recovers_token() {
+    async fn captures_the_rendered_message_and_recovers_the_token() {
         let fake = FakeEmailProvider::with_root(None);
-        fake.send(OutboundEmail {
-            to: UserEmail::parse("a@example.com").unwrap(),
-            subject: "Verify your email".into(),
-            text: "Confirm here: http://localhost:8080/verify-email?token=abc-123_XYZ".into(),
-            html: None,
-        })
+        fake.send(&EmailMessage::new(
+            "a@example.com",
+            LocaleCode::PtBr,
+            EmailKind::VerifyEmail {
+                link: "http://localhost:8080/verify-email?token=abc-123_XYZ".into(),
+            },
+        ))
         .await
         .unwrap();
 
         assert_eq!(fake.emails().len(), 1);
+        // What the fake stores is the *rendered* mail, in the message's locale.
+        let captured = &fake.emails()[0];
+        assert_eq!(captured.to, "a@example.com");
+        assert_eq!(captured.locale, "pt-BR");
+        assert_eq!(captured.kind, "verify");
+        assert_eq!(captured.subject, "Confirme seu e-mail no BikeNest");
         assert_eq!(
             fake.token_for("/verify-email").as_deref(),
             Some("abc-123_XYZ")

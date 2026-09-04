@@ -80,14 +80,29 @@ impl ObjectStorage for FakeStorage {
         self.deletes.lock().unwrap().push(key.to_string());
         Ok(())
     }
-    async fn get(
-        &self,
-        _key: &str,
-    ) -> Result<(Vec<u8>, String), bikenest_application::StorageError> {
-        Err(bikenest_application::StorageError::NotFound)
+    async fn exists(&self, key: &str) -> Result<bool, bikenest_application::StorageError> {
+        Ok(self.puts.lock().unwrap().iter().any(|k| k == key))
     }
-    fn verify_get(&self, _key: &str, _exp: u64, _sig: &str) -> bool {
-        false
+    async fn list(
+        &self,
+        prefix: &str,
+        _after: Option<&str>,
+    ) -> Result<bikenest_application::ObjectPage, bikenest_application::StorageError> {
+        let objects = self
+            .puts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|k| k.starts_with(prefix))
+            .map(|k| bikenest_application::ObjectInfo {
+                key: k.clone(),
+                last_modified: chrono::Utc::now(),
+            })
+            .collect();
+        Ok(bikenest_application::ObjectPage {
+            objects,
+            next: None,
+        })
     }
 }
 
@@ -139,8 +154,8 @@ impl PhotoRepository for FakePhotoRepo {
                 kind: p.target.kind(),
                 parent_id: p.target.parent_id(),
                 state: PhotoModerationState::PendingReview,
-                storage_key: String::new(),
-                thumbnail_key: None,
+                storage_key: p.storage_key.clone(),
+                thumbnail_key: Some(p.thumbnail_key.clone()),
                 alt: p.alt.clone(),
                 uploader_id: Some(p.uploader_id),
                 position: 0,
@@ -161,21 +176,6 @@ impl PhotoRepository for FakePhotoRepo {
             .max()
             .unwrap_or(0);
         Ok(max)
-    }
-    async fn mark_processed(
-        &self,
-        _kind: PhotoKind,
-        id: i64,
-        storage_key: &str,
-        thumbnail_key: &str,
-        _dimensions: PhotoDimensions,
-        _processed_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<(), PhotoError> {
-        let mut photos = self.photos.lock().unwrap();
-        let p = photos.get_mut(&id).ok_or(PhotoError::NotFound)?;
-        p.storage_key = storage_key.to_string();
-        p.thumbnail_key = Some(thumbnail_key.to_string());
-        Ok(())
     }
     async fn delete(&self, _kind: PhotoKind, id: i64) -> Result<(), PhotoError> {
         self.photos.lock().unwrap().remove(&id);
@@ -216,7 +216,11 @@ impl PhotoRepository for FakePhotoRepo {
             thumbnail_key: p.thumbnail_key.clone(),
         })
     }
-    async fn list_pending(&self) -> Result<Vec<bikenest_application::PendingPhoto>, PhotoError> {
+    async fn list_pending(
+        &self,
+        _after: Option<(chrono::DateTime<chrono::Utc>, i64)>,
+        _limit: i64,
+    ) -> Result<Vec<bikenest_application::PendingPhoto>, PhotoError> {
         let photos = self.photos.lock().unwrap();
         Ok(photos
             .values()
@@ -261,6 +265,17 @@ impl Clock for FakeClock {
         self.0
     }
 }
+
+/// Deterministic bytes, so the minted upload key is predictable in assertions.
+struct FakeTokens;
+impl bikenest_application::TokenGenerator for FakeTokens {
+    fn generate(&self) -> [u8; 32] {
+        [0xab; 32]
+    }
+}
+
+/// The key `FakeTokens` produces: the first 16 bytes as hex.
+const FAKE_UPLOAD_ID: &str = "abababababababababababababababab";
 
 #[derive(Default)]
 struct FakeRate {
@@ -334,6 +349,7 @@ fn harness(processor: FakeImageProcessor) -> Harness {
         rate_limiter: Box::new(FakeRate { allow: true }),
         audit: Box::new(audit.as_ref().clone()),
         clock: Box::new(FakeClock(chrono::Utc::now())),
+        tokens_gen: Box::new(FakeTokens),
         limits: PhotoLimits::default(),
     });
     Harness {
@@ -422,6 +438,7 @@ async fn upload_is_rate_limited() {
         rate_limiter: Box::new(FakeRate { allow: false }),
         audit: Box::new(audit.as_ref().clone()),
         clock: Box::new(FakeClock(chrono::Utc::now())),
+        tokens_gen: Box::new(FakeTokens),
         limits: PhotoLimits::default(),
     });
     assert!(matches!(
@@ -488,9 +505,11 @@ async fn upload_propagates_undecodable_and_too_many_pixels() {
 }
 
 #[tokio::test]
-async fn upload_compensates_deletes_row_when_second_put_fails() {
-    // Storage fails on the thumbnail put (second write). The row must be deleted
-    // and no audit recorded.
+async fn upload_compensates_the_first_object_when_the_second_put_fails() {
+    // Storage fails on the thumbnail put (the second write). Because the row is
+    // only inserted once both objects exist, there is no row to compensate —
+    // the full derivative that did land must be deleted, nothing must be
+    // inserted, and no audit recorded.
     let storage = Arc::new(FakeStorage::default());
     // Override put to fail on the thumb key.
     struct FailThumb(Arc<FakeStorage>);
@@ -517,14 +536,15 @@ async fn upload_compensates_deletes_row_when_second_put_fails() {
             self.0.deletes.lock().unwrap().push(key.to_string());
             Ok(())
         }
-        async fn get(
-            &self,
-            _key: &str,
-        ) -> Result<(Vec<u8>, String), bikenest_application::StorageError> {
-            Err(bikenest_application::StorageError::NotFound)
+        async fn exists(&self, key: &str) -> Result<bool, bikenest_application::StorageError> {
+            self.0.exists(key).await
         }
-        fn verify_get(&self, _key: &str, _exp: u64, _sig: &str) -> bool {
-            false
+        async fn list(
+            &self,
+            prefix: &str,
+            after: Option<&str>,
+        ) -> Result<bikenest_application::ObjectPage, bikenest_application::StorageError> {
+            self.0.list(prefix, after).await
         }
     }
     let repo = Arc::new(FakePhotoRepo::new());
@@ -536,6 +556,7 @@ async fn upload_compensates_deletes_row_when_second_put_fails() {
         rate_limiter: Box::new(FakeRate { allow: true }),
         audit: Box::new(audit.as_ref().clone()),
         clock: Box::new(FakeClock(chrono::Utc::now())),
+        tokens_gen: Box::new(FakeTokens),
         limits: PhotoLimits::default(),
     });
     assert!(matches!(
@@ -550,10 +571,14 @@ async fn upload_compensates_deletes_row_when_second_put_fails() {
             .await,
         Err(PhotoError::Storage(_))
     ));
+    assert!(
+        repo.inserted.lock().unwrap().is_empty(),
+        "no row may be inserted before both objects exist"
+    );
     assert_eq!(
-        repo.deleted.lock().unwrap().len(),
-        1,
-        "row must be compensated"
+        *storage.deletes.lock().unwrap(),
+        vec![format!("uploads/{FAKE_UPLOAD_ID}/full.jpg")],
+        "the object that did land must be compensated"
     );
     assert!(
         !audit
@@ -562,6 +587,134 @@ async fn upload_compensates_deletes_row_when_second_put_fails() {
             .unwrap()
             .contains(&"photo.uploaded".to_string())
     );
+}
+
+#[tokio::test]
+async fn upload_writes_both_objects_before_it_inserts_the_row() {
+    let h = harness(FakeImageProcessor::ok());
+    let out = h
+        .service
+        .upload_photo(
+            &verified_user(),
+            "1.2.3.4",
+            PhotoTarget::Parking(10),
+            b"xyz",
+            None,
+        )
+        .await
+        .unwrap();
+
+    // The key comes from a random id, not from the row id — which is what lets
+    // the objects be written first.
+    let full = format!("uploads/{FAKE_UPLOAD_ID}/full.jpg");
+    let thumb = format!("uploads/{FAKE_UPLOAD_ID}/thumb.jpg");
+    assert_eq!(
+        *h.storage.puts.lock().unwrap(),
+        vec![full.clone(), thumb.clone()]
+    );
+    assert!(h.storage.exists(&full).await.unwrap());
+    assert!(h.storage.exists(&thumb).await.unwrap());
+
+    // And the row it inserted names those objects — never an empty key.
+    let row = h
+        .repo
+        .get_for_moderation(PhotoKind::Parking, out.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.storage_key, full);
+    assert_eq!(row.thumbnail_key.as_deref(), Some(thumb.as_str()));
+}
+
+#[tokio::test]
+async fn upload_compensates_both_objects_when_the_insert_fails() {
+    /// A repository whose insert always fails (a constraint violation, a lost
+    /// connection): the two objects already written must not be left behind.
+    #[derive(Clone)]
+    struct FailInsert(Arc<FakePhotoRepo>);
+    #[async_trait]
+    impl PhotoRepository for FailInsert {
+        async fn insert_pending(
+            &self,
+            _p: &bikenest_application::NewPendingPhoto,
+        ) -> Result<i64, PhotoError> {
+            Err(PhotoError::Conflict)
+        }
+        async fn max_position(
+            &self,
+            target: bikenest_application::PhotoTarget,
+        ) -> Result<i32, PhotoError> {
+            self.0.max_position(target).await
+        }
+        async fn delete(&self, kind: PhotoKind, id: i64) -> Result<(), PhotoError> {
+            self.0.delete(kind, id).await
+        }
+        async fn approve(
+            &self,
+            kind: PhotoKind,
+            id: i64,
+            moderator: UserId,
+            position: i32,
+        ) -> Result<(), PhotoError> {
+            self.0.approve(kind, id, moderator, position).await
+        }
+        async fn reject(
+            &self,
+            kind: PhotoKind,
+            id: i64,
+            moderator: UserId,
+            reason: &str,
+        ) -> Result<bikenest_application::RejectedPhoto, PhotoError> {
+            self.0.reject(kind, id, moderator, reason).await
+        }
+        async fn list_pending(
+            &self,
+            after: Option<(chrono::DateTime<chrono::Utc>, i64)>,
+            limit: i64,
+        ) -> Result<Vec<bikenest_application::PendingPhoto>, PhotoError> {
+            self.0.list_pending(after, limit).await
+        }
+        async fn get_for_moderation(
+            &self,
+            kind: PhotoKind,
+            id: i64,
+        ) -> Result<Option<bikenest_application::PhotoForModeration>, PhotoError> {
+            self.0.get_for_moderation(kind, id).await
+        }
+    }
+
+    let storage = Arc::new(FakeStorage::default());
+    let audit = Arc::new(FakeAudit::default());
+    let service = PhotoService::new(PhotoDeps {
+        processor: Box::new(FakeImageProcessor::ok()),
+        repository: Box::new(FailInsert(Arc::new(FakePhotoRepo::new()))),
+        storage: Box::new(storage.as_ref().clone()),
+        rate_limiter: Box::new(FakeRate { allow: true }),
+        audit: Box::new(audit.as_ref().clone()),
+        clock: Box::new(FakeClock(chrono::Utc::now())),
+        tokens_gen: Box::new(FakeTokens),
+        limits: PhotoLimits::default(),
+    });
+    assert!(matches!(
+        service
+            .upload_photo(
+                &verified_user(),
+                "1.2.3.4",
+                PhotoTarget::Parking(10),
+                b"xyz",
+                None
+            )
+            .await,
+        Err(PhotoError::Conflict)
+    ));
+    let deletes = storage.deletes.lock().unwrap().clone();
+    assert_eq!(
+        deletes.len(),
+        2,
+        "both objects must be reclaimed, got {deletes:?}"
+    );
+    assert!(deletes.iter().any(|k| k.ends_with("/full.jpg")));
+    assert!(deletes.iter().any(|k| k.ends_with("/thumb.jpg")));
 }
 
 #[tokio::test]

@@ -51,6 +51,13 @@ pub enum PhotoError {
     InvalidField(String),
     #[error("storage error")]
     Storage(#[source] StorageError),
+    /// Storage refused a duplicate, or a concurrent writer won the race
+    /// (unique violation, serialization failure, deadlock).
+    #[error("that change conflicts with an existing record")]
+    Conflict,
+    /// Storage is unreachable or overloaded; the same request may work shortly.
+    #[error("service temporarily unavailable")]
+    Unavailable,
     #[error("internal error")]
     Internal,
 }
@@ -145,15 +152,24 @@ impl PhotoTarget {
     }
 }
 
-/// Insert a newly-uploaded photo in `PENDING_REVIEW`. `thumbnail_key`,
-/// dimensions and `processed_at` are filled by [`PhotoService`] once the
-/// derivative objects are written (the keys depend on the generated id).
+/// Insert a newly-uploaded photo in `PENDING_REVIEW`, already carrying the
+/// keys of its stored derivatives.
+///
+/// The keys are minted from a random id *before* anything is written, so the
+/// row is inserted once, complete. It used to be inserted first with an empty
+/// `storage_key` (to mint the id the keys were derived from) and patched
+/// afterwards: a crash in between left a `PENDING_REVIEW` row pointing at no
+/// object, which renders as a broken image in the moderation queue forever.
 #[derive(Debug, Clone)]
 pub struct NewPendingPhoto {
     pub target: PhotoTarget,
     pub uploader_id: UserId,
     pub content_type: String,
     pub alt: Option<String>,
+    pub storage_key: String,
+    pub thumbnail_key: String,
+    pub dimensions: PhotoDimensions,
+    pub processed_at: DateTime<Utc>,
 }
 
 /// A photo in the moderator queue (M2 screen), oldest first, across both photo
@@ -220,22 +236,12 @@ pub trait ImageProcessor: Send + Sync {
 
 #[async_trait]
 pub trait PhotoRepository: Send + Sync {
-    /// Insert the photo as `PENDING_REVIEW` and return its id (the caller then
-    /// writes derivatives keyed off the generated id).
+    /// Insert the photo as `PENDING_REVIEW`, complete with the derivative keys
+    /// and dimensions, and return its id. The objects are already in storage by
+    /// the time this is called.
     async fn insert_pending(&self, p: &NewPendingPhoto) -> Result<i64, PhotoError>;
     /// Highest `position` currently used by a target's photos.
     async fn max_position(&self, target: PhotoTarget) -> Result<i32, PhotoError>;
-    /// Record the processed derivative keys + dimensions once the objects are
-    /// stored. `storage_key` is set here (it depends on the generated id).
-    async fn mark_processed(
-        &self,
-        kind: PhotoKind,
-        id: i64,
-        storage_key: &str,
-        thumbnail_key: &str,
-        dimensions: PhotoDimensions,
-        processed_at: DateTime<Utc>,
-    ) -> Result<(), PhotoError>;
     /// Remove a photo row (compensation for a failed storage write).
     async fn delete(&self, kind: PhotoKind, id: i64) -> Result<(), PhotoError>;
     /// Flip to `APPROVED` and set `position`/reviewer columns (one transaction).
@@ -255,8 +261,15 @@ pub trait PhotoRepository: Send + Sync {
         moderator: UserId,
         reason: &str,
     ) -> Result<RejectedPhoto, PhotoError>;
-    /// The full pending queue, oldest first, across both kinds and tables.
-    async fn list_pending(&self) -> Result<Vec<PendingPhoto>, PhotoError>;
+    /// The pending queue, oldest first, across both kinds and tables —
+    /// keyset-paginated on `(created_at, id)` (the two tables' `id` sequences
+    /// are independent, so the cursor needs the timestamp too). `after` is
+    /// the last row's `(created_at, id)` from the previous page.
+    async fn list_pending(
+        &self,
+        after: Option<(DateTime<Utc>, i64)>,
+        limit: i64,
+    ) -> Result<Vec<PendingPhoto>, PhotoError>;
     /// A single photo's moderation view (state + derivative keys).
     async fn get_for_moderation(
         &self,
@@ -290,6 +303,8 @@ pub struct PhotoDeps {
     pub rate_limiter: Box<dyn RateLimiter>,
     pub audit: Box<dyn AuditLog>,
     pub clock: Box<dyn Clock>,
+    /// Random bytes for the upload's storage key, minted before any write.
+    pub tokens_gen: Box<dyn crate::auth::TokenGenerator>,
     /// Runtime photo pipeline limits (§30, Ledger #18); defaults to the domain constants.
     pub limits: PhotoLimits,
 }
@@ -350,6 +365,14 @@ impl PhotoService {
         }
     }
 
+    /// A random, opaque id for this upload's storage keys — 32 hex characters
+    /// from the same CSPRNG the session/token generator uses. It is minted
+    /// before any write so the keys never depend on a database-generated id.
+    fn mint_upload_id(&self) -> String {
+        let bytes = self.deps.tokens_gen.generate();
+        bytes[..16].iter().map(|b| format!("{b:02x}")).collect()
+    }
+
     fn target_type_code(&self, kind: PhotoKind) -> &'static str {
         match kind {
             PhotoKind::Parking => "parking_photo",
@@ -361,9 +384,15 @@ impl PhotoService {
     // Upload (§30)
     // -----------------------------------------------------------------------
 
-    /// Validate → process → insert (PENDING_REVIEW) → write derivatives (with
-    /// compensation on failure) → mark processed → audit. The original bytes
-    /// are never stored (§80).
+    /// Validate → process → mint the storage key → write both derivatives →
+    /// insert the row (once, complete) → audit. The original bytes are never
+    /// stored: only the stripped, re-encoded derivatives.
+    ///
+    /// The order matters: the key comes from a random id rather than from the
+    /// row's generated id, so no row has to exist before the objects do. A
+    /// failure at any point leaves either nothing at all or an unreferenced
+    /// object that the retention orphan sweep collects — never a row pointing
+    /// at an object that is not there.
     pub async fn upload_photo(
         &self,
         user: &crate::auth::AuthenticatedUser,
@@ -389,20 +418,13 @@ impl PhotoService {
         let processed = self.deps.processor.process(bytes).await?;
 
         let kind = target.kind();
-        let new = NewPendingPhoto {
-            target,
-            uploader_id: user.id,
-            content_type: processed.content_type.to_string(),
-            alt,
-        };
-        let id = self.deps.repository.insert_pending(&new).await?;
+        let upload_id = self.mint_upload_id();
+        let full_key = format!("uploads/{upload_id}/full.jpg");
+        let thumb_key = format!("uploads/{upload_id}/thumb.jpg");
 
-        let full_key = format!("uploads/{id}/full.jpg");
-        let thumb_key = format!("uploads/{id}/thumb.jpg");
-
-        // Write the full derivative, then the thumbnail. On any storage failure,
-        // compensate: best-effort delete what was written and drop the row so
-        // the queue never shows a half-written photo.
+        // Write the full derivative, then the thumbnail. On a failure,
+        // compensate by deleting whatever landed; no row exists yet, so there
+        // is nothing to roll back in the database.
         if let Err(e) = self
             .deps
             .storage
@@ -413,7 +435,6 @@ impl PhotoService {
             })
             .await
         {
-            let _ = self.deps.repository.delete(kind, id).await;
             return Err(PhotoError::Storage(e));
         }
         if let Err(e) = self
@@ -427,21 +448,30 @@ impl PhotoService {
             .await
         {
             let _ = self.deps.storage.delete(&full_key).await;
-            let _ = self.deps.repository.delete(kind, id).await;
             return Err(PhotoError::Storage(e));
         }
 
-        self.deps
-            .repository
-            .mark_processed(
-                kind,
-                id,
-                &full_key,
-                &thumb_key,
-                processed.dimensions,
-                self.now(),
-            )
-            .await?;
+        // Both objects exist: the row can be written complete, in one insert.
+        // If *this* fails the objects are unreferenced and the retention
+        // orphan sweep reclaims them, but delete them now rather than waiting.
+        let new = NewPendingPhoto {
+            target,
+            uploader_id: user.id,
+            content_type: processed.content_type.to_string(),
+            alt,
+            storage_key: full_key.clone(),
+            thumbnail_key: thumb_key.clone(),
+            dimensions: processed.dimensions,
+            processed_at: self.now(),
+        };
+        let id = match self.deps.repository.insert_pending(&new).await {
+            Ok(id) => id,
+            Err(e) => {
+                let _ = self.deps.storage.delete(&thumb_key).await;
+                let _ = self.deps.storage.delete(&full_key).await;
+                return Err(e);
+            }
+        };
 
         self.audit(
             Some(user.id),
@@ -551,13 +581,16 @@ impl PhotoService {
         Ok(())
     }
 
-    /// The full pending queue (both kinds). The web layer resolves presigned URLs.
+    /// The pending queue (both kinds), bounded + keyset-paginated. The web
+    /// layer resolves presigned URLs.
     pub async fn list_pending_photos(
         &self,
         moderator: &crate::auth::AuthenticatedUser,
+        after: Option<(DateTime<Utc>, i64)>,
+        limit: i64,
     ) -> Result<Vec<PendingPhoto>, PhotoError> {
         self.require_moderator(moderator)?;
-        self.deps.repository.list_pending().await
+        self.deps.repository.list_pending(after, limit).await
     }
 
     async fn audit(

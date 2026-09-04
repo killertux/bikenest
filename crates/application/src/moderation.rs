@@ -10,11 +10,12 @@ use crate::photo::PhotoKind;
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use async_trait::async_trait;
 use bikenest_domain::{
-    ModerationLimits, ModerationState, ProposalKind, ProposalStatus, ReportDescription,
-    ReportOutcome, ReportState, ReportTargetType, Role, UserId, is_known_report_reason,
-    reason_allowed_for,
+    ModerationLimits, ModerationState, ProposalKind, ProposalStatus, ProposedChange,
+    ReportDescription, ReportOutcome, ReportState, ReportTargetType, Role, UserId,
+    is_known_report_reason, reason_allowed_for,
 };
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -33,14 +34,60 @@ pub enum ModerationError {
     TargetNotFound,
     #[error("that report is not in the required state")]
     InvalidState,
+    /// This reporter already has an open report on this exact target.
+    #[error("you already reported this")]
+    AlreadyReported,
+    /// The proposal was made against an older version of the location, which
+    /// has changed since; applying it would silently clobber that change.
+    #[error("this proposal is out of date")]
+    StaleProposal,
     #[error("invalid report reason")]
     InvalidReason,
     #[error("invalid input: {0}")]
     InvalidField(String),
+    /// A named field of an approve-proposal request was missing or unusable.
+    /// Typed (rather than a message) so the web layer translates it instead of
+    /// echoing an English literal built in the application layer.
+    #[error("invalid proposal field: {0}")]
+    InvalidProposalField(ProposalField),
     #[error("too many reports, try again later")]
     RateLimited,
+    /// Storage refused a duplicate, or a concurrent writer won the race
+    /// (unique violation, serialization failure, deadlock).
+    #[error("that change conflicts with an existing record")]
+    Conflict,
+    /// Storage is unreachable or overloaded; the same request may work shortly.
+    #[error("service temporarily unavailable")]
+    Unavailable,
     #[error("internal error")]
     Internal,
+}
+
+/// The fields an approve-proposal request can fail on. Each maps to one i18n
+/// key in the web layer; the enum keeps the message out of the core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProposalField {
+    Lat,
+    Lon,
+    Timezone,
+    Existence,
+}
+
+impl ProposalField {
+    pub fn as_code(self) -> &'static str {
+        match self {
+            ProposalField::Lat => "lat",
+            ProposalField::Lon => "lon",
+            ProposalField::Timezone => "timezone",
+            ProposalField::Existence => "existence",
+        }
+    }
+}
+
+impl std::fmt::Display for ProposalField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_code())
+    }
 }
 
 impl From<RateLimitError> for ModerationError {
@@ -99,26 +146,115 @@ pub struct Report {
     pub updated_at: DateTime<Utc>,
 }
 
-/// A pending (or resolved) proposal in the moderator queue, with its location
-/// name for context.
+/// A pending (or resolved) proposal in the moderator queue.
+///
+/// Carries both sides of the decision: the typed [`ProposedChange`] the rider
+/// asked for *and* the location's current values, so the queue can show a real
+/// diff without a second query per row. `location_version` is the live version;
+/// comparing it to `base_version` is what makes a proposal stale.
 #[derive(Debug, Clone)]
 pub struct Proposal {
     pub id: i64,
     pub location_id: i64,
     pub location_name: String,
+    pub location_address: String,
     /// `None` once the proposer's account is anonymized (M6).
     pub proposer_id: Option<UserId>,
     pub base_version: i64,
+    /// The location's version *now*. Equal to `base_version` for a proposal
+    /// that still applies cleanly.
+    pub location_version: i64,
     pub kind: ProposalKind,
-    pub proposed: serde_json::Value,
+    pub change: ProposedChange,
+    /// The proposer's free-text note ("why"), stored inside the same payload.
+    pub reason: Option<String>,
+    pub current_lat: Option<f64>,
+    pub current_lon: Option<f64>,
+    pub current_timezone: String,
+    pub current_state: ModerationState,
     pub status: ProposalStatus,
     pub created_at: DateTime<Utc>,
 }
 
-/// Per-attribute change tally for a proposal's "current vs proposed" context.
-/// The web layer derives a diff from `proposed`; this struct is the typed shape
-/// the service validates before applying.
-#[derive(Debug, Clone)]
+impl Proposal {
+    /// The location changed after this proposal was written, so approving it
+    /// would clobber an edit the proposer never saw. The repository refuses
+    /// such an approval with [`ModerationError::StaleProposal`]; this is the
+    /// same judgment, made cheaply enough for the queue to show up front.
+    pub fn is_stale(&self) -> bool {
+        self.base_version != self.location_version
+    }
+}
+
+/// The values a moderator typed into the approve form. Every field is
+/// optional: an absent field means "keep what the proposer proposed".
+///
+/// This is the whole input the web layer contributes to an approval — the
+/// merge rule itself lives in [`ProposalApplication::merge`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProposalOverride {
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub timezone: Option<String>,
+    pub exists: Option<bool>,
+}
+
+/// Everything a report row needs to show *what* was reported instead of an
+/// opaque `#4057`: the location it belongs to, plus whichever of a review
+/// excerpt or a photo key applies to the target kind.
+///
+/// One value covers all four target kinds because every report resolves to a
+/// location, and the queue renders whichever fields are present.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ReportTargetPreview {
+    pub location_id: Option<i64>,
+    pub location_name: Option<String>,
+    pub location_address: Option<String>,
+    /// The reported review, or the review a reported review photo hangs off.
+    pub review_id: Option<i64>,
+    /// `None` for an anonymized author (M6).
+    pub review_author_id: Option<UserId>,
+    pub review_rating: Option<i16>,
+    /// The first [`REVIEW_EXCERPT_CHARS`] characters of the review body.
+    pub review_excerpt: Option<String>,
+    pub photo_id: Option<i64>,
+    pub photo_key: Option<String>,
+    pub photo_thumbnail_key: Option<String>,
+    /// The reported entity's own moderation-state code (`ACTIVE`, `APPROVED`,
+    /// `HIDDEN`, `PENDING_REVIEW`, `INVALID`…). The queue reads it to decide
+    /// *which* action is still available — hiding an already-hidden review is
+    /// not an offer worth making.
+    pub target_state: Option<String>,
+}
+
+/// How much of a reported review the queue shows before the moderator opens it.
+pub const REVIEW_EXCERPT_CHARS: usize = 160;
+
+/// Truncate on a character boundary and mark the cut, so a 2 000-character
+/// review does not blow up a queue row.
+pub fn review_excerpt(body: &str) -> String {
+    let body = body.trim();
+    if body.chars().count() <= REVIEW_EXCERPT_CHARS {
+        return body.to_string();
+    }
+    let head: String = body.chars().take(REVIEW_EXCERPT_CHARS).collect();
+    format!("{}…", head.trim_end())
+}
+
+/// The M1 moderation dashboard's four counts (one query, not four full lists).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QueueCounts {
+    pub pending_photos: i64,
+    pub open_reports: i64,
+    pub under_review_reports: i64,
+    pub pending_proposals: i64,
+}
+
+/// The values an approval actually writes: a validated move (with a resolved
+/// timezone) or a validated existence flip. Produced only by
+/// [`ProposalApplication::merge`], so the repository can never be handed a
+/// half-parsed payload.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ProposalApplication {
     MoveLocation {
         lat: f64,
@@ -130,50 +266,72 @@ pub enum ProposalApplication {
 }
 
 impl ProposalApplication {
-    /// Parse a proposal's stored `proposed` JSONB into the typed application.
-    pub fn from_proposed(
+    /// **The override-merge rule.** Combine what the proposer asked for with
+    /// whatever the moderator retyped on the approve form: a field the
+    /// moderator filled in wins, an empty one leaves the proposer's value
+    /// standing. It used to live in the web handler (A-M6), where no test
+    /// could reach it and where "empty means keep" was an accident of string
+    /// parsing rather than a decision.
+    ///
+    /// `kind` comes from the proposal row, not from `change`, because an
+    /// unreadable payload ([`ProposedChange::Unknown`]) still has a kind — and
+    /// still gets approved, provided the moderator supplies every value
+    /// themselves.
+    pub fn merge(
         kind: ProposalKind,
-        proposed: &serde_json::Value,
+        change: &ProposedChange,
+        over: &ProposalOverride,
     ) -> Result<Self, ModerationError> {
-        match kind {
-            ProposalKind::MoveLocation => {
-                let lat = proposed
-                    .get("lat")
-                    .and_then(|v| v.as_f64())
-                    .ok_or_else(|| ModerationError::InvalidField("lat is required".to_string()))?;
-                let lon = proposed
-                    .get("lon")
-                    .and_then(|v| v.as_f64())
-                    .ok_or_else(|| ModerationError::InvalidField("lon is required".to_string()))?;
-                let tz_raw = proposed
-                    .get("timezone")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        ModerationError::InvalidField("timezone is required".to_string())
-                    })?;
-                let timezone = tz_raw
-                    .parse()
-                    .map_err(|_| ModerationError::InvalidField("invalid timezone".to_string()))?;
-                Ok(ProposalApplication::MoveLocation { lat, lon, timezone })
+        match (kind, change) {
+            (ProposalKind::MoveLocation, ProposedChange::MoveLocation { lat, lon, timezone }) => {
+                Self::move_location(
+                    over.lat.or(Some(*lat)),
+                    over.lon.or(Some(*lon)),
+                    over.timezone.as_deref().or(timezone.as_deref()),
+                )
             }
-            ProposalKind::ChangeExistence => {
-                let exists = match proposed.get("existence").and_then(|v| v.as_str()) {
-                    Some("removed") => false,
-                    Some("exists") => true,
-                    Some(other) => {
-                        return Err(ModerationError::InvalidField(format!(
-                            "unknown existence: {other}"
-                        )));
-                    }
-                    None => {
-                        return Err(ModerationError::InvalidField(
-                            "existence is required".to_string(),
-                        ));
-                    }
-                };
-                Ok(ProposalApplication::ChangeExistence { exists })
+            (ProposalKind::ChangeExistence, ProposedChange::ChangeExistence { exists }) => {
+                Ok(ProposalApplication::ChangeExistence {
+                    exists: over.exists.unwrap_or(*exists),
+                })
             }
+            // An unreadable payload: nothing to fall back on, so every value
+            // has to come from the moderator.
+            (ProposalKind::MoveLocation, _) => {
+                Self::move_location(over.lat, over.lon, over.timezone.as_deref())
+            }
+            (ProposalKind::ChangeExistence, _) => Ok(ProposalApplication::ChangeExistence {
+                exists: over.exists.ok_or(ModerationError::InvalidProposalField(
+                    ProposalField::Existence,
+                ))?,
+            }),
         }
+    }
+
+    /// Validate a merged move. Coordinates are range-checked here as well as in
+    /// the payload codec, because an override never went through the codec.
+    fn move_location(
+        lat: Option<f64>,
+        lon: Option<f64>,
+        timezone: Option<&str>,
+    ) -> Result<Self, ModerationError> {
+        let lat = lat.ok_or(ModerationError::InvalidProposalField(ProposalField::Lat))?;
+        let lon = lon.ok_or(ModerationError::InvalidProposalField(ProposalField::Lon))?;
+        if !lat.is_finite() || !(-90.0..=90.0).contains(&lat) {
+            return Err(ModerationError::InvalidProposalField(ProposalField::Lat));
+        }
+        if !lon.is_finite() || !(-180.0..=180.0).contains(&lon) {
+            return Err(ModerationError::InvalidProposalField(ProposalField::Lon));
+        }
+        let timezone = timezone
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or(ModerationError::InvalidProposalField(
+                ProposalField::Timezone,
+            ))?
+            .parse()
+            .map_err(|_| ModerationError::InvalidProposalField(ProposalField::Timezone))?;
+        Ok(ProposalApplication::MoveLocation { lat, lon, timezone })
     }
 
     pub fn kind(&self) -> ProposalKind {
@@ -192,7 +350,14 @@ impl ProposalApplication {
 #[async_trait]
 pub trait ReportRepository: Send + Sync {
     async fn create(&self, r: &NewReport) -> Result<i64, ModerationError>;
-    async fn list(&self, state: Option<ReportState>) -> Result<Vec<Report>, ModerationError>;
+    /// Keyset-paginated, oldest first (`id ASC` — the moderation queue is a
+    /// FIFO work list). `after_id` is the last id from the previous page.
+    async fn list(
+        &self,
+        state: Option<ReportState>,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<Report>, ModerationError>;
     /// Returns the report incl. its `reporter_id` (needed by the self-resolve guard).
     async fn get(&self, id: i64) -> Result<Option<Report>, ModerationError>;
     /// `OPEN → UNDER_REVIEW`, setting `claimed_by`/`updated_at`. 0 rows → `InvalidState`.
@@ -217,6 +382,13 @@ pub trait ModerationRepository: Send + Sync {
         target_type: ReportTargetType,
         target_id: i64,
     ) -> Result<bool, ModerationError>;
+    /// Previews for a whole queue page: one statement per *distinct target
+    /// type* present (at most four), never one per row. Targets that no longer
+    /// exist are simply absent from the map.
+    async fn report_previews(
+        &self,
+        targets: &[(ReportTargetType, i64)],
+    ) -> Result<HashMap<(ReportTargetType, i64), ReportTargetPreview>, ModerationError>;
     /// `ACTIVE → HIDDEN` an existing review. 0 rows → `InvalidState`.
     async fn hide_review(&self, id: i64, moderator: UserId) -> Result<(), ModerationError>;
     /// `HIDDEN → ACTIVE` a review. 0 rows → `InvalidState`.
@@ -244,7 +416,16 @@ pub trait ModerationRepository: Send + Sync {
         to: ModerationState,
         moderator: UserId,
     ) -> Result<(), ModerationError>;
-    async fn list_pending_proposals(&self) -> Result<Vec<Proposal>, ModerationError>;
+    /// Keyset-paginated, oldest first (`id ASC`). `after_id` is the last id
+    /// from the previous page.
+    async fn list_pending_proposals(
+        &self,
+        after_id: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<Proposal>, ModerationError>;
+    /// The four moderation-dashboard counts in one statement (four scalar
+    /// subqueries), instead of loading and `.len()`-ing four full lists.
+    async fn queue_counts(&self) -> Result<QueueCounts, ModerationError>;
     async fn get_proposal(&self, id: i64) -> Result<Option<Proposal>, ModerationError>;
     /// Apply the proposal's change (or the moderator's adjusted values), bump
     /// version + append a `moderation` revision, set status `APPROVED`, and
@@ -389,7 +570,13 @@ impl ModerationService {
             reason: reason.to_string(),
             description,
         };
-        let id = self.deps.reports.create(&new).await?;
+        // A partial unique index (`report_dedupe_idx`) keeps one OPEN /
+        // UNDER_REVIEW report per (reporter, target); its violation is not a
+        // failure the user can act on, it is "you already told us".
+        let id = self.deps.reports.create(&new).await.map_err(|e| match e {
+            ModerationError::Conflict => ModerationError::AlreadyReported,
+            other => other,
+        })?;
         self.audit(
             Some(user.id),
             "report.created",
@@ -401,14 +588,26 @@ impl ModerationService {
         Ok(id)
     }
 
-    /// The report queue. `require_moderator`. Returns `None` to list all states.
+    /// The report queue, bounded + keyset-paginated. `require_moderator`.
+    /// `state` of `None` lists all states; `limit` is clamped by the repo.
     pub async fn list_reports(
         &self,
         moderator: &crate::auth::AuthenticatedUser,
         state: Option<ReportState>,
+        after_id: Option<i64>,
+        limit: i64,
     ) -> Result<Vec<Report>, ModerationError> {
         self.require_moderator(moderator)?;
-        self.deps.reports.list(state).await
+        self.deps.reports.list(state, after_id, limit).await
+    }
+
+    /// The M1 dashboard's four counts in one call (`require_moderator`).
+    pub async fn queue_counts(
+        &self,
+        moderator: &crate::auth::AuthenticatedUser,
+    ) -> Result<QueueCounts, ModerationError> {
+        self.require_moderator(moderator)?;
+        self.deps.moderation.queue_counts().await
     }
 
     pub async fn get_report(
@@ -418,6 +617,27 @@ impl ModerationService {
     ) -> Result<Option<Report>, ModerationError> {
         self.require_moderator(moderator)?;
         self.deps.reports.get(id).await
+    }
+
+    /// Previews for the reports currently on screen, batched. Answering "what
+    /// was reported?" is the queue's whole job, so this rides alongside
+    /// [`Self::list_reports`] rather than being fetched row by row.
+    pub async fn report_previews(
+        &self,
+        moderator: &crate::auth::AuthenticatedUser,
+        reports: &[Report],
+    ) -> Result<HashMap<(ReportTargetType, i64), ReportTargetPreview>, ModerationError> {
+        self.require_moderator(moderator)?;
+        if reports.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut targets: Vec<(ReportTargetType, i64)> = reports
+            .iter()
+            .map(|r| (r.target_type, r.target_id))
+            .collect();
+        targets.sort_by_key(|(t, id)| (t.as_code(), *id));
+        targets.dedup();
+        self.deps.moderation.report_previews(&targets).await
     }
 
     /// Claim an open report (`OPEN → UNDER_REVIEW`) and record who claimed it.
@@ -678,9 +898,14 @@ impl ModerationService {
     pub async fn list_pending_proposals(
         &self,
         moderator: &crate::auth::AuthenticatedUser,
+        after_id: Option<i64>,
+        limit: i64,
     ) -> Result<Vec<Proposal>, ModerationError> {
         self.require_moderator(moderator)?;
-        self.deps.moderation.list_pending_proposals().await
+        self.deps
+            .moderation
+            .list_pending_proposals(after_id, limit)
+            .await
     }
 
     pub async fn get_proposal(
@@ -692,15 +917,27 @@ impl ModerationService {
         self.deps.moderation.get_proposal(id).await
     }
 
-    /// Approve a proposal. `applied` carries the values to apply (normally the
-    /// proposal's own `proposed`, overridable by the approve form for "modify").
+    /// Approve a proposal, optionally with the moderator's own values.
+    ///
+    /// The service reads the proposal and applies
+    /// [`ProposalApplication::merge`] itself — the caller only says which
+    /// fields the moderator retyped. That is what keeps the "an empty input
+    /// means keep the proposer's value" rule testable and identical for every
+    /// caller (it used to be re-derived inside the HTTP handler, A-M6).
     pub async fn approve_proposal(
         &self,
         moderator: &crate::auth::AuthenticatedUser,
         id: i64,
-        applied: ProposalApplication,
+        over: ProposalOverride,
     ) -> Result<(), ModerationError> {
         self.require_moderator(moderator)?;
+        let proposal = self
+            .deps
+            .moderation
+            .get_proposal(id)
+            .await?
+            .ok_or(ModerationError::NotFound)?;
+        let applied = ProposalApplication::merge(proposal.kind, &proposal.change, &over)?;
         let kind = applied.kind();
         self.deps
             .moderation
@@ -764,11 +1001,13 @@ impl ModerationService {
         &self,
         moderator: &crate::auth::AuthenticatedUser,
         target: UserId,
+        after: Option<(DateTime<Utc>, i64)>,
+        limit: i64,
     ) -> Result<Vec<crate::community::ContributionItem>, ModerationError> {
         self.require_moderator(moderator)?;
         self.deps
             .history
-            .history(target)
+            .history(target, after, limit)
             .await
             .map_err(|_| ModerationError::Internal)
     }

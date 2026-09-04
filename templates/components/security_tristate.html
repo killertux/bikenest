@@ -1,0 +1,25 @@
+{# Security attributes as eight tri-state radio groups.
+
+   They used to be checkboxes, which could only ever say "yes" — so the
+   definitive "no" the domain, the store and the details page all support was
+   unrecordable, and the details page's ✗ marker unreachable. The checkboxes
+   also carried no `name`, so with scripting off every selection was dropped on
+   the way to the server. Radios need neither a hidden mirror nor JavaScript. #}
+<fieldset class="mt-6">
+  <legend class="text-sm font-medium">{{ tr.t("new.field.security") }}</legend>
+  <div class="mt-3 space-y-2">
+    {% for s in security_states %}
+      <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface px-3 py-2">
+        <span class="text-sm">{{ s.label }}</span>
+        <div class="inline-flex overflow-hidden rounded-lg border border-border" role="group" aria-label="{{ s.label }}">
+          {% for o in s.options %}
+            <label class="cursor-pointer">
+              <input type="radio" name="{{ s.name }}" value="{{ o.value }}" class="peer sr-only" {% if o.checked %}checked{% endif %} />
+              <span class="block px-3 py-1.5 text-xs font-medium text-muted peer-checked:bg-accent-strong peer-checked:text-white peer-focus-visible:ring-2 peer-focus-visible:ring-accent-strong">{{ o.label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</fieldset>

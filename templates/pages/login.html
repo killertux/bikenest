@@ -8,25 +8,47 @@
       <div class="mt-4 rounded-lg border border-fresh/30 bg-fresh/10 px-4 py-3 text-sm text-fresh">{{ notice.as_deref().unwrap_or("") }}</div>
     {% endif %}
     {% if error.is_some() %}
-      <div class="mt-4 rounded-lg border border-error/30 bg-error/10 px-4 py-3 text-sm text-error">{{ error.as_deref().unwrap_or("") }}</div>
+      <div class="mt-4 rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger" role="alert">{{ error.as_deref().unwrap_or("") }}</div>
     {% endif %}
     <form action="/login" method="post" class="mt-6 space-y-4">
       <input type="hidden" name="csrf" value="{{ layout.csrf }}" />
+      {# Where the gate that bounced the user wanted them to land. Already
+         reduced to a safe local path server-side; a failed attempt re-renders
+         it so the destination survives the round trip. #}
+      {% if !next.is_empty() %}<input type="hidden" name="next" value="{{ next }}" />{% endif %}
       <div>
         <label for="email" class="mb-1 block text-sm font-medium">{{ tr.t("auth.email") }}</label>
-        <input id="email" name="email" type="email" value="{{ email }}" required autocomplete="email" class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
+        <input id="email" name="email" type="email" value="{{ email }}" required autocomplete="email"
+               {% if let Some(msg) = field_errors.err("email") %}aria-invalid="true" aria-describedby="email-error"{% endif %}
+               class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
+        {% if let Some(msg) = field_errors.err("email") %}
+          <p id="email-error" role="alert" class="mt-1 text-sm text-danger">{{ msg }}</p>
+        {% endif %}
       </div>
       <div>
         <label for="password" class="mb-1 block text-sm font-medium">{{ tr.t("auth.password") }}</label>
-        <input id="password" name="password" type="password" required autocomplete="current-password" class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
+        <input id="password" name="password" type="password" required autocomplete="current-password"
+               {% if let Some(msg) = field_errors.err("password") %}aria-invalid="true" aria-describedby="password-error"{% endif %}
+               class="w-full rounded-lg border border-border bg-surface px-3 py-2 text-fg outline-none focus:border-accent" />
+        {% if let Some(msg) = field_errors.err("password") %}
+          <p id="password-error" role="alert" class="mt-1 text-sm text-danger">{{ msg }}</p>
+        {% endif %}
       </div>
-      <button type="submit" class="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("auth.login") }}</button>
+      <button type="submit" class="w-full rounded-lg bg-accent-strong px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-dark">{{ tr.t("auth.login") }}</button>
     </form>
     <p class="mt-4 flex items-center justify-between text-sm text-muted">
       <a href="/register" class="font-medium text-accent-strong hover:underline">{{ tr.t("auth.signup") }}</a>
       <a href="/password-reset" class="text-accent-strong hover:underline">{{ tr.t("auth.forgot") }}</a>
     </p>
-    <p class="mt-4 border-t border-border pt-4 text-sm text-muted">{{ tr.t("auth.oauth_note") }} <a href="/auth/google" class="font-medium text-accent-strong hover:underline">{{ tr.t("auth.google") }}</a></p>
+    <p class="mt-4 border-t border-border pt-4 text-sm text-muted">
+      {{ tr.t("auth.oauth_note") }}
+      {% if google_enabled %}
+        <a href="/auth/google" class="font-medium text-accent-strong hover:underline">{{ tr.t("auth.google") }}</a>
+      {% else %}
+        <button type="button" disabled aria-disabled="true" class="font-medium text-muted cursor-not-allowed">{{ tr.t("auth.google") }}</button>
+        <span class="text-xs text-muted">{{ tr.t("auth.google_soon") }}</span>
+      {% endif %}
+    </p>
   </div>
 </section>
 {% endblock %}

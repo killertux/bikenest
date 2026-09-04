@@ -23,9 +23,11 @@ RUN cargo build --release --locked -p bikenest-web \
 # slim runtime: the binary is self-contained (templates + migrations are
 # embedded by Askama / sqlx::migrate!). Only static assets are read from disk.
 FROM debian:bookworm-slim
+# `tini` is PID 1 so SIGTERM reaches the server (which drains HTTP and lets an
+# in-flight background job finish) and zombie children are reaped.
 RUN useradd -r -u 1001 bikenest \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -33,14 +35,20 @@ WORKDIR /app
 # The server binary.
 COPY --from=builder /usr/local/bin/bikenest-web /usr/local/bin/bikenest-web
 
-# Static assets must land at the path baked into the binary at compile time:
-# `env!("CARGO_MANIFEST_DIR")/../../web/static` = /app/web/static here.
+# Static assets, served from STATIC_ROOT (below) rather than any path baked
+# into the binary — the binary is relocatable.
 COPY --from=builder /app/web/static /app/web/static
 
 # Uploaded media (object storage) lives on a mounted volume.
 RUN mkdir -p /app/media && chown -R bikenest:bikenest /app
 USER bikenest
 ENV MEDIA_ROOT=/app/media
+ENV STATIC_ROOT=/app/web/static
 
 EXPOSE 8080
-CMD ["bikenest-web"]
+
+# Graceful shutdown: the runtime sends STOPSIGNAL, tini forwards it, and the
+# server drains HTTP then gives the job worker up to 30 s. Allow at least 35 s
+# of termination grace (`--stop-timeout` / `terminationGracePeriodSeconds`).
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/bikenest-web"]
