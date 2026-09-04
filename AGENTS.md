@@ -37,7 +37,7 @@ that data. Bilingual (en + pt-BR). Works on mobile and desktop browsers.
 | Pure domain rules & value objects | `crates/domain/src/` (`parking.rs`, `community.rs`, `auth.rs`, `moderation.rs`, `photo.rs`, `privacy.rs`, `hours.rs`, `freshness.rs`, `lib.rs`) |
 | Use cases + ports (traits) | `crates/application/src/` (`search.rs`, `community.rs`, `auth.rs`, `moderation.rs`, `photo.rs`, `privacy.rs`, `jobs.rs`, `ports.rs`, …) |
 | SQLx persistence & providers | `crates/infrastructure/src/` (`db.rs`, `config.rs`, `storage.rs`, `geocoding.rs`, `devdata.rs`, `probe.rs`, plus `auth/`, `community/`, `email/`, `job/`, `moderation/`, `parking/`, `photo/`, `privacy/`, `timezone/`) |
-| HTTP server, routes, handlers, view models | `crates/web/src/` (`main.rs` entry point, `http.rs` router, `lib.rs` templates/view models, `i18n.rs`, `auth.rs`, `security.rs`, `observability.rs`, `markdown.rs`, `view.rs`) |
+| HTTP server, routes, handlers, view models | `crates/web/src/` (`main.rs` entry point, `wiring.rs` composition root, `state.rs` `AppState`, `routes/` one module per slice — `mod.rs` route table, `public`, `search`, `details`, `auth`, `community`, `reviews`, `photo`, `moderation`, `admin`, `privacy`, `legal`, `common`, `errors` — `lib.rs` templates/view models, `i18n.rs`, `auth.rs`, `security.rs`, `observability.rs`, `markdown.rs`, `view.rs`) |
 | Database schema | `migrations/` (numbered `NNNN_*.sql`, forward-only) |
 | Templates | `templates/` (`layouts/`, `pages/`, `components/`, `partials/`) |
 | Frontend assets | `web/static/` (`css/`, `js/`, `vendor/`, `img/`) |
@@ -79,9 +79,13 @@ npm run build:css                        # Tailwind → web/static/css/app.css
   cleanup) — see `crates/infrastructure/tests/parking_test.rs`.
 - **Subcommands** dispatch in `crates/web/src/main.rs`; default is `serve`.
   Add a new `Some("…")` arm there for a new CLI command.
-- **Providers are wired in one place:** `crates/web/src/http.rs`
+- **Providers are wired in one place:** `crates/web/src/wiring.rs`
   (`app_router` / `app_router_with`). New ports get wired there, selected from
-  env (see `crates/infrastructure/src/config.rs` + `.env.example`).
+  env (see `crates/infrastructure/src/config.rs` + `.env.example`). Handlers
+  under `crates/web/src/routes/` only ever see the ports held in `AppState` —
+  a test in `crates/web/tests/http_test.rs` fails if one of them names a
+  repository, a pool or a concrete adapter, and another fails if any file in
+  `crates/web/src` passes 1200 lines.
 - **Background jobs** (M9) are a Postgres-backed queue (`background_job` table)
   with an in-process worker; handlers live in `crates/infrastructure/src/job/`
   and implement `bikenest_application::JobHandler`. Set `JOBS_ENABLED=false` for
@@ -98,7 +102,7 @@ npm run build:css                        # Tailwind → web/static/css/app.css
 
 1. Find the relevant use case in `crates/application`.
 2. Check the port it uses; implement any new persistence/provider in
-   `crates/infrastructure`, wire it in `crates/web/src/http.rs`.
+   `crates/infrastructure`, wire it in `crates/web/src/wiring.rs`.
 3. Add a migration if the schema changes.
 4. Add/extend tests per `TESTING.md`.
 5. Update `ARCHITECTURE.md`/`AGENTS.md` if you add a module or concept, and

@@ -3511,6 +3511,101 @@ fn web_crate_never_reads_the_process_environment() {
     );
 }
 
+/// Walks every `.rs` file under `crates/web/src`, returning (path, contents).
+fn web_sources() -> Vec<(std::path::PathBuf, String)> {
+    let src = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+    let mut out = Vec::new();
+    let mut stack = vec![src.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
+        {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let contents = std::fs::read_to_string(&path).expect("read source file");
+                out.push((path, contents));
+            }
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Providers are wired in one place. A handler must reach the database only
+/// through an application port held in `AppState`, so nothing under
+/// `src/routes/` may name a repository, a pool or a concrete adapter — the
+/// only infrastructure types it may mention are the parsed configuration
+/// values it renders (`MapConfig`, the featured origin, …).
+///
+/// `wiring.rs` is where the `Sqlx…` constructors belong (`state.rs` names one
+/// probe type, in the signature of the readiness use case it holds).
+#[test]
+fn route_handlers_never_reach_for_infrastructure() {
+    const ALLOWED_INFRA_TYPES: &[&str] = &[
+        "Config",
+        "MapConfig",
+        "SecurityConfig",
+        "FEATURED_ORIGIN",
+        "GeocodeLimits",
+    ];
+    const FORBIDDEN: &[&str] = &["Sqlx", "sqlx::", "S3ObjectStorage", "Db::", "db.pool()"];
+
+    let infra = regex::Regex::new(r"bikenest_infrastructure::\{?([A-Za-z_0-9]+)").unwrap();
+    let mut offenders = Vec::new();
+    for (path, contents) in web_sources() {
+        if !path.components().any(|c| c.as_os_str() == "routes") {
+            continue;
+        }
+        for (n, line) in contents.lines().enumerate() {
+            for needle in FORBIDDEN {
+                if line.contains(needle) {
+                    offenders.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                }
+            }
+            for caps in infra.captures_iter(line) {
+                let name = caps.get(1).unwrap().as_str();
+                if !ALLOWED_INFRA_TYPES.contains(&name) {
+                    offenders.push(format!(
+                        "{}:{}: bikenest_infrastructure::{name}",
+                        path.display(),
+                        n + 1
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "handlers must go through an application port; wire providers in `wiring.rs`:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// The router used to be one 5k-line module. Nothing in the web crate should
+/// grow back into that: a slice that outgrows this limit wants splitting.
+/// `view.rs` (the view-model builders) is the one file still over it.
+#[test]
+fn no_web_source_file_is_longer_than_1200_lines() {
+    const LIMIT: usize = 1200;
+    const EXEMPT: &[&str] = &["view.rs"];
+
+    let mut offenders = Vec::new();
+    for (path, contents) in web_sources() {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let lines = contents.lines().count();
+        if lines > LIMIT && !EXEMPT.contains(&name.as_str()) {
+            offenders.push(format!("{}: {lines} lines", path.display()));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "these files are over {LIMIT} lines; split them by slice:\n{}",
+        offenders.join("\n")
+    );
+}
+
 // ---------------------------------------------------------------------------
 // WP7: `X-Forwarded-For` is not a rate-limit identity unless a proxy is trusted
 // ---------------------------------------------------------------------------

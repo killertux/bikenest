@@ -19,7 +19,7 @@ use axum::http::request::Parts;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 
-use crate::http::AppState;
+use crate::state::AppState;
 
 /// Stand-in identity when the peer address is unavailable.
 ///

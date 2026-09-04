@@ -8,7 +8,7 @@
 //! DB-backed `audit` trail as the only place operational facts are persisted.
 //!
 //! This is the *diagnostic* half of §86; the separate audit-event table is
-//! unchanged. The `TraceLayer` is assembled in `http.rs` (so the concrete type
+//! unchanged. The `TraceLayer` is assembled in `wiring.rs` (so the concrete type
 //! is inferred); this module supplies the span + response hooks.
 
 use axum::extract::Request;

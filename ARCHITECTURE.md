@@ -113,6 +113,7 @@ directly. Examples: `SearchParking`, `ContributionService`, `AuthService`,
 | `Geocoder` | address/place → coordinates |
 | `ParkingSearchReader` / `ParkingDetailsReader` | proximity search + detail reads |
 | `ParkingPhotoReader` / `ReviewPhotosReader` | photo gallery reads |
+| `SitemapReader` | the ids `/sitemap.xml` lists (every ACTIVE location) |
 | `ParkingContributionRepository` | add/edit/propose, optimistic apply, revisions |
 | `ReviewRepository` | reviews + aggregate recompute |
 | `VerificationRepository` | existence/attribute/parked-here signals |
@@ -144,7 +145,7 @@ The adapters: `Sqlx*` repositories for every persistence port, `Config::from_env
 (`seed-mock`, `seed-admin`, `seed-policies`), and `Db`/`probe`.
 
 Providers are selected from environment variables in `config.rs` and wired into
-the router in `crates/web/src/http.rs`.
+the router in `crates/web/src/wiring.rs` — the one module that names them.
 
 ### Web (`crates/web`)
 
@@ -152,14 +153,32 @@ the router in `crates/web/src/http.rs`.
 job worker, then serves the router. Subcommands dispatch before `serve`:
 `seed-mock`, `seed-admin`, `seed-policies`, `retention`.
 
-`http.rs` builds the axum router: middleware (request tracing, security
-headers + strict nonce-free CSP, session/CSRF, auth extraction), public pages
-(P1 home, P2 search, P3 details, P7 about, legal pages), authenticated pages
-(account, contributions, favorites, add/edit/review/verify), moderation and
-admin pages, and htmx fragment endpoints. `lib.rs` holds the Askama view-model
-structs; `i18n.rs` holds the en + pt-BR catalogs; `security.rs` the headers/CSP;
-`observability.rs` the JSON structured logging; `markdown.rs` the sanitizing
-renderer for the legal pages.
+The router is split three ways:
+
+- **`wiring.rs`** — the composition root. It builds every provider from the
+  parsed `Config`, assembles the services, fills `AppState`, mounts the route
+  table and wraps it in the middleware stack (request tracing, security headers
+  + strict nonce-free CSP, session/CSRF, auth extraction, the styled-error
+  upgrade, compression). `RouterDeps` is the seam tests inject fakes through.
+  This is the only module that may name a concrete adapter.
+- **`state.rs`** — `AppState`: the services, the read-side ports and the
+  configuration-derived values (map, security policy, base URL, asset
+  manifest), cloned per request. It holds no connection pool.
+- **`routes/`** — one module per slice, each owning its handlers, its
+  form/query structs, its form → domain mapping and its error → response
+  mapping: `public` (home, about, robots/sitemap, language, health), `search`,
+  `details`, `auth` (M2 accounts), `community` (add/edit/propose),
+  `reviews` (review/verify/parked-here/favorite + the account activity lists),
+  `photo` (M4 upload + photo queue), `moderation` (M5 reports and queues),
+  `admin` (users, audit, privacy requests), `privacy` (M6 export/delete),
+  `legal` (policy pages), plus `common` (shared render/fragment helpers) and
+  `errors` (the styled 404/500 family). `routes/mod.rs` holds the URL → handler
+  table. Two tests guard the shape: no file over 1200 lines, and nothing under
+  `routes/` may name a repository, a pool or an adapter.
+
+`lib.rs` holds the Askama view-model structs; `i18n.rs` holds the en + pt-BR
+catalogs; `security.rs` the headers/CSP; `observability.rs` the JSON structured
+logging; `markdown.rs` the sanitizing renderer for the legal pages.
 
 ## Tech stack
 

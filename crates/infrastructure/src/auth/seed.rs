@@ -1,10 +1,11 @@
-//! `seed-admin` command (**Ledger #10**). Env-driven, idempotent admin
-//! bootstrap: reads `ADMIN_EMAIL` / `ADMIN_PASSWORD`, ensures the account is
+//! The `seed-admin` command: an idempotent admin bootstrap. Takes the
+//! configured `ADMIN_EMAIL` / `ADMIN_PASSWORD` and ensures that account is
 //! ACTIVE + verified with a password login and USER + ADMIN roles. Never
 //! reachable over HTTP.
 
 use crate::Db;
 use crate::auth::{Argon2PasswordHasher, SqlxAccountRepository, SqlxAuditLog, SystemClock};
+use crate::config::AdminSeedConfig;
 use bikenest_application::{
     AccountRepository, AuditEvent, AuditLog, AuthError, Clock, PasswordHasher,
 };
@@ -28,15 +29,18 @@ pub enum SeedAdminError {
     Audit(#[from] bikenest_application::AuditError),
 }
 
-/// Ensure the env-configured admin exists. Returns whether it was created or
-/// updated.
-pub async fn seed_admin(db: &Db) -> Result<SeedOutcome, SeedAdminError> {
-    let email_raw = std::env::var("ADMIN_EMAIL").map_err(|_| SeedAdminError::MissingEmail)?;
-    let email = UserEmail::parse(&email_raw).map_err(|_| SeedAdminError::MissingEmail)?;
-    let password_raw =
-        std::env::var("ADMIN_PASSWORD").map_err(|_| SeedAdminError::MissingPassword)?;
+/// Ensure the configured admin exists. Returns whether it was created or
+/// updated. The credentials come from the configuration parsed at startup —
+/// this never reads the process environment itself.
+pub async fn seed_admin(db: &Db, seed: &AdminSeedConfig) -> Result<SeedOutcome, SeedAdminError> {
+    let email_raw = seed.email.as_deref().ok_or(SeedAdminError::MissingEmail)?;
+    let email = UserEmail::parse(email_raw).map_err(|_| SeedAdminError::MissingEmail)?;
+    let password_raw = seed
+        .password
+        .as_deref()
+        .ok_or(SeedAdminError::MissingPassword)?;
     bikenest_domain::PasswordPolicy::default()
-        .validate(&password_raw)
+        .validate(password_raw)
         .map_err(|_| SeedAdminError::MissingPassword)?;
 
     let repo = SqlxAccountRepository::new(db.clone());
@@ -44,7 +48,7 @@ pub async fn seed_admin(db: &Db) -> Result<SeedOutcome, SeedAdminError> {
     let clock = SystemClock;
     let audit = SqlxAuditLog::new(db.clone());
 
-    let password = Password::new(&password_raw);
+    let password = Password::new(password_raw);
     let hash = hasher.hash(&password).await?;
     let now = clock.now();
 

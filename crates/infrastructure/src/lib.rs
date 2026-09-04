@@ -47,7 +47,9 @@ pub use job::{
     ClaimedJob, JobRegistry, JobServices, SendEmailHandler, SqlxJobRepository, Worker, job_services,
 };
 pub use moderation::{SqlxAuditLogReader, SqlxModerationRepository, SqlxReportRepository};
-pub use parking::{SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader};
+pub use parking::{
+    SqlxParkingDetailsReader, SqlxParkingPhotoReader, SqlxParkingSearchReader, SqlxSitemapReader,
+};
 pub use photo::{LocalImageProcessor, SqlxPhotoRepository, SqlxReviewPhotosReader};
 pub use privacy::{
     POLICY_LOCALES, POLICY_PLACEHOLDERS, SqlxAnonymizationRepository, SqlxExportRepository,

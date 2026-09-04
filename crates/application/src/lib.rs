@@ -50,7 +50,7 @@ pub use photo::{
 pub use ports::{
     CostFilter, Cursor, Filters, FreshnessConfig, GeoHit, GeocodeError, Geocoder,
     ParkingDetailsReader, ParkingPhotoReader, ParkingSearchReader, ParkingSummary, ReaderError,
-    ReviewPhotosReader, SearchInput, SearchPage, SearchRequest, Sort, StoredPhoto,
+    ReviewPhotosReader, SearchInput, SearchPage, SearchRequest, SitemapReader, Sort, StoredPhoto,
 };
 pub use privacy::{
     AnonymizationReport, AnonymizationRepository, Export, ExportAccount, ExportDownload,

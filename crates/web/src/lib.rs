@@ -4,12 +4,14 @@ pub mod assets;
 pub mod auth;
 pub mod client_ip;
 pub mod htmx;
-pub mod http;
 pub mod i18n;
 pub mod markdown;
 pub mod observability;
+pub mod routes;
 pub mod security;
+pub mod state;
 pub mod view;
+pub mod wiring;
 
 use askama::Template;
 use auth::Auth;
@@ -243,7 +245,7 @@ pub struct SearchPageVm {
     pub layout: PageLayout,
     pub tr: Translator,
     pub results: view::ResultsData,
-    pub form: http::SearchParams,
+    pub form: routes::search::SearchParams,
     pub security_options: Vec<view::OptionVm>,
     pub type_options: Vec<view::OptionVm>,
     /// `partials/search_results.html` is included here for the initial render;
@@ -947,7 +949,7 @@ pub struct ModerationActionResultVm {
     pub message: String,
 }
 
-pub use http::{RouterDeps, app_router, app_router_with};
+pub use wiring::{RouterDeps, app_router, app_router_with};
 
 #[cfg(test)]
 mod tests {

@@ -323,6 +323,16 @@ pub trait ParkingSearchReader: Send + Sync {
     ) -> Result<SearchPage, ReaderError>;
 }
 
+/// Port: the ids of every publicly listed location, for the sitemap.
+///
+/// Its own port rather than a reuse of [`ParkingSearchReader`]: the sitemap
+/// wants every ACTIVE id in a stable order, with none of the search criteria,
+/// ranking or pagination that reader exists to apply.
+#[async_trait]
+pub trait SitemapReader: Send + Sync {
+    async fn active_parking_ids(&self) -> Result<Vec<i64>, ReaderError>;
+}
+
 /// Port: full aggregate for the details page (§24).
 #[async_trait]
 pub trait ParkingDetailsReader: Send + Sync {

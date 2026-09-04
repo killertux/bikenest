@@ -14,7 +14,7 @@
 //! startup; the test suite's `test_config()` always points `static_root` at
 //! the same `web/static` directory, so re-building the router across tests
 //! keeps reading a manifest that is still correct). It is also copied onto
-//! [`crate::http::AppState`] so the `/static/h/{hash}/{*path}` handler can
+//! [`crate::state::AppState`] so the `/static/h/{hash}/{*path}` handler can
 //! read it as ordinary request state rather than reaching for the global.
 
 use axum::extract::{Path, Request, State};
@@ -27,7 +27,7 @@ use std::sync::{Arc, OnceLock};
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
-use crate::http::AppState;
+use crate::state::AppState;
 
 /// Logical path (forward-slash, relative to `static_root` — e.g.
 /// `"css/app.css"`) → the first 10 hex chars of that file's SHA-256 at

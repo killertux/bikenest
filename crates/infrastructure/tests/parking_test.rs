@@ -9,7 +9,7 @@
 
 use bikenest_application::{
     CostFilter, Cursor, Filters, ParkingDetailsReader, ParkingSummary, ReaderError, SearchInput,
-    SearchPage, SearchParking, SearchRequest, Sort,
+    SearchPage, SearchParking, SearchRequest, SitemapReader, Sort,
 };
 use bikenest_domain::{Cost, CurrencyCode, Money, ParkingType, PricingUnit};
 use bikenest_test_support::{ParkingBuilder, db_test, pool};
@@ -278,6 +278,47 @@ async fn non_active_locations_are_hidden_from_search(tx: &mut TestTx) {
         .await
         .unwrap();
     assert_eq!(page.total, 1);
+    cleanup_fixture(MARK).await;
+}
+
+#[db_test]
+async fn the_sitemap_reader_lists_only_active_ids(tx: &mut TestTx) {
+    const MARK: &str = "fix-sitemap";
+    cleanup_fixture(MARK).await;
+    let conn = tx.executor();
+    let active = at(5.5, 30.0)
+        .with_fixture_tag(MARK)
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    let invalid = at(5.5, 60.0)
+        .with_fixture_tag(MARK)
+        .with_moderation_state("INVALID")
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    let pending = at(5.5, 90.0)
+        .with_fixture_tag(MARK)
+        .with_moderation_state("PENDING_REVIEW")
+        .create(&mut *conn)
+        .await
+        .unwrap();
+    tx.commit_fixture().await;
+
+    let db = bikenest_infrastructure::Db::from_pool(pool().await);
+    let ids = bikenest_infrastructure::SqlxSitemapReader::new(db)
+        .active_parking_ids()
+        .await
+        .unwrap();
+
+    assert!(ids.contains(&active.id()), "an ACTIVE location is listed");
+    assert!(
+        !ids.contains(&invalid.id()) && !ids.contains(&pending.id()),
+        "a non-ACTIVE location is never listed"
+    );
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(ids, sorted, "the order is stable (by id)");
     cleanup_fixture(MARK).await;
 }
 

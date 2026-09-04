@@ -12,8 +12,8 @@ use bikenest_domain::{CsrfToken, SessionId};
 use bikenest_infrastructure::MapConfig;
 
 use crate::htmx;
-use crate::http::AppState;
 use crate::i18n::{Locale, Translator};
+use crate::state::AppState;
 
 /// Name of the session cookie.
 pub const SESSION_COOKIE: &str = "session_id";
@@ -269,6 +269,16 @@ const EXPORT_TOKEN_MAX_AGE_SECONDS: u32 = 24 * 60 * 60;
 /// and in the form's hidden field / `<meta name="csrf">` (§108).
 pub fn anon_csrf_token() -> String {
     CsrfToken::new(bikenest_infrastructure::RealTokenGenerator.generate()).to_base64url()
+}
+
+/// A fresh random hex nonce, for the OAuth `state` parameter. Minted here,
+/// beside the CSRF token, so the CSPRNG has a single caller in the web layer.
+pub fn random_state_hex() -> String {
+    bikenest_infrastructure::RealTokenGenerator
+        .generate()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

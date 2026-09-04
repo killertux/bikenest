@@ -265,6 +265,17 @@ impl PolicySeedConfig {
     }
 }
 
+/// Credentials the `seed-admin` subcommand bootstraps the first administrator
+/// from. Optional: only that subcommand needs them, so a serving instance
+/// parses them (unset = `None`) without failing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdminSeedConfig {
+    /// `ADMIN_EMAIL`.
+    pub email: Option<String>,
+    /// `ADMIN_PASSWORD`.
+    pub password: Option<String>,
+}
+
 /// PostgreSQL pool sizing plus the per-connection guard rails every pooled
 /// session gets. The two timeouts are set with `SET` on each new connection, so
 /// a runaway query or a transaction left open by a crashed client releases the
@@ -410,6 +421,8 @@ pub struct Config {
     pub jobs: JobConfig,
     /// Inputs for the `seed-policies` subcommand.
     pub policy: PolicySeedConfig,
+    /// Inputs for the `seed-admin` subcommand.
+    pub admin_seed: AdminSeedConfig,
     /// Google sign-in feature flag. Only the deterministic fake provider exists,
     /// so production refuses to start with this on.
     pub google_oauth_enabled: bool,
@@ -485,6 +498,10 @@ impl Config {
             moderation: moderation_config(&env),
             jobs: job_config(&env),
             policy: policy_config(&env),
+            admin_seed: AdminSeedConfig {
+                email: env.string("ADMIN_EMAIL"),
+                password: env.string("ADMIN_PASSWORD"),
+            },
             google_oauth_enabled: env.bool("GOOGLE_OAUTH_ENABLED").unwrap_or(false),
         })
     }
@@ -678,6 +695,7 @@ impl Config {
                 effective_at: Utc::now(),
                 placeholders: Vec::new(),
             },
+            admin_seed: AdminSeedConfig::default(),
             google_oauth_enabled: false,
         }
     }
@@ -1059,6 +1077,30 @@ mod tests {
     }
 
     const DB: (&str, &str) = ("DATABASE_URL", "postgres://u:p@localhost/db");
+
+    /// `seed-admin` reads its credentials from the configuration, so both
+    /// halves must survive parsing — and be `None`, not an empty string, when
+    /// the operator has not set them.
+    #[test]
+    fn admin_seed_credentials_are_parsed_when_present_and_none_when_absent() {
+        let c = config(&[
+            DB,
+            ("ADMIN_EMAIL", "admin@bikenest.example"),
+            ("ADMIN_PASSWORD", "correct horse battery"),
+        ]);
+        assert_eq!(
+            c.admin_seed.email.as_deref(),
+            Some("admin@bikenest.example")
+        );
+        assert_eq!(
+            c.admin_seed.password.as_deref(),
+            Some("correct horse battery")
+        );
+
+        let bare = config(&[DB]);
+        assert_eq!(bare.admin_seed, AdminSeedConfig::default());
+        assert!(bare.admin_seed.email.is_none() && bare.admin_seed.password.is_none());
+    }
 
     /// Every knob a production deployment must carry.
     fn production_env() -> Vec<(&'static str, &'static str)> {
