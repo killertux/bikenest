@@ -49,6 +49,11 @@ docker compose up -d            # postgres+postgis, app, tailwind watcher, mailp
 docker compose logs -f app      # watch it compile & start (first start takes a few minutes)
 ```
 
+Compose injects the complete `.env` into the app container, so provider,
+policy, job, retention, map, and tuning settings apply there too. The
+`COMPOSE_*` variables in `.env.example` are reserved for addresses that differ
+inside Docker (`db`, `minio`, `valkey`, and `mailpit`).
+
 Open **http://localhost:8080**. The stack starts:
 
 | Service | Role | Where |

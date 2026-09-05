@@ -9,15 +9,15 @@ services:
     image: imresamu/postgis:17-3.5  # arm64-compatible PostGIS build
     container_name: bikesnest-db
     environment:
-      POSTGRES_USER: bikesnest
-      POSTGRES_PASSWORD: bikesnest
-      POSTGRES_DB: bikesnest
+      POSTGRES_USER: ${POSTGRES_USER:-bikesnest}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bikesnest}
+      POSTGRES_DB: ${POSTGRES_DB:-bikesnest}
     ports:
       - "${DB_HOST_PORT:-5432}:5432"
     volumes:
       - bikesnest-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bikesnest -d bikesnest"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -34,43 +34,41 @@ services:
     # app the same graceful way production does (the release image bakes tini in
     # as its ENTRYPOINT).
     init: true
+    # Compose's project-level `.env` normally supplies interpolation values
+    # only; it does not automatically put them in a container. Load the whole
+    # file so every application config knob reaches Config::from_env. The
+    # explicit entries below override only values whose hostnames/paths differ
+    # inside the Compose network.
+    env_file:
+      - path: .env
+        required: false
     environment:
-      DATABASE_URL: postgres://bikesnest:bikesnest@db:5432/bikesnest
-      BIND_ADDR: 0.0.0.0:8080
-      RUST_LOG: info
+      DATABASE_URL: "postgres://${POSTGRES_USER:-bikesnest}:${POSTGRES_PASSWORD:-bikesnest}@db:5432/${POSTGRES_DB:-bikesnest}"
+      BIND_ADDR: ${COMPOSE_BIND_ADDR:-0.0.0.0:8080}
+      RUST_LOG: ${RUST_LOG:-info}
       # Where the development e-mail outbox writes readable messages. Media
       # itself lives in MinIO below; nothing reads this directory for photos.
-      MEDIA_ROOT: /app/media
+      MEDIA_ROOT: ${COMPOSE_MEDIA_ROOT:-/app/media}
       # Object storage: MinIO (S3-compatible) for dev. Media is
       # served via direct S3 presigned URLs (no app signing secret).
-      S3_ENDPOINT: http://minio:9000
+      S3_ENDPOINT: ${COMPOSE_S3_ENDPOINT:-http://minio:9000}
       # Presigned URLs are opened by the host browser, not by this container.
-      S3_PUBLIC_ENDPOINT: http://localhost:9000
-      S3_REGION: us-east-1
-      S3_BUCKET: bikesnest
-      S3_ACCESS_KEY_ID: minioadmin
-      S3_SECRET_ACCESS_KEY: minioadmin
-      CSP_MEDIA_HOSTS: http://localhost:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-bikesnest}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minioadmin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+      CSP_MEDIA_HOSTS: ${CSP_MEDIA_HOSTS:-http://localhost:9000}
       # Rate limiter: ValKey backend, shared across auth/photo/
       # contribution/moderation. Ephemeral keys (TTL), so no persistence.
-      VALKEY_URL: valkey://valkey:6379
+      VALKEY_URL: ${COMPOSE_VALKEY_URL:-valkey://valkey:6379}
       # Email: the app uses SMTP in dev, delivering to Mailpit (see below).
-      EMAIL_PROVIDER: smtp
-      EMAIL_FROM: BikesNest <no-reply@bikesnest.local>
-      SMTP_HOST: mailpit
-      SMTP_PORT: "1025"
-      # CLI seed inputs. Compose reads these substitutions from the project's
-      # .env file, making them available to `docker compose exec app ...`.
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      POLICY_VERSION: ${POLICY_VERSION:-}
-      POLICY_EFFECTIVE_AT: ${POLICY_EFFECTIVE_AT:-}
-      POLICY_OPERATOR_NAME: ${POLICY_OPERATOR_NAME:-}
-      POLICY_OPERATOR_CNPJ: ${POLICY_OPERATOR_CNPJ:-}
-      POLICY_OPERATOR_ADDRESS: ${POLICY_OPERATOR_ADDRESS:-}
-      POLICY_CONTACT_EMAIL: ${POLICY_CONTACT_EMAIL:-}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-smtp}
+      EMAIL_FROM: "${EMAIL_FROM:-BikesNest <no-reply@bikesnest.local>}"
+      SMTP_HOST: ${COMPOSE_SMTP_HOST:-mailpit}
+      SMTP_PORT: "${SMTP_PORT:-1025}"
     ports:
-      - "8080:8080"
+      - "${APP_HOST_PORT:-8080}:8080"
     volumes:
       - .:/app
       - cargo-target:/app/target
@@ -106,7 +104,7 @@ services:
     image: node:24-slim
     working_dir: /app
     environment:
-      NODE_ENV: development
+      NODE_ENV: ${NODE_ENV:-development}
     # Tailwind 4's `--watch` exits cleanly when stdin reaches EOF; under
     # `docker compose up -d` there is no terminal, so keep stdin open + a TTY
     # allocated, otherwise the watcher stops the moment it starts.
@@ -128,8 +126,8 @@ services:
     image: axllent/mailpit:latest
     container_name: bikesnest-mailpit
     ports:
-      - "1025:1025"   # SMTP relay (what the app connects to)
-      - "8025:8025"   # web UI: http://localhost:8025
+      - "${MAILPIT_SMTP_HOST_PORT:-1025}:1025"   # SMTP relay (what the app connects to)
+      - "${MAILPIT_UI_HOST_PORT:-8025}:8025"     # web UI: http://localhost:8025
 
   # ValKey: shared rate-limit store behind the ValKeyRateLimiter
   # (single-node path, VALKEY_URL). Redis-compatible. Ephemeral by design
@@ -164,11 +162,11 @@ services:
     container_name: bikesnest-minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-minioadmin}
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # web console
+      - "${MINIO_API_HOST_PORT:-9000}:9000"       # S3 API
+      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"  # web console
     volumes:
       - bikesnest-minio:/data
     healthcheck:
@@ -184,8 +182,12 @@ services:
       minio:
         condition: service_healthy
     entrypoint: ["sh", "-c"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-bikesnest}
     command:
-      - "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb --ignore-existing local/bikesnest"
+      - 'mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" && mc mb --ignore-existing "local/$$S3_BUCKET"'
 
   # A real ValKey cluster (cluster path) is optional — see
   # docker-compose.valkey-cluster.yml (single cluster-enabled node covering all

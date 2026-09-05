@@ -64,7 +64,12 @@
           {% else %}
             <a href="/account" class="text-xs text-muted hover:text-fg">{{ tr.t("nav.verify_to_contribute") }}</a>
           {% endif %}
-          <div class="relative" x-data="accountMenu" @click.outside="close" @keydown.escape.window="close">
+          <div
+            class="relative" x-data="accountMenu"
+            @click.outside="close" @keydown.escape.window="close"
+            @htmx:before:request.window="close"
+            @htmx:after:swap.window="close" @pageshow.window="close"
+          >
             <button
               type="button" @click="toggle" :aria-expanded="open"
               aria-haspopup="true" aria-controls="account-menu"
@@ -75,7 +80,7 @@
             </button>
             <div
               id="account-menu" role="menu" aria-label="{{ tr.t("nav.account_menu_aria") }}"
-              x-show="open" x-cloak
+              x-show="open" x-cloak @click="close" style="display: none"
               class="absolute right-0 top-full z-50 mt-2 w-56 rounded-xl border border-border bg-surface p-1.5 shadow-pop"
             >
               <a role="menuitem" href="/account" class="block rounded-lg px-3 py-2 text-sm text-fg hover:bg-bg">{{ tr.t("account.nav") }}</a>

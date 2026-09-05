@@ -5019,6 +5019,31 @@ fn the_layout_boosts_through_the_inherited_attribute() {
 }
 
 #[test]
+fn the_account_menu_resets_around_boosted_navigation() {
+    let base = read_template("layouts/base.html");
+    assert!(
+        base.contains(r#"@htmx:before:request.window="close""#),
+        "an open menu should close as soon as navigation starts: {base}"
+    );
+    assert!(
+        base.contains(r#"@htmx:after:swap.window="close""#),
+        "the newly morphed account menu must reset its restored Alpine state: {base}"
+    );
+    assert!(
+        base.contains(r#"@pageshow.window="close""#),
+        "browser history-cache restores must clear transient menu state too: {base}"
+    );
+    assert!(
+        base.contains(r#"x-show="open" x-cloak @click="close" style="display: none""#),
+        "clicking a menu item must synchronously clear the ephemeral open state: {base}"
+    );
+    assert!(
+        base.contains(r#"style="display: none""#),
+        "the server-rendered menu must stay hidden even when a morph removes Alpine's generated style: {base}"
+    );
+}
+
+#[test]
 fn the_review_form_posts_plainly_with_the_token_in_the_query() {
     let form = read_template("pages/review_form.html");
     assert!(
