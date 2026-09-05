@@ -2,15 +2,15 @@
 //! data for Askama templates (labels, formatting, CSS classes).
 //!
 //! Business rules stay in the application/domain layers; this module only
-//! formats, maps and localizes (§7). Every user-facing label goes through the
-//! request's [`Translator`] (§12).
+//! formats, maps and localizes. Every user-facing label goes through the
+//! request's [`Translator`].
 
 use crate::PhotoVm;
 use crate::i18n::Translator;
-use bikenest_application::{
+use bikesnest_application::{
     AuthenticatedUser, GeoHit, ObjectStorage, ParkingSummary, PendingPhoto,
 };
-use bikenest_domain::{
+use bikesnest_domain::{
     AccountState, Cost, FreshnessCategory, OpenStatus, OpeningHours, ParkingType, PricingUnit,
     ReportTargetType, Role,
 };
@@ -21,7 +21,7 @@ use std::time::Duration;
 pub const PHOTO_URL_TTL: Duration = Duration::from_secs(3600);
 
 /// JSON escaped so it can be embedded verbatim in a `<script type="application/json">`
-/// (or an HTML attribute) without breaking out — the stored-XSS fix, §103.
+/// (or an HTML attribute) without breaking out — the stored-XSS fix, .
 ///
 /// `serde_json` does not escape `<`, `>`, `&`, U+2028 or U+2029, all of which can
 /// terminate a `<script>` block or an attribute. Escaping them to `\uXXXX` keeps
@@ -46,7 +46,7 @@ pub const TYPE_CODES: &[&str] = &["rack", "parking_facility", "indoor", "secured
 
 /// The security catalog codes (labels come from the translator). Canonical list
 /// lives in the domain (`SECURITY_FEATURE_CODES`).
-use bikenest_domain::SECURITY_FEATURE_CODES as SECURITY_CODES;
+use bikesnest_domain::SECURITY_FEATURE_CODES as SECURITY_CODES;
 
 /// One checkbox/radio option with its label and checked-state, precomputed in
 /// Rust (Askama templates stay logic-light).
@@ -188,7 +188,7 @@ pub fn cost_label(t: Translator, cost: &Cost) -> String {
     }
 }
 
-/// Locale-aware decimal formatting (§116.6): pt-BR uses a comma as the decimal
+/// Locale-aware decimal formatting (.6): pt-BR uses a comma as the decimal
 /// separator (`1234,56`), en uses a dot. Thousands separators are not added.
 pub fn format_money(t: Translator, value: f64) -> String {
     let s = format!("{value:.2}");
@@ -364,9 +364,9 @@ impl MapItemVm {
 
     /// A marker for a browse row the list does not show: the map draws every
     /// location inside the viewport (up to the marker cap), while the list
-    /// stops at [`bikenest_application::BROWSE_LIST_CAP`], so these markers
+    /// stops at [`bikesnest_application::BROWSE_LIST_CAP`], so these markers
     /// carry their own labels rather than a card's.
-    fn from_summary(t: Translator, s: &bikenest_application::ParkingSummary, n: usize) -> Self {
+    fn from_summary(t: Translator, s: &bikesnest_application::ParkingSummary, n: usize) -> Self {
         Self {
             id: s.id,
             n,
@@ -401,17 +401,17 @@ pub struct ResultsData {
 #[allow(clippy::too_many_arguments)]
 pub async fn build_results(
     t: Translator,
-    page: &bikenest_application::SearchPage,
+    page: &bikesnest_application::SearchPage,
     hit: Option<&GeoHit>,
     destination_label: Option<String>,
     query_string: String,
     now: chrono::DateTime<chrono::Utc>,
-    thresholds: &bikenest_domain::FreshnessThresholds,
+    thresholds: &bikesnest_domain::FreshnessThresholds,
     storage: &dyn ObjectStorage,
 ) -> ResultsData {
     let mut items = Vec::with_capacity(page.items.len());
     for (i, s) in page.items.iter().enumerate() {
-        let freshness = bikenest_domain::categorize(s.last_verified_at, now, thresholds);
+        let freshness = bikesnest_domain::categorize(s.last_verified_at, now, thresholds);
         let photo_url = resolve_photo(storage, s.photo_key.as_deref()).await;
         let mut card = CardVm::from_summary(t, s, freshness, photo_url);
         // The badge on the card and the number in its marker are the same
@@ -454,12 +454,12 @@ pub async fn build_results(
 }
 
 /// The `west,south,east,north` box every "browse the map" entry point uses:
-/// [`FEATURED_ORIGIN`](bikenest_infrastructure::FEATURED_ORIGIN) ± the
+/// [`FEATURED_ORIGIN`](bikesnest_infrastructure::FEATURED_ORIGIN) ± the
 /// featured half-span. A constant, so the nav link, the home page's explore
 /// link and the empty-search prompt all open the same view.
 pub fn featured_bbox_param() -> String {
-    let (lat, lon) = bikenest_infrastructure::FEATURED_ORIGIN;
-    let d = bikenest_infrastructure::FEATURED_BBOX_HALF_DEG;
+    let (lat, lon) = bikesnest_infrastructure::FEATURED_ORIGIN;
+    let d = bikesnest_infrastructure::FEATURED_BBOX_HALF_DEG;
     format!(
         "{:.4},{:.4},{:.4},{:.4}",
         lon - d,
@@ -472,7 +472,7 @@ pub fn featured_bbox_param() -> String {
 /// Browse mode's results payload: what is inside the map's own viewport.
 ///
 /// Two caps, one answer. The list is the nearest
-/// [`BROWSE_LIST_CAP`](bikenest_application::BROWSE_LIST_CAP) rows — cards
+/// [`BROWSE_LIST_CAP`](bikesnest_application::BROWSE_LIST_CAP) rows — cards
 /// cost a presigned photo URL each, and a list nobody can read is not a
 /// result — while the map draws every row the reader returned (up to the
 /// marker cap) so panning is honest about what is there. Numbers run across
@@ -483,16 +483,16 @@ pub fn featured_bbox_param() -> String {
 /// smaller area.
 pub async fn build_browse_results(
     t: Translator,
-    bounds: &bikenest_application::BoundsQuery,
-    page: &bikenest_application::BoundsPage,
+    bounds: &bikesnest_application::BoundsQuery,
+    page: &bikesnest_application::BoundsPage,
     now: chrono::DateTime<chrono::Utc>,
-    thresholds: &bikenest_domain::FreshnessThresholds,
+    thresholds: &bikesnest_domain::FreshnessThresholds,
     storage: &dyn ObjectStorage,
 ) -> ResultsData {
-    let listed = page.items.len().min(bikenest_application::BROWSE_LIST_CAP);
+    let listed = page.items.len().min(bikesnest_application::BROWSE_LIST_CAP);
     let mut items = Vec::with_capacity(listed);
     for (i, s) in page.items.iter().take(listed).enumerate() {
-        let freshness = bikenest_domain::categorize(s.last_verified_at, now, thresholds);
+        let freshness = bikesnest_domain::categorize(s.last_verified_at, now, thresholds);
         let photo_url = resolve_photo(storage, s.photo_key.as_deref()).await;
         let mut card = CardVm::from_summary(t, s, freshness, photo_url);
         card.n = i + 1;
@@ -655,7 +655,7 @@ pub fn mask_email(email: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// One rendered review (D3 / P3). `photos` are the review's APPROVED photos
-/// (§38), already resolved to presigned URLs for the card's thumbnails.
+/// already resolved to presigned URLs for the card's thumbnails.
 #[derive(Debug, Clone)]
 pub struct ReviewVm {
     pub id: i64,
@@ -669,7 +669,7 @@ pub struct ReviewVm {
 
 pub fn review_vm(
     t: Translator,
-    r: &bikenest_application::Review,
+    r: &bikesnest_application::Review,
     is_own: bool,
     photos: Vec<PhotoVm>,
 ) -> ReviewVm {
@@ -706,7 +706,7 @@ fn time_ago_label(t: Translator, at: chrono::DateTime<chrono::Utc>) -> String {
 pub fn admin_users(
     t: Translator,
     users: &[AuthenticatedUser],
-    activity: &std::collections::HashMap<i64, bikenest_application::UserActivity>,
+    activity: &std::collections::HashMap<i64, bikesnest_application::UserActivity>,
 ) -> Vec<AdminUserVm> {
     users
         .iter()
@@ -759,14 +759,14 @@ pub fn admin_users(
         .collect()
 }
 
-/// Localized confidence label (P3 confidence badge, §106).
-pub fn confidence_label(t: Translator, c: bikenest_domain::Confidence) -> &'static str {
+/// Localized confidence label for the confidence badge.
+pub fn confidence_label(t: Translator, c: bikesnest_domain::Confidence) -> &'static str {
     match c {
-        bikenest_domain::Confidence::Reported => t.t("confidence.reported"),
-        bikenest_domain::Confidence::Verified => t.t("confidence.verified"),
-        bikenest_domain::Confidence::RecentlyVerified => t.t("confidence.recently_verified"),
-        bikenest_domain::Confidence::Stale => t.t("confidence.stale"),
-        bikenest_domain::Confidence::Conflicting => t.t("confidence.conflicting"),
+        bikesnest_domain::Confidence::Reported => t.t("confidence.reported"),
+        bikesnest_domain::Confidence::Verified => t.t("confidence.verified"),
+        bikesnest_domain::Confidence::RecentlyVerified => t.t("confidence.recently_verified"),
+        bikesnest_domain::Confidence::Stale => t.t("confidence.stale"),
+        bikesnest_domain::Confidence::Conflicting => t.t("confidence.conflicting"),
     }
 }
 
@@ -777,14 +777,14 @@ pub struct ConfidenceVm {
     pub label: &'static str,
 }
 
-pub fn confidence_vm(t: Translator, c: bikenest_domain::Confidence) -> ConfidenceVm {
+pub fn confidence_vm(t: Translator, c: bikesnest_domain::Confidence) -> ConfidenceVm {
     ConfidenceVm {
         code: c.as_code(),
         label: confidence_label(t, c),
     }
 }
 
-/// One rendered attribution dispute tally (§106).
+/// One rendered attribution dispute tally.
 #[derive(Debug, Clone)]
 pub struct AttrDisputeVm {
     pub label: &'static str,
@@ -811,14 +811,14 @@ fn attribute_label(t: Translator, code: &str) -> &'static str {
     }
 }
 
-/// One rendered "recommended because…" reason (§105).
+/// One rendered "recommended because…" reason.
 #[derive(Debug, Clone)]
 pub struct ReasonVm {
     pub label: &'static str,
     pub detail: String,
 }
 
-pub fn reason_vm(t: Translator, r: &bikenest_application::Reason) -> ReasonVm {
+pub fn reason_vm(t: Translator, r: &bikesnest_application::Reason) -> ReasonVm {
     ReasonVm {
         label: t.t(r.label_key),
         detail: r.detail.clone(),
@@ -839,7 +839,7 @@ pub struct ContributionVm {
     pub at_label: String,
 }
 
-/// One advisory duplicate candidate (D1/§36).
+/// One advisory duplicate candidate (D1/).
 #[derive(Debug, Clone)]
 pub struct DuplicateVm {
     pub id: i64,
@@ -848,7 +848,7 @@ pub struct DuplicateVm {
     pub similarity_label: String,
 }
 
-pub fn duplicate_vm(_t: Translator, d: &bikenest_application::DuplicateCandidate) -> DuplicateVm {
+pub fn duplicate_vm(_t: Translator, d: &bikesnest_application::DuplicateCandidate) -> DuplicateVm {
     DuplicateVm {
         id: d.id,
         name: d.name.clone(),
@@ -859,7 +859,7 @@ pub fn duplicate_vm(_t: Translator, d: &bikenest_application::DuplicateCandidate
 
 /// One photo in the moderator queue (M2 screen). Includes the presigned URL of
 /// the *processed derivative* (exactly what would publish), a small preview and
-/// an anonymized "Contributor #id" label — never an email/OAuth subject (§80).
+/// an anonymized "Contributor #id" label — never an email/OAuth subject.
 #[derive(Debug, Clone)]
 pub struct ModerationPhotoVm {
     pub id: i64,
@@ -912,8 +912,8 @@ pub async fn moderation_photo_vm(
     ModerationPhotoVm {
         id: p.id,
         kind: match p.kind {
-            bikenest_application::PhotoKind::Parking => "parking",
-            bikenest_application::PhotoKind::Review => "review",
+            bikesnest_application::PhotoKind::Parking => "parking",
+            bikesnest_application::PhotoKind::Review => "review",
         },
         location_id: p.parent_id,
         location_name: p.parent_name.clone(),
@@ -986,7 +986,7 @@ pub struct ReportVm {
 }
 
 /// The report-reason option list (value = code, label = i18n) for the modal/select.
-use bikenest_domain::REPORT_REASONS;
+use bikesnest_domain::REPORT_REASONS;
 
 pub fn report_reason_options(t: Translator) -> Vec<OptionVm> {
     REPORT_REASONS
@@ -1026,27 +1026,27 @@ fn report_reason_label(t: Translator, reason: &str) -> &'static str {
     }
 }
 
-fn report_state_label(t: Translator, s: bikenest_domain::ReportState) -> &'static str {
+fn report_state_label(t: Translator, s: bikesnest_domain::ReportState) -> &'static str {
     match s {
-        bikenest_domain::ReportState::Open => t.t("report.state.open"),
-        bikenest_domain::ReportState::UnderReview => t.t("report.state.under_review"),
-        bikenest_domain::ReportState::Resolved => t.t("report.state.resolved"),
-        bikenest_domain::ReportState::Dismissed => t.t("report.state.dismissed"),
+        bikesnest_domain::ReportState::Open => t.t("report.state.open"),
+        bikesnest_domain::ReportState::UnderReview => t.t("report.state.under_review"),
+        bikesnest_domain::ReportState::Resolved => t.t("report.state.resolved"),
+        bikesnest_domain::ReportState::Dismissed => t.t("report.state.dismissed"),
     }
 }
 
 /// The complete badge classes per report state. A `bg-{{ color }}` built in the
 /// template would never reach Tailwind's content scanner, so the class list is
 /// spelled out here (F-L7).
-fn report_state_badge_class(s: bikenest_domain::ReportState) -> &'static str {
+fn report_state_badge_class(s: bikesnest_domain::ReportState) -> &'static str {
     match s {
-        bikenest_domain::ReportState::Open => {
+        bikesnest_domain::ReportState::Open => {
             "rounded-full bg-danger/10 px-2 py-0.5 font-medium text-danger"
         }
-        bikenest_domain::ReportState::UnderReview => {
+        bikesnest_domain::ReportState::UnderReview => {
             "rounded-full bg-aging/10 px-2 py-0.5 font-medium text-aging"
         }
-        bikenest_domain::ReportState::Resolved | bikenest_domain::ReportState::Dismissed => {
+        bikesnest_domain::ReportState::Resolved | bikesnest_domain::ReportState::Dismissed => {
             "rounded-full bg-fresh/10 px-2 py-0.5 font-medium text-fresh"
         }
     }
@@ -1055,8 +1055,8 @@ fn report_state_badge_class(s: bikenest_domain::ReportState) -> &'static str {
 /// Deep-link to the reported content: the location page, or the location page
 /// anchored at the specific review.
 fn report_target_url(
-    r: &bikenest_application::Report,
-    preview: Option<&bikenest_application::ReportTargetPreview>,
+    r: &bikesnest_application::Report,
+    preview: Option<&bikesnest_application::ReportTargetPreview>,
 ) -> String {
     let Some(location_id) = preview.and_then(|p| p.location_id) else {
         return String::new();
@@ -1077,8 +1077,8 @@ fn report_target_url(
 /// "hide" on a hidden review would just fail with `InvalidState`.
 fn report_action(
     t: Translator,
-    r: &bikenest_application::Report,
-    preview: Option<&bikenest_application::ReportTargetPreview>,
+    r: &bikesnest_application::Report,
+    preview: Option<&bikesnest_application::ReportTargetPreview>,
     target_label: &str,
 ) -> Option<ReportActionVm> {
     let state = preview?.target_state.as_deref()?;
@@ -1138,8 +1138,8 @@ fn photo_kind_code(target_type: ReportTargetType) -> &'static str {
 /// `thumb_url` a resolved presigned URL for its photo.
 pub fn report_vm(
     t: Translator,
-    r: &bikenest_application::Report,
-    preview: Option<&bikenest_application::ReportTargetPreview>,
+    r: &bikesnest_application::Report,
+    preview: Option<&bikesnest_application::ReportTargetPreview>,
     thumb_url: Option<String>,
 ) -> ReportVm {
     let target_type_label = report_target_label(t, r.target_type.as_code());
@@ -1250,10 +1250,10 @@ pub struct ProposalVm {
     pub confirm: Option<String>,
 }
 
-fn proposal_kind_label(t: Translator, kind: bikenest_domain::ProposalKind) -> &'static str {
+fn proposal_kind_label(t: Translator, kind: bikesnest_domain::ProposalKind) -> &'static str {
     match kind {
-        bikenest_domain::ProposalKind::MoveLocation => t.t("proposal.kind.move"),
-        bikenest_domain::ProposalKind::ChangeExistence => t.t("proposal.kind.existence"),
+        bikesnest_domain::ProposalKind::MoveLocation => t.t("proposal.kind.move"),
+        bikesnest_domain::ProposalKind::ChangeExistence => t.t("proposal.kind.existence"),
     }
 }
 
@@ -1278,8 +1278,8 @@ fn coord_pair(lat: Option<f64>, lon: Option<f64>, t: Translator) -> String {
     }
 }
 
-pub fn proposal_vm(t: Translator, p: &bikenest_application::Proposal) -> ProposalVm {
-    use bikenest_domain::ProposedChange;
+pub fn proposal_vm(t: Translator, p: &bikesnest_application::Proposal) -> ProposalVm {
+    use bikesnest_domain::ProposedChange;
 
     let mut diff = Vec::new();
     let mut map = None;
@@ -1320,7 +1320,7 @@ pub fn proposal_vm(t: Translator, p: &bikenest_application::Proposal) -> Proposa
             form_timezone = proposed_tz;
         }
         ProposedChange::ChangeExistence { exists } => {
-            let currently_exists = p.current_state == bikenest_domain::ModerationState::Active;
+            let currently_exists = p.current_state == bikesnest_domain::ModerationState::Active;
             diff.push(ProposalDiffVm {
                 label: t.t("proposal.field.existence"),
                 current: existence_label(t, currently_exists).to_string(),
@@ -1328,9 +1328,9 @@ pub fn proposal_vm(t: Translator, p: &bikenest_application::Proposal) -> Proposa
                 changed: currently_exists != *exists,
             });
             form_existence = if *exists {
-                bikenest_domain::ProposedChange::EXISTS
+                bikesnest_domain::ProposedChange::EXISTS
             } else {
-                bikenest_domain::ProposedChange::REMOVED
+                bikesnest_domain::ProposedChange::REMOVED
             };
             // Taking a spot off the map is the one approval that is hard to
             // notice and annoying to undo, so it asks first.
@@ -1372,7 +1372,7 @@ pub fn proposal_vm(t: Translator, p: &bikenest_application::Proposal) -> Proposa
 }
 
 /// One row of the admin audit-log viewer (M6). Metadata rendered as an escaped
-/// JSON blob — by construction it carries no secrets/PII (§47).
+/// JSON blob — by construction it carries no secrets/PII.
 ///
 /// An audit log is read to answer "who did what, exactly when" — so the
 /// timestamp is absolute (a relative "yesterday" cannot be correlated with
@@ -1422,7 +1422,7 @@ fn audit_target_url(target_type: &str, target_id: &str) -> Option<String> {
 /// "#id" form so the trail stays readable.
 pub fn audit_row_vm(
     t: Translator,
-    e: &bikenest_application::AuditStoredEvent,
+    e: &bikesnest_application::AuditStoredEvent,
     labels: &std::collections::HashMap<i64, String>,
 ) -> AuditRowVm {
     let actor = e.event.actor_user_id.map(|a| a.0);
@@ -1492,19 +1492,19 @@ pub struct ExportVm {
     pub is_ready: bool,
 }
 
-pub fn export_state_label(t: Translator, s: bikenest_domain::ExportState) -> &'static str {
+pub fn export_state_label(t: Translator, s: bikesnest_domain::ExportState) -> &'static str {
     match s {
-        bikenest_domain::ExportState::Ready => t.t("export.state.ready"),
-        bikenest_domain::ExportState::Downloaded => t.t("export.state.downloaded"),
-        bikenest_domain::ExportState::Expired => t.t("export.state.expired"),
+        bikesnest_domain::ExportState::Ready => t.t("export.state.ready"),
+        bikesnest_domain::ExportState::Downloaded => t.t("export.state.downloaded"),
+        bikesnest_domain::ExportState::Expired => t.t("export.state.expired"),
     }
 }
 
 /// Build a C7 row. `token_held` says whether this request carries the export's
 /// single-use download token (the `export_{id}` cookie) — true only for the
 /// export the owner just requested, and only while it is still `READY`.
-pub fn export_vm(t: Translator, e: &bikenest_application::Export, token_held: bool) -> ExportVm {
-    let is_ready = e.state == bikenest_domain::ExportState::Ready;
+pub fn export_vm(t: Translator, e: &bikesnest_application::Export, token_held: bool) -> ExportVm {
+    let is_ready = e.state == bikesnest_domain::ExportState::Ready;
     ExportVm {
         id: e.id,
         state_code: e.state.as_code(),
@@ -1520,7 +1520,7 @@ pub fn export_vm(t: Translator, e: &bikenest_application::Export, token_held: bo
 ///
 /// A rights request is a legal clock, so the row carries the three facts an
 /// operator needs to act: who asked, what they wrote, and how long is left
-/// (LGPD art. 19 — [`bikenest_domain::PRIVACY_REQUEST_SLA_DAYS`]).
+/// (LGPD art. 19 — [`bikesnest_domain::PRIVACY_REQUEST_SLA_DAYS`]).
 #[derive(Debug, Clone)]
 pub struct PrivacyRequestVm {
     pub id: i64,
@@ -1543,44 +1543,44 @@ pub struct PrivacyRequestVm {
 
 pub fn privacy_request_kind_label(
     t: Translator,
-    kind: bikenest_domain::PrivacyRequestKind,
+    kind: bikesnest_domain::PrivacyRequestKind,
 ) -> &'static str {
     match kind {
-        bikenest_domain::PrivacyRequestKind::Access => t.t("privacy.kind.access"),
-        bikenest_domain::PrivacyRequestKind::Rectification => t.t("privacy.kind.rectification"),
-        bikenest_domain::PrivacyRequestKind::Deletion => t.t("privacy.kind.deletion"),
-        bikenest_domain::PrivacyRequestKind::Export => t.t("privacy.kind.export"),
-        bikenest_domain::PrivacyRequestKind::Restriction => t.t("privacy.kind.restriction"),
-        bikenest_domain::PrivacyRequestKind::Objection => t.t("privacy.kind.objection"),
-        bikenest_domain::PrivacyRequestKind::ConsentWithdrawal => t.t("privacy.kind.consent"),
+        bikesnest_domain::PrivacyRequestKind::Access => t.t("privacy.kind.access"),
+        bikesnest_domain::PrivacyRequestKind::Rectification => t.t("privacy.kind.rectification"),
+        bikesnest_domain::PrivacyRequestKind::Deletion => t.t("privacy.kind.deletion"),
+        bikesnest_domain::PrivacyRequestKind::Export => t.t("privacy.kind.export"),
+        bikesnest_domain::PrivacyRequestKind::Restriction => t.t("privacy.kind.restriction"),
+        bikesnest_domain::PrivacyRequestKind::Objection => t.t("privacy.kind.objection"),
+        bikesnest_domain::PrivacyRequestKind::ConsentWithdrawal => t.t("privacy.kind.consent"),
     }
 }
 
 pub fn privacy_request_state_label(
     t: Translator,
-    s: bikenest_domain::PrivacyRequestState,
+    s: bikesnest_domain::PrivacyRequestState,
 ) -> &'static str {
     match s {
-        bikenest_domain::PrivacyRequestState::Open => t.t("privacy.state.open"),
-        bikenest_domain::PrivacyRequestState::InProgress => t.t("privacy.state.in_progress"),
-        bikenest_domain::PrivacyRequestState::Completed => t.t("privacy.state.completed"),
-        bikenest_domain::PrivacyRequestState::Declined => t.t("privacy.state.declined"),
+        bikesnest_domain::PrivacyRequestState::Open => t.t("privacy.state.open"),
+        bikesnest_domain::PrivacyRequestState::InProgress => t.t("privacy.state.in_progress"),
+        bikesnest_domain::PrivacyRequestState::Completed => t.t("privacy.state.completed"),
+        bikesnest_domain::PrivacyRequestState::Declined => t.t("privacy.state.declined"),
     }
 }
 
 /// `labels` is the batched subject lookup for every request on the page.
 pub fn privacy_request_vm(
     t: Translator,
-    r: &bikenest_application::PrivacyRequest,
+    r: &bikesnest_application::PrivacyRequest,
     labels: &std::collections::HashMap<i64, String>,
 ) -> PrivacyRequestVm {
     let subject = r.user_id.map(|u| u.0);
     let is_open = matches!(
         r.state,
-        bikenest_domain::PrivacyRequestState::Open
-            | bikenest_domain::PrivacyRequestState::InProgress
+        bikesnest_domain::PrivacyRequestState::Open
+            | bikesnest_domain::PrivacyRequestState::InProgress
     );
-    let days_left = bikenest_domain::privacy_request_days_left(r.created_at, chrono::Utc::now());
+    let days_left = bikesnest_domain::privacy_request_days_left(r.created_at, chrono::Utc::now());
     let deadline_label = if !is_open {
         String::new()
     } else if days_left < 0 {
@@ -1626,7 +1626,7 @@ pub struct PolicyVersionVm {
 
 pub fn policy_version_vm(
     t: Translator,
-    doc: &bikenest_application::PolicyDocument,
+    doc: &bikesnest_application::PolicyDocument,
 ) -> PolicyVersionVm {
     PolicyVersionVm {
         version: doc.version.clone(),
@@ -1644,7 +1644,7 @@ pub struct PrivacyRequestKindVm {
 }
 
 /// The manual (operator-fulfilled) rights kinds, with descriptions, for the C6
-/// request list (§72). Access/export and deletion are automatic and have their
+/// request list. Access/export and deletion are automatic and have their
 /// own cards.
 pub fn privacy_request_kind_options(t: Translator) -> Vec<PrivacyRequestKindVm> {
     vec![
@@ -1652,25 +1652,25 @@ pub fn privacy_request_kind_options(t: Translator) -> Vec<PrivacyRequestKindVm> 
             code: "rectification",
             label: privacy_request_kind_label(
                 t,
-                bikenest_domain::PrivacyRequestKind::Rectification,
+                bikesnest_domain::PrivacyRequestKind::Rectification,
             ),
             description: t.t("privacy.rights.rectification_desc"),
         },
         PrivacyRequestKindVm {
             code: "restriction",
-            label: privacy_request_kind_label(t, bikenest_domain::PrivacyRequestKind::Restriction),
+            label: privacy_request_kind_label(t, bikesnest_domain::PrivacyRequestKind::Restriction),
             description: t.t("privacy.rights.restriction_desc"),
         },
         PrivacyRequestKindVm {
             code: "objection",
-            label: privacy_request_kind_label(t, bikenest_domain::PrivacyRequestKind::Objection),
+            label: privacy_request_kind_label(t, bikesnest_domain::PrivacyRequestKind::Objection),
             description: t.t("privacy.rights.objection_desc"),
         },
         PrivacyRequestKindVm {
             code: "consent_withdrawal",
             label: privacy_request_kind_label(
                 t,
-                bikenest_domain::PrivacyRequestKind::ConsentWithdrawal,
+                bikesnest_domain::PrivacyRequestKind::ConsentWithdrawal,
             ),
             description: t.t("privacy.rights.consent_desc"),
         },
@@ -1679,7 +1679,7 @@ pub fn privacy_request_kind_options(t: Translator) -> Vec<PrivacyRequestKindVm> 
 
 pub fn contribution_vm(
     t: Translator,
-    i: &bikenest_application::ContributionItem,
+    i: &bikesnest_application::ContributionItem,
 ) -> ContributionVm {
     // "parked_here" and "photo.pending" are their own kinds — a parked-here
     // signal is not a verification, and a pending photo isn't approved yet,
@@ -1715,8 +1715,8 @@ pub fn contribution_vm(
 mod tests {
     use super::*;
     use crate::i18n::Locale;
-    use bikenest_application::{Cursor, SearchPage, Sort};
-    use bikenest_test_support::TestObjectStorage;
+    use bikesnest_application::{Cursor, SearchPage, Sort};
+    use bikesnest_test_support::TestObjectStorage;
 
     fn page_with_next() -> SearchPage {
         SearchPage {
@@ -1739,7 +1739,7 @@ mod tests {
             None,
             query_string.to_string(),
             chrono::Utc::now(),
-            &bikenest_domain::DEFAULT_THRESHOLDS,
+            &bikesnest_domain::DEFAULT_THRESHOLDS,
             &storage,
         )
         .await
@@ -1782,7 +1782,7 @@ mod tests {
             None,
             "q=rua".to_string(),
             chrono::Utc::now(),
-            &bikenest_domain::DEFAULT_THRESHOLDS,
+            &bikesnest_domain::DEFAULT_THRESHOLDS,
             &storage,
         )
         .await;

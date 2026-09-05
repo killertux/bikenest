@@ -1,7 +1,7 @@
-//! Proc macros for BikeNest tests.
+//! Proc macros for BikesNest tests.
 //!
 //! `#[db_test]` marks an async test that receives a `&mut TestTx` (an open
-//! PostgreSQL transaction provided by `bikenest_test_support`). All
+//! PostgreSQL transaction provided by `bikesnest_test_support`). All
 //! `#[db_test]`s share ONE multi-threaded tokio runtime and ONE connection
 //! pool; the transaction is rolled back when the test ends.
 
@@ -39,7 +39,7 @@ pub fn db_test(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let expanded = quote! {
         #[test]
         #vis fn #name() {
-            bikenest_test_support::run_db_test(async move |#tx| #body);
+            bikesnest_test_support::run_db_test(async move |#tx| #body);
         }
     };
     expanded.into()

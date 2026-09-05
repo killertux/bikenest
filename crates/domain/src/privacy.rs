@@ -1,4 +1,4 @@
-//! Privacy & account-lifecycle domain values (REQUIREMENTS §20, §66–§82, §98).
+//! Privacy and account-lifecycle domain values.
 //!
 //! Pure, no I/O. Models the privacy-request and export code lists, the
 //! deterministic anonymized-email helper, and the retention TTL policy.
@@ -9,10 +9,10 @@ use crate::{DomainError, UserId};
 use chrono::Duration;
 
 // ---------------------------------------------------------------------------
-// Privacy request kind (§72)
+// Privacy request kind
 // ---------------------------------------------------------------------------
 
-/// The seven data-subject request kinds (§72). `Access` and `Export` are
+/// The seven data-subject request kinds. `Access` and `Export` are
 /// fulfilled automatically by the export flow; `Deletion` by the account-
 /// deletion flow; the remaining four are manual (recorded + operator-fulfilled).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +75,7 @@ pub fn privacy_request_days_left(
 }
 
 // ---------------------------------------------------------------------------
-// Privacy request state (§72)
+// Privacy request state
 // ---------------------------------------------------------------------------
 
 /// Lifecycle of a manual rights request. Automatic flows (export/deletion)
@@ -112,7 +112,7 @@ impl PrivacyRequestState {
 }
 
 // ---------------------------------------------------------------------------
-// Personal-data export state (§73)
+// Personal-data export state
 // ---------------------------------------------------------------------------
 
 /// Lifecycle of one personal-data export. `Ready` (payload assembled
@@ -146,7 +146,7 @@ impl ExportState {
 }
 
 // ---------------------------------------------------------------------------
-// Policy kind (§70)
+// Policy kind
 // ---------------------------------------------------------------------------
 
 /// The versioned legal-page kinds. These map one-to-one to `policy_version.kind`.
@@ -179,27 +179,27 @@ impl PolicyKind {
 }
 
 // ---------------------------------------------------------------------------
-// Anonymized email (§74)
+// Anonymized email
 // ---------------------------------------------------------------------------
 
 /// Deterministic, non-attributable, unique replacement email for an anonymized
-/// account. `deleted+{id}@bikenest.invalid`:
+/// account. `deleted+{id}@bikesnest.invalid`:
 ///
 /// - **deterministic** (no randomness → resume-safe, idempotent),
 /// - **unique per id** (preserves the `lower(email)` unique index),
 /// - **non-attributable** (no part of the original address survives),
-/// - **undeliverable** (`bikenest.invalid` is RFC 2606 `invalid`-reserved).
+/// - **undeliverable** (`bikesnest.invalid` is RFC 2606 `invalid`-reserved).
 pub fn anonymized_email(user_id: UserId) -> String {
-    format!("deleted+{}@bikenest.invalid", user_id.0)
+    format!("deleted+{}@bikesnest.invalid", user_id.0)
 }
 
 // ---------------------------------------------------------------------------
-// Retention TTLs (§75)
+// Retention TTLs
 // ---------------------------------------------------------------------------
 
-/// Retention TTL constants (plans/m6-privacy.md §2, Ledger #20).
+/// Retention TTL constants used by privacy and account-lifecycle flows.
 ///
-/// Hardcoded now; M7 makes them configurable (like Ledger #18/#19). These are
+/// Hardcoded now; configuration can be added at the application boundary. These are
 /// the single source of truth for the issue-time TTLs (M2/M3) **and** the
 /// retention purge thresholds.
 #[derive(Debug, Clone, Copy)]
@@ -292,14 +292,14 @@ mod tests {
         // Unique across distinct ids.
         assert_ne!(a, anonymized_email(UserId(43)));
         // RFC 2606 `.invalid` so it can never receive mail.
-        assert!(a.ends_with("@bikenest.invalid"));
+        assert!(a.ends_with("@bikesnest.invalid"));
     }
 
     #[test]
     fn anonymized_email_does_not_contain_input() {
         let email = anonymized_email(UserId(7));
-        assert_eq!(email, "deleted+7@bikenest.invalid");
-        assert!(!email.contains("deleted+7@bikenest.invalid@"));
+        assert_eq!(email, "deleted+7@bikesnest.invalid");
+        assert!(!email.contains("deleted+7@bikesnest.invalid@"));
     }
 
     #[test]

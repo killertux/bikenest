@@ -1,6 +1,6 @@
-# BikeNest
+# BikesNest
 
-A community-maintained map of bicycle parking. BikeNest helps cyclists find a
+A community-maintained map of bicycle parking. BikesNest helps cyclists find a
 safe, suitable place to leave their bike near a destination — and lets the
 community keep that information accurate.
 
@@ -24,7 +24,7 @@ review photos, proposals and reports through a dashboard; admins manage roles,
 users and the audit trail. Every user can export their data and delete their
 account (anonymization).
 
-BikeNest is a server-rendered web app that works on desktop and mobile
+BikesNest is a server-rendered web app that works on desktop and mobile
 browsers, in **English** and **Brazilian Portuguese**.
 
 ## How it works, in one paragraph
@@ -54,7 +54,7 @@ Open **http://localhost:8080**. The stack starts:
 | Service | Role | Where |
 |---|---|---|
 | `db` | PostgreSQL 17 + PostGIS | `localhost:5432` |
-| `app` | the BikeNest server (auto-recompiles) | `localhost:8080` |
+| `app` | the BikesNest server (auto-recompiles) | `localhost:8080` |
 | `css` | Tailwind CSS watcher | — |
 | `mailpit` | catches every outgoing email | `http://localhost:8025` |
 | `valkey` | rate-limit store (Redis-compatible) | `localhost:6380` |
@@ -64,15 +64,16 @@ Once the app is up, seed development data (optional, dev only — production
 starts empty):
 
 ```bash
-docker compose exec app cargo run -q -- seed-mock        # 24 sample Curitiba locations + photos
-docker compose exec app cargo run -q -- seed-admin       # create an admin (set ADMIN_EMAIL/ADMIN_PASSWORD in .env first)
+docker compose exec app cargo run -q -p bikesnest-web -- seed-mock        # sample Curitiba locations + photos
+docker compose exec app cargo run -q -p bikesnest-web -- seed-admin       # create an admin (set ADMIN_EMAIL/ADMIN_PASSWORD in .env first)
+docker compose exec app cargo run -q -p bikesnest-web -- seed-full-fresh  # erase data, then seed mock data, admin, and policies
 ```
 
 Other useful commands:
 
 ```bash
 docker compose up -d db         # database only — run the app on the host instead
-docker compose exec app cargo run -q -- seed-policies    # version the legal pages (privacy/terms/cookies)
+docker compose exec app cargo run -q -p bikesnest-web -- seed-policies    # version the legal pages (privacy/terms/cookies)
 docker compose down -v          # wipe the database and volumes, start clean
 ```
 
@@ -102,23 +103,23 @@ curl localhost:8080/readyz      # readiness → {"status":"ready","database":"up
 Build a self-contained release image (no database needed at build time):
 
 ```bash
-docker build -t bikenest .
+docker build -t bikesnest .
 ```
 
 Run it with real configuration as environment variables (or a secret manager):
 
 ```bash
 docker run --rm -p 8080:8080 \
-  -e DATABASE_URL=postgres://user:pass@db:5432/bikenest \
-  -e BASE_URL=https://bikenest.example.com \
+  -e DATABASE_URL=postgres://user:pass@db:5432/bikesnest \
+  -e BASE_URL=https://bikesnest.com \
   -e APP_ENV=production \
   -e EMAIL_PROVIDER=resend -e RESEND_API_KEY=... -e RESEND_FROM=... \
-  -e S3_ENDPOINT= -e S3_REGION=us-east-1 -e S3_BUCKET=bikenest \
+  -e S3_ENDPOINT= -e S3_REGION=us-east-1 -e S3_BUCKET=bikesnest \
   -e S3_ACCESS_KEY_ID=... -e S3_SECRET_ACCESS_KEY=... \
   -e VALKEY_URL=valkey://valkey:6379 \
   -e GEOCODER=mapbox -e MAPBOX_ACCESS_TOKEN=... \
   -e MAP_STYLE_URL=https://... \
-  bikenest
+  bikesnest
 ```
 
 Things to know for a production run:
@@ -153,7 +154,7 @@ source of truth). The ones you'll most often touch:
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `DATABASE_URL` | PostgreSQL DSN (required) | `postgres://bikenest:bikenest@localhost:5432/bikenest` |
+| `DATABASE_URL` | PostgreSQL DSN (required) | `postgres://bikesnest:bikesnest@localhost:5432/bikesnest` |
 | `BIND_ADDR` | HTTP bind address | `0.0.0.0:8080` |
 | `BASE_URL` | public origin, used to build links + canonical URLs | `http://localhost:8080` |
 | `APP_ENV` | `development` (human logs) or `production` (JSON logs) | `development` |

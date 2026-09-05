@@ -1,12 +1,12 @@
-//! SQL-backed single-use token store (§16). Tokens are stored as SHA-256
+//! SQL-backed single-use token store. Tokens are stored as SHA-256
 //! hashes; single-use is enforced atomically by the `used_at IS NULL` guard in
 //! the `UPDATE … RETURNING` (no read-then-write race).
 
 use crate::Db;
 use crate::auth::hash::sha256_hex;
 use async_trait::async_trait;
-use bikenest_application::{AuthError, TokenStore};
-use bikenest_domain::{UserId, VerificationToken};
+use bikesnest_application::{AuthError, TokenStore};
+use bikesnest_domain::{UserId, VerificationToken};
 use chrono::{DateTime, Duration, Utc};
 
 const VERIFICATION_TTL: Duration = Duration::hours(24);

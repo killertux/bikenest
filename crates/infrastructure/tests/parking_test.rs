@@ -1,4 +1,4 @@
-//! Real-PostgreSQL integration tests for the parking readers (§31–§32).
+//! Real-PostgreSQL integration tests for the parking readers (–).
 //!
 //! The readers run on pool connections, which cannot see rows inside this
 //! test's transaction — so these tests use the **committed-fixture pattern**:
@@ -7,12 +7,12 @@
 //! readers, and the tag is deleted (at start and end) via the shared pool.
 //! Everything else in the suite still uses transaction-per-test rollback.
 
-use bikenest_application::{
+use bikesnest_application::{
     BoundsPage, BoundsQuery, CostFilter, Cursor, Filters, ParkingDetailsReader, ParkingSummary,
     ReaderError, SearchInput, SearchPage, SearchParking, SearchRequest, SitemapReader, Sort,
 };
-use bikenest_domain::{Cost, CurrencyCode, Money, ParkingType, PricingUnit};
-use bikenest_test_support::{ParkingBuilder, db_test, pool};
+use bikesnest_domain::{Cost, CurrencyCode, Money, ParkingType, PricingUnit};
+use bikesnest_test_support::{ParkingBuilder, db_test, pool};
 
 /// Base origin: far from any seed data (Serra da Cantareira area).
 const ORIGIN: (f64, f64) = (-23.400_000, -46.600_000);
@@ -20,8 +20,8 @@ const ORIGIN: (f64, f64) = (-23.400_000, -46.600_000);
 /// Each test gets its own geographic patch (~5.5 km apart) so leftover
 /// fixture rows from a crashed run of another test never interfere:
 /// the largest test radius (1 km) cannot reach a neighboring patch.
-fn test_origin(k: f64) -> bikenest_domain::GeoPoint {
-    bikenest_domain::GeoPoint::new(ORIGIN.0 + k * 0.05, ORIGIN.1).unwrap()
+fn test_origin(k: f64) -> bikesnest_domain::GeoPoint {
+    bikesnest_domain::GeoPoint::new(ORIGIN.0 + k * 0.05, ORIGIN.1).unwrap()
 }
 
 /// Place a builder `meters` north of test patch `k`'s origin.
@@ -63,10 +63,10 @@ fn fixed_now() -> chrono::DateTime<chrono::Utc> {
 /// The search reader under test, carrying the documented default weights and
 /// freshness thresholds — the same values production loads from the
 /// environment, so the SQL sort key the tests assert on is the shipped one.
-fn reader(db: bikenest_infrastructure::Db) -> bikenest_infrastructure::SqlxParkingSearchReader {
-    bikenest_infrastructure::SqlxParkingSearchReader::new(
+fn reader(db: bikesnest_infrastructure::Db) -> bikesnest_infrastructure::SqlxParkingSearchReader {
+    bikesnest_infrastructure::SqlxParkingSearchReader::new(
         db,
-        bikenest_application::DEFAULT_RECOMMENDATION_CONFIG,
+        bikesnest_application::DEFAULT_RECOMMENDATION_CONFIG,
         Default::default(),
     )
 }
@@ -76,7 +76,7 @@ async fn real_search(
     limit: usize,
     apply_cursor: bool,
 ) -> Result<SearchPage, ReaderError> {
-    let db = bikenest_infrastructure::Db::from_pool(pool().await);
+    let db = bikesnest_infrastructure::Db::from_pool(pool().await);
     reader(db)
         .search_at(request, limit, apply_cursor, fixed_now())
         .await
@@ -102,13 +102,13 @@ fn bounds_at(k: f64, half: f64, limit: usize) -> BoundsQuery {
 }
 
 async fn real_bounds(query: &BoundsQuery) -> Result<BoundsPage, ReaderError> {
-    let db = bikenest_infrastructure::Db::from_pool(pool().await);
+    let db = bikesnest_infrastructure::Db::from_pool(pool().await);
     reader(db).in_bounds_at(query, fixed_now()).await
 }
 
-async fn real_details(id: i64) -> Result<Option<bikenest_domain::ParkingLocation>, ReaderError> {
-    let db = bikenest_infrastructure::Db::from_pool(pool().await);
-    bikenest_infrastructure::SqlxParkingDetailsReader::new(db)
+async fn real_details(id: i64) -> Result<Option<bikesnest_domain::ParkingLocation>, ReaderError> {
+    let db = bikesnest_infrastructure::Db::from_pool(pool().await);
+    bikesnest_infrastructure::SqlxParkingDetailsReader::new(db)
         .details(id)
         .await
 }
@@ -329,8 +329,8 @@ async fn the_sitemap_reader_lists_only_active_ids(tx: &mut TestTx) {
         .unwrap();
     tx.commit_fixture().await;
 
-    let db = bikenest_infrastructure::Db::from_pool(pool().await);
-    let ids = bikenest_infrastructure::SqlxSitemapReader::new(db)
+    let db = bikesnest_infrastructure::Db::from_pool(pool().await);
+    let ids = bikesnest_infrastructure::SqlxSitemapReader::new(db)
         .active_parking_ids()
         .await
         .unwrap();
@@ -469,14 +469,14 @@ async fn details_assemble_the_full_aggregate(tx: &mut TestTx) {
     assert_eq!(details.rating().count(), 5);
     assert_eq!(
         details.hours(),
-        &bikenest_domain::OpeningHours::weekly(
+        &bikesnest_domain::OpeningHours::weekly(
             (1u8..=5)
                 .map(|d| {
                     (
                         d,
-                        bikenest_domain::TimeRange::new(
-                            bikenest_domain::hours::hms(8, 0),
-                            bikenest_domain::hours::hms(18, 0),
+                        bikesnest_domain::TimeRange::new(
+                            bikesnest_domain::hours::hms(8, 0),
+                            bikesnest_domain::hours::hms(18, 0),
                         ),
                     )
                 })
@@ -484,14 +484,17 @@ async fn details_assemble_the_full_aggregate(tx: &mut TestTx) {
         )
     );
     let by_code = |c: &str| details.security().iter().find(|f| f.code() == c).unwrap();
-    assert_eq!(by_code("cctv").state(), bikenest_domain::SecurityState::Yes);
+    assert_eq!(
+        by_code("cctv").state(),
+        bikesnest_domain::SecurityState::Yes
+    );
     assert_eq!(
         by_code("indoor").state(),
-        bikenest_domain::SecurityState::No
+        bikesnest_domain::SecurityState::No
     );
     assert_eq!(
         by_code("staffed").state(),
-        bikenest_domain::SecurityState::Unknown
+        bikesnest_domain::SecurityState::Unknown
     );
     // Labels are localized in the presentation layer, not stored — only the
     // code round-trips through the reader.
@@ -557,7 +560,7 @@ async fn search_at(
     request: &SearchRequest,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<SearchPage, ReaderError> {
-    let db = bikenest_infrastructure::Db::from_pool(pool().await);
+    let db = bikesnest_infrastructure::Db::from_pool(pool().await);
     reader(db).search_at(request, 20, false, now).await
 }
 
@@ -571,10 +574,10 @@ async fn sql_open_now(k: f64, now: chrono::DateTime<chrono::Utc>) -> bool {
 }
 
 fn domain_open_now(
-    location: &bikenest_domain::ParkingLocation,
+    location: &bikesnest_domain::ParkingLocation,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    location.hours().status_at(now, location.timezone()) == bikenest_domain::OpenStatus::Open
+    location.hours().status_at(now, location.timezone()) == bikesnest_domain::OpenStatus::Open
 }
 
 /// A UTC instant from a wall-clock reading in `tz`.
@@ -719,9 +722,9 @@ async fn open_now_filter_uses_the_same_rule_as_the_flag(tx: &mut TestTx) {
 /// The real use case over the real reader: it is the use case that turns a
 /// row's sort key into the next cursor, so the round trip is what matters.
 async fn search_use_case() -> SearchParking {
-    let db = bikenest_infrastructure::Db::from_pool(pool().await);
+    let db = bikesnest_infrastructure::Db::from_pool(pool().await);
     SearchParking::new(
-        Box::new(bikenest_infrastructure::FakeGeocoder),
+        Box::new(bikesnest_infrastructure::FakeGeocoder),
         Box::new(reader(db)),
     )
 }
@@ -939,8 +942,8 @@ fn recommendation_score(
     item: &ParkingSummary,
     radius_m: u32,
     now: chrono::DateTime<chrono::Utc>,
-    weights: &bikenest_application::RecommendationConfig,
-    thresholds: &bikenest_domain::FreshnessThresholds,
+    weights: &bikesnest_application::RecommendationConfig,
+    thresholds: &bikesnest_domain::FreshnessThresholds,
 ) -> f64 {
     let distance_score = 1.0 - (item.distance_m / f64::from(radius_m)).clamp(0.0, 1.0);
 
@@ -949,14 +952,14 @@ fn recommendation_score(
 
     let rating_score = item.rating.avg().map(|a| a / 5.0).unwrap_or(0.5);
 
-    let freshness_score = match bikenest_domain::categorize(item.last_verified_at, now, thresholds)
+    let freshness_score = match bikesnest_domain::categorize(item.last_verified_at, now, thresholds)
     {
-        bikenest_domain::FreshnessCategory::Fresh => 1.0,
-        bikenest_domain::FreshnessCategory::RecentlyVerified => 0.75,
-        bikenest_domain::FreshnessCategory::Aging => 0.5,
-        bikenest_domain::FreshnessCategory::Stale => 0.25,
-        bikenest_domain::FreshnessCategory::VeryStale => 0.1,
-        bikenest_domain::FreshnessCategory::Never => 0.5,
+        bikesnest_domain::FreshnessCategory::Fresh => 1.0,
+        bikesnest_domain::FreshnessCategory::RecentlyVerified => 0.75,
+        bikesnest_domain::FreshnessCategory::Aging => 0.5,
+        bikesnest_domain::FreshnessCategory::Stale => 0.25,
+        bikesnest_domain::FreshnessCategory::VeryStale => 0.1,
+        bikesnest_domain::FreshnessCategory::Never => 0.5,
     };
 
     let verification_score = if item.last_verified_at.is_some() {
@@ -985,7 +988,7 @@ async fn the_recommended_sort_key_is_the_documented_score(tx: &mut TestTx) {
     const MARK: &str = "fix-score-agreement";
     cleanup_fixture(MARK).await;
     let now = instant_at("America/Sao_Paulo", 2026, 3, 10, 12, 0);
-    let thresholds = bikenest_domain::DEFAULT_THRESHOLDS;
+    let thresholds = bikesnest_domain::DEFAULT_THRESHOLDS;
     let ages: [Option<i64>; 10] = [
         None,
         Some(0),
@@ -1010,7 +1013,7 @@ async fn the_recommended_sort_key_is_the_documented_score(tx: &mut TestTx) {
         if i % 3 == 1 {
             spot = spot.with_rating(4.25, 4);
         }
-        for code in bikenest_domain::SECURITY_FEATURE_CODES.iter().take(i) {
+        for code in bikesnest_domain::SECURITY_FEATURE_CODES.iter().take(i) {
             spot = spot.with_security(code, 1);
         }
         spot = match age {
@@ -1041,7 +1044,7 @@ async fn the_recommended_sort_key_is_the_documented_score(tx: &mut TestTx) {
         .unwrap();
     assert_eq!(page.items.len(), ages.len(), "every fixture is in range");
 
-    let weights = bikenest_application::DEFAULT_RECOMMENDATION_CONFIG;
+    let weights = bikesnest_application::DEFAULT_RECOMMENDATION_CONFIG;
     for item in &page.items {
         let expected = -recommendation_score(item, 1000, now, &weights, &thresholds);
         let actual = item.sort_key.expect("recommended carries its key");
@@ -1062,7 +1065,7 @@ async fn the_recommended_sort_key_is_the_documented_score(tx: &mut TestTx) {
     cleanup_fixture(MARK).await;
 }
 
-/// `bikenest_is_open_at` (migration 0020) is the SQL half of
+/// `bikesnest_is_open_at` (migration 0020) is the SQL half of
 /// `OpeningHours::status_at`, so the two must answer the same question at the
 /// same instant. "Open now" is one implementation with two callers, not two
 /// implementations — this is what keeps it that way.
@@ -1117,7 +1120,7 @@ async fn the_open_now_function_agrees_with_the_domain(tx: &mut TestTx) {
     let sp = |h, mi| instant_at("America/Sao_Paulo", 2026, 3, 10, h, mi);
     let cases: [(
         &str,
-        &bikenest_domain::ParkingLocation,
+        &bikesnest_domain::ParkingLocation,
         chrono::DateTime<chrono::Utc>,
         bool,
     ); 16] = [
@@ -1167,10 +1170,10 @@ async fn the_open_now_function_agrees_with_the_domain(tx: &mut TestTx) {
     cleanup_fixture(MARK).await;
 }
 
-/// `bikenest_is_open_at` called directly, rather than through the search: the
+/// `bikesnest_is_open_at` called directly, rather than through the search: the
 /// function is the thing under test.
 async fn sql_is_open_at(id: i64, tz: &str, at_instant: chrono::DateTime<chrono::Utc>) -> bool {
-    let row: (bool,) = sqlx::query_as("SELECT bikenest_is_open_at($1, $2, $3)")
+    let row: (bool,) = sqlx::query_as("SELECT bikesnest_is_open_at($1, $2, $3)")
         .bind(id)
         .bind(tz)
         .bind(at_instant)
@@ -1200,7 +1203,7 @@ async fn in_bounds_returns_the_envelope_only_and_measures_from_its_centre(tx: &m
     at(20.0, 300.0)
         .with_fixture_tag(MARK)
         .with_name("Inside 300m")
-        .with_cost(bikenest_domain::Cost::Paid { price: None })
+        .with_cost(bikesnest_domain::Cost::Paid { price: None })
         .create(&mut *conn)
         .await
         .unwrap();

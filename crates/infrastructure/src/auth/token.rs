@@ -1,7 +1,7 @@
-//! Cryptographically secure token generator (§16/§18): 32 random bytes from
+//! Cryptographically secure token generator: 32 random bytes from
 //! the OS CSPRNG. A trivial real impl, so no fake exists for it.
 
-use bikenest_application::TokenGenerator;
+use bikesnest_application::TokenGenerator;
 use rand::RngCore;
 
 /// Uses `rand::rngs::OsRng` to produce 32 random bytes.

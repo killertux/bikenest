@@ -1,19 +1,19 @@
-//! Integration test for the S3-compatible [`S3ObjectStorage`] (**Ledger #7**),
+//! Integration test for the S3-compatible [`S3ObjectStorage`] (****),
 //! against a real MinIO server (or any S3-compatible target).
 //!
 //! Gated on env so `cargo test` stays green without a storage service. Defaults
 //! target a local MinIO (`docker compose up -d minio minio-init`):
 //! - `S3_TEST_ENDPOINT` (default `http://localhost:9000`)
-//! - `S3_TEST_BUCKET` (default `bikenest`)
+//! - `S3_TEST_BUCKET` (default `bikesnest`)
 //! - `S3_TEST_ACCESS_KEY_ID` / `S3_TEST_SECRET_ACCESS_KEY` (default `minioadmin`)
 //!
 //! Run it live with:
 //! ```bash
-//! cargo test -p bikenest-infrastructure --test s3_object_storage -- --nocapture
+//! cargo test -p bikesnest-infrastructure --test s3_object_storage -- --nocapture
 //! ```
 
-use bikenest_application::ObjectStorage;
-use bikenest_infrastructure::S3ObjectStorage;
+use bikesnest_application::ObjectStorage;
+use bikesnest_infrastructure::S3ObjectStorage;
 use std::time::Duration;
 
 fn env_or(key: &str, default: &str) -> String {
@@ -27,7 +27,7 @@ fn store() -> S3ObjectStorage {
     S3ObjectStorage::new(
         Some(env_or("S3_TEST_ENDPOINT", "http://localhost:9000")),
         env_or("S3_TEST_REGION", "us-east-1"),
-        env_or("S3_TEST_BUCKET", "bikenest"),
+        env_or("S3_TEST_BUCKET", "bikesnest"),
         env_or("S3_TEST_ACCESS_KEY_ID", "minioadmin"),
         env_or("S3_TEST_SECRET_ACCESS_KEY", "minioadmin"),
     )
@@ -46,7 +46,7 @@ async fn put_presign_delete_round_trip() {
     let bytes = b"hello s3";
 
     let stored = s
-        .put(bikenest_application::PutObject {
+        .put(bikesnest_application::PutObject {
             key: key.clone(),
             bytes,
             content_type: "image/jpeg".to_string(),

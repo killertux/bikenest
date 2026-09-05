@@ -11,7 +11,7 @@
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use bikenest_application::Geocoder;
+use bikesnest_application::Geocoder;
 
 use crate::auth::Auth;
 use crate::client_ip::ClientIp;

@@ -5,10 +5,10 @@
 //! are provoked against the real server here. The pure branches (`PoolTimedOut`,
 //! `RowNotFound`, the code table) are unit-tested inside `db_error.rs`.
 
-use bikenest_application::{ContributionError, ReviewRepository};
-use bikenest_domain::{ReviewBody, StarRating, UserId};
-use bikenest_infrastructure::{Db, DbFailure, SqlxReviewRepository, classify};
-use bikenest_test_support::{ParkingBuilder, UserBuilder, db_test, pool};
+use bikesnest_application::{ContributionError, ReviewRepository};
+use bikesnest_domain::{ReviewBody, StarRating, UserId};
+use bikesnest_infrastructure::{Db, DbFailure, SqlxReviewRepository, classify};
+use bikesnest_test_support::{ParkingBuilder, UserBuilder, db_test, pool};
 
 /// Runs `sql` inside the test transaction and returns the failure it produced.
 async fn failure_of(conn: &mut sqlx::PgConnection, sql: &str) -> DbFailure {
@@ -20,7 +20,7 @@ async fn failure_of(conn: &mut sqlx::PgConnection, sql: &str) -> DbFailure {
 }
 
 #[db_test]
-async fn unique_violation_is_a_conflict_with_constraint(tx: &mut bikenest_test_support::TestTx) {
+async fn unique_violation_is_a_conflict_with_constraint(tx: &mut bikesnest_test_support::TestTx) {
     UserBuilder::new()
         .with_email("db-error-dup@example.com")
         .create(tx.executor())
@@ -44,7 +44,7 @@ async fn unique_violation_is_a_conflict_with_constraint(tx: &mut bikenest_test_s
 }
 
 #[db_test]
-async fn check_violation_is_invalid_with_constraint(tx: &mut bikenest_test_support::TestTx) {
+async fn check_violation_is_invalid_with_constraint(tx: &mut bikesnest_test_support::TestTx) {
     let location = ParkingBuilder::new()
         .create(tx.executor())
         .await
@@ -66,7 +66,7 @@ async fn check_violation_is_invalid_with_constraint(tx: &mut bikenest_test_suppo
 }
 
 #[db_test]
-async fn foreign_key_violation_is_invalid(tx: &mut bikenest_test_support::TestTx) {
+async fn foreign_key_violation_is_invalid(tx: &mut bikesnest_test_support::TestTx) {
     let failure = failure_of(
         tx.executor(),
         "INSERT INTO favorite (user_id, location_id) VALUES (-1, -1)",
@@ -82,7 +82,7 @@ async fn foreign_key_violation_is_invalid(tx: &mut bikenest_test_support::TestTx
 }
 
 #[db_test]
-async fn statement_timeout_is_unavailable(tx: &mut bikenest_test_support::TestTx) {
+async fn statement_timeout_is_unavailable(tx: &mut bikesnest_test_support::TestTx) {
     // 57014 query_canceled. `SET LOCAL` scopes the timeout to this transaction,
     // which the harness rolls back.
     sqlx::query("SET LOCAL statement_timeout = '50ms'")
@@ -101,7 +101,7 @@ async fn statement_timeout_is_unavailable(tx: &mut bikenest_test_support::TestTx
 /// The write repos run on pool connections, so this uses a location id that
 /// cannot exist — nothing is written and there is nothing to clean up.
 #[db_test]
-async fn repository_maps_a_rejected_write_off_internal(_tx: &mut bikenest_test_support::TestTx) {
+async fn repository_maps_a_rejected_write_off_internal(_tx: &mut bikesnest_test_support::TestTx) {
     let repo = SqlxReviewRepository::new(Db::from_pool(pool().await));
     let body = ReviewBody::new("Plenty of racks, always free.").expect("valid body");
 

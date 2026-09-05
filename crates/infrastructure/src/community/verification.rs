@@ -1,18 +1,18 @@
-//! SQL-backed verification repository (plans/m3-community.md §6).
+//! SQL-backed verification repository.
 //!
-//! Records existence / attribute / parked-here signals (§39/§41). Aggregation
+//! Records existence / attribute / parked-here signals. Aggregation
 //! uses the latest signal per user (`DISTINCT ON`); `parked_here` signals carry
 //! an `expires_at` (now + 90 days) and are never surfaced publicly.
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     AttributeSummary, ContributionError, NewVerification, VerificationRepository,
 };
-use bikenest_domain::{ExistenceResult, ExistenceSignal, UserId};
+use bikesnest_domain::{ExistenceResult, ExistenceSignal, UserId};
 use chrono::{DateTime, Utc};
 
-/// Parked-here retention (recommended §41 default).
+/// Parked-here retention (recommended default).
 const PARKED_HERE_RETENTION_DAYS: i64 = 90;
 
 pub struct SqlxVerificationRepository {

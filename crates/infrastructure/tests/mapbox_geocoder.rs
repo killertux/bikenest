@@ -1,15 +1,15 @@
-//! Live integration test for the Mapbox geocoder (**Ledger #2**).
+//! Live integration test for the Mapbox geocoder (****).
 //!
 //! The network-dependent test is **gated on `MAPBOX_TEST_TOKEN`**: when it is
 //! unset the test is skipped (logged, still passes), so the default `cargo test`
 //! run stays green with no credentials. Run it live with:
 //!
 //! ```bash
-//! MAPBOX_TEST_TOKEN=pk.xxxx cargo test -p bikenest-infrastructure --test mapbox_geocoder -- --nocapture
+//! MAPBOX_TEST_TOKEN=pk.xxxx cargo test -p bikesnest-infrastructure --test mapbox_geocoder -- --nocapture
 //! ```
 
-use bikenest_application::Geocoder;
-use bikenest_infrastructure::MapboxGeocoder;
+use bikesnest_application::Geocoder;
+use bikesnest_infrastructure::MapboxGeocoder;
 
 fn token() -> Option<String> {
     std::env::var("MAPBOX_TEST_TOKEN")

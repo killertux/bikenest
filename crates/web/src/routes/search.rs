@@ -4,7 +4,7 @@
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use bikenest_application::SearchInput;
+use bikesnest_application::SearchInput;
 
 use crate::auth::Auth;
 use crate::client_ip::ClientIp;
@@ -229,12 +229,12 @@ pub(crate) async fn search(
             )
             .await
         }
-        Err(bikenest_application::SearchError::MissingDestination) => {
+        Err(bikesnest_application::SearchError::MissingDestination) => {
             results_notice(tr, "search.missing")
         }
         // Geocoder outage / rate-limit / bad token → graceful "can't reach the
         // geocoder" page, not a 500 (a hosted provider is a soft dependency).
-        Err(bikenest_application::SearchError::Geocode(_)) => {
+        Err(bikesnest_application::SearchError::Geocode(_)) => {
             results_notice(tr, "search.geocode_unavailable")
         }
         Err(_) => return internal_error(&headers, &state.map, &auth, tr),
@@ -281,8 +281,8 @@ async fn browse(
             .await;
             render_search(state, tr, auth, params, results, is_htmx, StatusCode::OK)
         }
-        Err(bikenest_application::SearchError::InvalidBounds) => notice("search.browse.invalid"),
-        Err(bikenest_application::SearchError::BoundsNotPaginated) => {
+        Err(bikesnest_application::SearchError::InvalidBounds) => notice("search.browse.invalid"),
+        Err(bikesnest_application::SearchError::BoundsNotPaginated) => {
             notice("search.browse.no_pages")
         }
         Err(_) => internal_error(headers, &state.map, auth, tr),

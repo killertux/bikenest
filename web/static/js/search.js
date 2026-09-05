@@ -14,9 +14,9 @@
  * "show map" toggle used to do. Two independent triggers cover the reveal, so
  * neither has to be reliable on its own:
  *
- *   #map --bikenest:map-toggle-- (in)  the panel opened/closed (from app.js)
+ *   #map --bikesnest:map-toggle-- (in)  the panel opened/closed (from app.js)
  *   #map --ResizeObserver------- (in)  the panel got a size, however that came
- *   #map --bikenest:map-moved--- (out) the viewer panned/zoomed; here is the box
+ *   #map --bikesnest:map-moved--- (out) the viewer panned/zoomed; here is the box
  *
  * Everything the map draws comes from the server's #search-data island and is
  * written with DOM APIs (`textContent`, `createElement`) — never `innerHTML` —
@@ -215,7 +215,7 @@
       b.getNorth().toFixed(5),
     ].join(",");
     mapEl.dispatchEvent(
-      new CustomEvent("bikenest:map-moved", { bubbles: true, detail: { bbox: bbox } })
+      new CustomEvent("bikesnest:map-moved", { bubbles: true, detail: { bbox: bbox } })
     );
   }
 
@@ -325,7 +325,7 @@
     /* The panel was shown or hidden. `x-show` flips `display` as part of the
      * same task, so the size is only real on the next frame — hence the
      * requestAnimationFrame before building or resizing. */
-    document.addEventListener("bikenest:map-toggle", function (e) {
+    document.addEventListener("bikesnest:map-toggle", function (e) {
       if (!e.detail || !e.detail.open) return;
       nextFrame(function () {
         var mapEl = document.getElementById("map");

@@ -12,7 +12,7 @@
 //! stale write is a no-op instead of clobbering the new claim.
 
 use crate::Db;
-use bikenest_application::JobPayload;
+use bikesnest_application::JobPayload;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 

@@ -1,4 +1,4 @@
-//! Moderation & reporting use cases (REQUIREMENTS §43–§45, §47).
+//! Moderation and reporting use cases.
 //!
 //! Ports + read models + [`ModerationService`]. Infrastructure implements the
 //! ports; the web layer calls the service for every report / moderation action.
@@ -9,7 +9,7 @@ use crate::audit::{AuditEvent, AuditFilter, AuditLog, AuditLogReader, AuditPage}
 use crate::photo::PhotoKind;
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use async_trait::async_trait;
-use bikenest_domain::{
+use bikesnest_domain::{
     ModerationLimits, ModerationState, ProposalKind, ProposalStatus, ProposedChange,
     ReportDescription, ReportOutcome, ReportState, ReportTargetType, Role, UserId,
     is_known_report_reason, reason_allowed_for,
@@ -102,8 +102,8 @@ impl From<crate::audit::AuditError> for ModerationError {
     }
 }
 
-impl From<bikenest_domain::DomainError> for ModerationError {
-    fn from(e: bikenest_domain::DomainError) -> Self {
+impl From<bikesnest_domain::DomainError> for ModerationError {
+    fn from(e: bikesnest_domain::DomainError) -> Self {
         ModerationError::InvalidField(e.to_string())
     }
 }
@@ -393,7 +393,7 @@ pub trait ModerationRepository: Send + Sync {
     async fn hide_review(&self, id: i64, moderator: UserId) -> Result<(), ModerationError>;
     /// `HIDDEN → ACTIVE` a review. 0 rows → `InvalidState`.
     async fn restore_review(&self, id: i64, moderator: UserId) -> Result<(), ModerationError>;
-    /// `APPROVED → HIDDEN` a photo (§44). 0 rows → `InvalidState`.
+    /// `APPROVED → HIDDEN` a photo. 0 rows → `InvalidState`.
     async fn hide_photo(
         &self,
         kind: PhotoKind,
@@ -446,8 +446,8 @@ pub trait ModerationRepository: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Rate-limit keys (§45): `report:create:user:{id}` and `report:create:ip:{ip}`.
-// Limits are configured via [`ModerationLimits`] (Ledger #19). Moderator actions
+// Rate-limit keys: `report:create:user:{id}` and `report:create:ip:{ip}`.
+// Limits are configured via [`ModerationLimits`]. Moderator actions
 // are audited, not rate-limited.
 // ---------------------------------------------------------------------------
 
@@ -465,7 +465,7 @@ pub struct ModerationDeps {
     pub audit_reader: Box<dyn AuditLogReader>,
     pub history: Box<dyn crate::community::ContributionHistoryReader>,
     pub rate_limiter: Box<dyn RateLimiter>,
-    /// Runtime moderation limits (§43, Ledger #19); defaults to the domain constants.
+    /// Runtime moderation limits; defaults to the domain constants.
     pub limits: ModerationLimits,
 }
 
@@ -511,7 +511,7 @@ impl ModerationService {
     }
 
     // -----------------------------------------------------------------------
-    // Reports (§43/§45/§103)
+    // Reports (//)
     // -----------------------------------------------------------------------
 
     /// Submit a report. Gated to *authenticated* users (not verified — reporting
@@ -660,7 +660,7 @@ impl ModerationService {
     }
 
     /// Resolve or dismiss a claimed report. **Server-side self-resolve guard**:
-    /// a user cannot resolve a report they submitted (§43).
+    /// a user cannot resolve a report they submitted.
     pub async fn resolve_report(
         &self,
         moderator: &crate::auth::AuthenticatedUser,
@@ -751,7 +751,7 @@ impl ModerationService {
     }
 
     // -----------------------------------------------------------------------
-    // Content moderation actions (§44)
+    // Content moderation actions
     // -----------------------------------------------------------------------
 
     pub async fn hide_review(
@@ -892,7 +892,7 @@ impl ModerationService {
     }
 
     // -----------------------------------------------------------------------
-    // Proposals (§37/§44)
+    // Proposals
     // -----------------------------------------------------------------------
 
     pub async fn list_pending_proposals(
@@ -978,7 +978,7 @@ impl ModerationService {
     }
 
     // -----------------------------------------------------------------------
-    // Audit viewer (§47) + contribution inspection (§44)
+    // Audit viewer + contribution inspection
     // -----------------------------------------------------------------------
 
     /// The admin audit-log viewer. ADMIN-only.

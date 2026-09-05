@@ -1,11 +1,11 @@
-//! SQL-backed policy reader (plans/m6-privacy.md §6, §70). Versioned legal
-//! pages per locale (§102): `current` (latest effective, not superseded) +
+//! SQL-backed policy reader. Versioned legal
+//! pages per locale: `current` (latest effective, not superseded) +
 //! `history` (all). Locale fallback (→ pt-BR) is the caller's job.
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{PolicyDocument, PolicyReader, PrivacyError};
-use bikenest_domain::PolicyKind;
+use bikesnest_application::{PolicyDocument, PolicyReader, PrivacyError};
+use bikesnest_domain::PolicyKind;
 use chrono::{DateTime, Utc};
 
 pub struct SqlxPolicyReader {

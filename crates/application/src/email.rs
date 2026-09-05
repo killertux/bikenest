@@ -15,7 +15,7 @@
 //!   handler (and the inline queue used when the worker is disabled) calls it.
 
 use async_trait::async_trait;
-use bikenest_domain::LocaleCode;
+use bikesnest_domain::LocaleCode;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
@@ -97,7 +97,7 @@ impl EmailMessage {
 /// `LocaleCode` as its canonical code in JSON, so the domain type needs no
 /// serde dependency and a stored payload stays readable (`"locale":"pt-BR"`).
 mod locale_code {
-    use bikenest_domain::LocaleCode;
+    use bikesnest_domain::LocaleCode;
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(code: &LocaleCode, s: S) -> Result<S::Ok, S::Error> {

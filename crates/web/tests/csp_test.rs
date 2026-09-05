@@ -14,9 +14,9 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use bikenest_infrastructure::{Db, FakeEmailProvider, FakeOAuthProvider, TEST_MEDIA_ORIGIN};
-use bikenest_test_support::{ParkingBuilder, TestPasswordHasher, db_test, pool, test_config};
-use bikenest_web::{RouterDeps, app_router_with};
+use bikesnest_infrastructure::{Db, FakeEmailProvider, FakeOAuthProvider, TEST_MEDIA_ORIGIN};
+use bikesnest_test_support::{ParkingBuilder, TestPasswordHasher, db_test, pool, test_config};
+use bikesnest_web::{RouterDeps, app_router_with};
 use http_body_util::BodyExt;
 use regex::Regex;
 use std::collections::HashMap;
@@ -38,8 +38,8 @@ async fn csp_app() -> (axum::Router, FakeEmailProvider) {
             "sub-oauth-1",
         )),
         hasher: TestPasswordHasher,
-        rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
-        storage: std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
+        rate_limiter: Box::new(bikesnest_infrastructure::InMemoryRateLimiter::new()),
+        storage: std::sync::Arc::new(bikesnest_test_support::TestObjectStorage::new()),
     };
     let app = app_router_with(std::sync::Arc::new(config), db, deps);
     (app, email)
@@ -257,7 +257,7 @@ async fn admin_cookie(app: &axum::Router, email: &FakeEmailProvider, addr: &str)
         .unwrap();
     // See the note on `hold_admin_set_lock_for_process`: the ADMIN set is
     // shared with the tests that assert on "never zero admins".
-    bikenest_test_support::hold_admin_set_lock_for_process(&pool().await).await;
+    bikesnest_test_support::hold_admin_set_lock_for_process(&pool().await).await;
     sqlx::query(
         "INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, 'ADMIN', NULL) ON CONFLICT DO NOTHING",
     )
@@ -275,7 +275,7 @@ async fn admin_cookie(app: &axum::Router, email: &FakeEmailProvider, addr: &str)
     cookie.unwrap().split(';').next().unwrap().to_string()
 }
 
-async fn fixture_location(tx: &mut bikenest_test_support::TestTx, mark: &str, name: &str) -> i64 {
+async fn fixture_location(tx: &mut bikesnest_test_support::TestTx, mark: &str, name: &str) -> i64 {
     sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
         .bind(mark)
         .execute(&pool().await)
@@ -328,7 +328,7 @@ async fn post_multipart(
         .header("Accept-Language", "en")
         .header(
             "content-type",
-            "multipart/form-data; boundary=----bikenestcsp",
+            "multipart/form-data; boundary=----bikesnestcsp",
         )
         .header("cookie", cookie);
     for (k, v) in extra_headers {
@@ -484,7 +484,7 @@ async fn assert_page_has_media_origin_img(app: &axum::Router, uri: &str, cookie:
 // ---------------------------------------------------------------------------
 
 #[db_test]
-async fn csp_allows_every_asset_origin_it_renders(tx: &mut bikenest_test_support::TestTx) {
+async fn csp_allows_every_asset_origin_it_renders(tx: &mut bikesnest_test_support::TestTx) {
     const PHOTO_USER: &str = "csp-photo-uploader@example.com";
     const ADMIN: &str = "csp-admin@example.com";
 
@@ -496,7 +496,7 @@ async fn csp_allows_every_asset_origin_it_renders(tx: &mut bikenest_test_support
     let uploader = verified_cookie(&app, &email, PHOTO_USER).await;
     let (_, page, _) = get_full(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
     let csrf = extract_csrf(&page);
-    let (_, upload_body) = multipart_upload(&tiny_jpeg(), "----bikenestcsp");
+    let (_, upload_body) = multipart_upload(&tiny_jpeg(), "----bikesnestcsp");
     let (up_status, _) = post_multipart(
         &app,
         &format!("/parking/{loc}/photo"),

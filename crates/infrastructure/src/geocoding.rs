@@ -1,13 +1,13 @@
-//! Geocoders (§21, §84): the deterministic dev `FakeGeocoder` and a real
-//! `MapboxGeocoder` (hosted OSM-derived provider, §83). Selected at wiring time
+//! Geocoders: the deterministic dev `FakeGeocoder` and a real
+//! `MapboxGeocoder` (hosted OSM-derived provider). Selected at wiring time
 //! by the parsed `GEOCODER` setting (`fake` | `mapbox`) — swapping providers is
 //! a config change, never a domain/app change.
 //!
-//! **§77 (third-party boundary):** the geocoder is called **server-side** with
+//! ** (third-party boundary):** the geocoder is called **server-side** with
 //! only the free-text destination query. No account identity, cookie, or client
 //! IP is sent to the provider; the query string is the complete payload.
 //!
-//! **§83 — what is documented:** Mapbox Geocoding API (`mapbox.places` forward).
+//! ** — what is documented:** Mapbox Geocoding API (`mapbox.places` forward).
 //! Usage is rate/billing-limited by the Mapbox account (`MAPBOX_ACCESS_TOKEN`;
 //! the free tier is ~100k requests/month). Terms of service + attribution apply
 //! (see docs/provider-transfer-inventory.md —
@@ -20,8 +20,8 @@
 use crate::config::GeocoderConfig;
 
 use async_trait::async_trait;
-use bikenest_application::{GeoHit, GeocodeError, Geocoder};
-use bikenest_domain::GeoPoint;
+use bikesnest_application::{GeoHit, GeocodeError, Geocoder};
+use bikesnest_domain::GeoPoint;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -106,7 +106,7 @@ impl Geocoder for FakeGeocoder {
 }
 
 // ---------------------------------------------------------------------------
-// MapboxGeocoder (production, §83)
+// MapboxGeocoder (production)
 // ---------------------------------------------------------------------------
 
 /// Default Mapbox Geocoding v5 forward endpoint (`mapbox.places`).
@@ -188,7 +188,7 @@ fn parse_mapbox_response(bytes: &[u8]) -> Result<Option<GeoHit>, GeocodeError> {
 }
 
 /// Real Mapbox geocoder. Caller holds the access token; the query is the only
-/// data sent to Mapbox (§77).
+/// data sent to Mapbox.
 pub struct MapboxGeocoder {
     client: reqwest::Client,
     token: String,

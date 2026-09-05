@@ -1,4 +1,4 @@
-//! SQL-backed anonymize-in-place repository (plans/m6-privacy.md §2, §6, §74).
+//! SQL-backed anonymize-in-place repository.
 //!
 //! One transaction: scrub the `users` row (PII → non-attributable), delete
 //! private *activity* + *identity*, and NULL every attribution column on the
@@ -7,8 +7,8 @@
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{AnonymizationReport, AnonymizationRepository, PrivacyError};
-use bikenest_domain::{UserId, anonymized_email};
+use bikesnest_application::{AnonymizationReport, AnonymizationRepository, PrivacyError};
+use bikesnest_domain::{UserId, anonymized_email};
 use chrono::{DateTime, Utc};
 
 pub struct SqlxAnonymizationRepository {

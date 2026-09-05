@@ -1,11 +1,11 @@
-//! SQL-backed privacy-request repository (plans/m6-privacy.md §6).
+//! SQL-backed privacy-request repository.
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     NewPrivacyRequest, PrivacyError, PrivacyRequest, PrivacyRequestRepository,
 };
-use bikenest_domain::{PrivacyRequestKind, PrivacyRequestState, UserId};
+use bikesnest_domain::{PrivacyRequestKind, PrivacyRequestState, UserId};
 use chrono::{DateTime, Utc};
 
 pub struct SqlxPrivacyRequestRepository {

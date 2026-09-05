@@ -2,8 +2,8 @@
 
 > Periods marked **decided 2026-09-03** were set by product (see
 > `docs/legal-review.md`); the technical defaults are encoded in
-> `bikenest_domain::RetentionPolicy` (Ledger #20, env-configurable). The privacy
-> policy (`policies/privacy.*.md` §7) states the same table — keep in sync.
+> `bikesnest_domain::RetentionPolicy` (env-configurable). The privacy
+> policy (`policies/privacy.*.md`) states the same table — keep in sync.
 
 | Record | Period | Mechanism | Status |
 |---|---|---|---|
@@ -15,10 +15,10 @@
 | temporary upload objects / rejected photos | 24 hours | orphan media sweep — **lists the S3 bucket** under `uploads/` and deletes aged, unreferenced keys | technical default |
 | unusable `PENDING_REVIEW` photo rows | 1 hour | reconciliation step: a pending row whose object does not exist is deleted | technical default |
 | **inactive accounts** | **not anonymized automatically** (`INACTIVE_ACCOUNT_ANONYMIZE_AFTER_DAYS=0`) | config-gated step stays off | **decided 2026-09-03** — no reminder e-mail exists; the policy promises advance notice before any inactivity deletion. Revisit if a reminder flow ships |
-| **deleted (anonymized) account shells** | **30 days** (`DELETED_ACCOUNT_PURGE_AFTER_DAYS=30`) | `retention` command hard-deletes `users` rows with `account_state='DELETED' AND deleted_at < now()-30d` | **decided 2026-09-03** — the shell holds no personal data (email is `deleted+<id>@bikenest.invalid`), the purge is housekeeping |
-| **reviews / contributions / photos** | retained as the community dataset, **anonymized** on account deletion | anonymize-in-place (§74) | **decided 2026-09-03** — anonymized rows are no longer personal data. **Review bodies are kept verbatim**, only unattributed — see below |
+| **deleted (anonymized) account shells** | **30 days** (`DELETED_ACCOUNT_PURGE_AFTER_DAYS=30`) | `retention` command hard-deletes `users` rows with `account_state='DELETED' AND deleted_at < now()-30d` | **decided 2026-09-03** — the shell holds no personal data (email is `deleted+<id>@bikesnest.invalid`), the purge is housekeeping |
+| **reviews / contributions / photos** | retained as the community dataset, **anonymized** on account deletion | anonymize-in-place | **decided 2026-09-03** — anonymized rows are no longer personal data. **Review bodies are kept verbatim**, only unattributed — see below |
 | **reports / moderation records** | retained for service safety; reporter anonymized on deletion | anonymize-in-place | **decided 2026-09-03** |
-| **access logs (date/time + IP)** | **6 months** | reverse-proxy / LB log retention (ops — `docs/deployment.md` §7) | **legal obligation** — Marco Civil da Internet art. 15 |
+| **access logs (date/time + IP)** | **6 months** | reverse-proxy / LB log retention (ops — `docs/deployment.md`) | **legal obligation** — Marco Civil da Internet art. 15 |
 | **audit events** | **5 years** | `purge_audit_events_before(ts)` (no automatic step yet — see below). The table is otherwise append-only: a trigger refuses UPDATE and DELETE | **decided 2026-09-03**; aligned with the 5-year limitation period for consumer claims (CDC art. 27) |
 | **privacy requests** | **5 years**, `user_id` nulled on deletion | manual/ops purge | **decided 2026-09-03** |
 | diagnostic logs | ~30 days | log driver | ops default |
@@ -68,7 +68,7 @@ fails if a metadata key appears that has not been classified.
 ## Implementation surface
 
 - The seven technical-default purges plus the 30-day shell purge are driven by
-  `cargo run -p bikenest-web -- retention` (schedule it daily; see
+  `cargo run -p bikesnest-web -- retention` (schedule it daily; see
   `docs/deployment.md`). The same steps run as the recurring `retention`
   background job.
 - The **orphan media sweep** lists the object store, a page at a time, under the

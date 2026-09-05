@@ -14,14 +14,14 @@ on:
 env:
   # Test binaries read TEST_DATABASE_URL (falling back to DATABASE_URL) via
   # crates/test-support — see database_url() in crates/test-support/src/lib.rs.
-  DATABASE_URL: postgres://bikenest:bikenest@localhost:5432/bikenest
-  # bikenest_test_support::test_config() (what every #[db_test] builds its
+  DATABASE_URL: postgres://bikesnest:bikesnest@localhost:5432/bikesnest
+  # bikesnest_test_support::test_config() (what every #[db_test] builds its
   # router from) hardcodes the dev fakes/MinIO origin itself — it does not
   # read these — but Config::from_env() (the production docker job below)
   # does, so they are set here too for consistency with .env.example.
   S3_ENDPOINT: http://localhost:9000
   S3_REGION: us-east-1
-  S3_BUCKET: bikenest
+  S3_BUCKET: bikesnest
   S3_ACCESS_KEY_ID: minioadmin
   S3_SECRET_ACCESS_KEY: minioadmin
   VALKEY_URL: valkey://localhost:6379
@@ -32,7 +32,7 @@ env:
   # actually exercises those adapters instead of quietly passing on nothing.
   S3_TEST_ENDPOINT: http://localhost:9000
   S3_TEST_REGION: us-east-1
-  S3_TEST_BUCKET: bikenest
+  S3_TEST_BUCKET: bikesnest
   S3_TEST_ACCESS_KEY_ID: minioadmin
   S3_TEST_SECRET_ACCESS_KEY: minioadmin
   VALKEY_TEST_URL: valkey://localhost:6379
@@ -46,13 +46,13 @@ jobs:
       postgres:
         image: postgis/postgis:17-3.5
         env:
-          POSTGRES_USER: bikenest
-          POSTGRES_PASSWORD: bikenest
-          POSTGRES_DB: bikenest
+          POSTGRES_USER: bikesnest
+          POSTGRES_PASSWORD: bikesnest
+          POSTGRES_DB: bikesnest
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U bikenest -d bikenest"
+          --health-cmd "pg_isready -U bikesnest -d bikesnest"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
@@ -93,15 +93,15 @@ jobs:
           done
           echo "::error::MinIO did not become healthy in time"
           exit 1
-      - name: Create the bikenest bucket
+      - name: Create the bikesnest bucket
         run: |
           docker run --rm --network host --entrypoint sh minio/mc -c \
-            "mc alias set local http://localhost:9000 minioadmin minioadmin && mc mb --ignore-existing local/bikenest"
+            "mc alias set local http://localhost:9000 minioadmin minioadmin && mc mb --ignore-existing local/bikesnest"
 
       - name: Wait for Postgres
         run: |
           for i in $(seq 1 30); do
-            if pg_isready -h localhost -p 5432 -U bikenest -d bikenest >/dev/null 2>&1; then
+            if pg_isready -h localhost -p 5432 -U bikesnest -d bikesnest >/dev/null 2>&1; then
               echo "Postgres is up"
               exit 0
             fi
@@ -156,20 +156,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: docker build
-        run: docker build -t bikenest .
+        run: docker build -t bikesnest .
       - name: Production startup validation refuses an incomplete environment
         # APP_ENV=production with nothing else set (a bogus, unreachable
         # DATABASE_URL, no S3/email/geocoder/TLS/CSP_MEDIA_HOSTS/ValKey config)
         # must exit non-zero before the container ever tries to reach that
         # database — see Config::validate_for_production() and its call site
         # in crates/web/src/main.rs (runs for `None | Some("serve")`, i.e. the
-        # ENTRYPOINT's tini + bikenest-web with the "serve" CMD arg below).
+        # ENTRYPOINT's tini + bikesnest-web with the "serve" CMD arg below).
         run: |
           set +e
           docker run --rm \
             -e APP_ENV=production \
             -e DATABASE_URL=postgres://x:x@localhost:1/x \
-            bikenest serve
+            bikesnest serve
           status=$?
           set -e
           if [ "$status" -eq 0 ]; then

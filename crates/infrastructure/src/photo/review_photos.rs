@@ -4,7 +4,7 @@
 use crate::Db;
 use crate::parking::search::reader_err;
 use async_trait::async_trait;
-use bikenest_application::{ReaderError, ReviewPhotosReader, StoredPhoto};
+use bikesnest_application::{ReaderError, ReviewPhotosReader, StoredPhoto};
 use std::collections::HashMap;
 
 pub struct SqlxReviewPhotosReader {

@@ -2,11 +2,11 @@
 //! moderation lifecycle, and the compensation/delete behavior.
 
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     AuditLog, Clock, ImageProcessor, ObjectStorage, PhotoDeps, PhotoError, PhotoKind,
     PhotoRepository, PhotoService, PhotoTarget, ProcessedImage, PutObject,
 };
-use bikenest_domain::{
+use bikesnest_domain::{
     AccountState, PhotoDimensions, PhotoLimits, PhotoModerationState, Role, UserEmail, UserId,
 };
 use std::collections::HashMap;
@@ -65,7 +65,7 @@ struct FakeStorage {
 
 #[async_trait]
 impl ObjectStorage for FakeStorage {
-    async fn put(&self, req: PutObject<'_>) -> Result<String, bikenest_application::StorageError> {
+    async fn put(&self, req: PutObject<'_>) -> Result<String, bikesnest_application::StorageError> {
         self.puts.lock().unwrap().push(req.key.clone());
         Ok(req.key)
     }
@@ -73,33 +73,33 @@ impl ObjectStorage for FakeStorage {
         &self,
         key: &str,
         _ttl: Duration,
-    ) -> Result<String, bikenest_application::StorageError> {
+    ) -> Result<String, bikesnest_application::StorageError> {
         Ok(format!("/media/{key}"))
     }
-    async fn delete(&self, key: &str) -> Result<(), bikenest_application::StorageError> {
+    async fn delete(&self, key: &str) -> Result<(), bikesnest_application::StorageError> {
         self.deletes.lock().unwrap().push(key.to_string());
         Ok(())
     }
-    async fn exists(&self, key: &str) -> Result<bool, bikenest_application::StorageError> {
+    async fn exists(&self, key: &str) -> Result<bool, bikesnest_application::StorageError> {
         Ok(self.puts.lock().unwrap().iter().any(|k| k == key))
     }
     async fn list(
         &self,
         prefix: &str,
         _after: Option<&str>,
-    ) -> Result<bikenest_application::ObjectPage, bikenest_application::StorageError> {
+    ) -> Result<bikesnest_application::ObjectPage, bikesnest_application::StorageError> {
         let objects = self
             .puts
             .lock()
             .unwrap()
             .iter()
             .filter(|k| k.starts_with(prefix))
-            .map(|k| bikenest_application::ObjectInfo {
+            .map(|k| bikesnest_application::ObjectInfo {
                 key: k.clone(),
                 last_modified: chrono::Utc::now(),
             })
             .collect();
-        Ok(bikenest_application::ObjectPage {
+        Ok(bikesnest_application::ObjectPage {
             objects,
             next: None,
         })
@@ -142,7 +142,7 @@ impl FakePhotoRepo {
 impl PhotoRepository for FakePhotoRepo {
     async fn insert_pending(
         &self,
-        p: &bikenest_application::NewPendingPhoto,
+        p: &bikesnest_application::NewPendingPhoto,
     ) -> Result<i64, PhotoError> {
         let id = self
             .next_id
@@ -166,7 +166,7 @@ impl PhotoRepository for FakePhotoRepo {
     }
     async fn max_position(
         &self,
-        target: bikenest_application::PhotoTarget,
+        target: bikesnest_application::PhotoTarget,
     ) -> Result<i32, PhotoError> {
         let photos = self.photos.lock().unwrap();
         let max = photos
@@ -204,14 +204,14 @@ impl PhotoRepository for FakePhotoRepo {
         id: i64,
         _moderator: UserId,
         _reason: &str,
-    ) -> Result<bikenest_application::RejectedPhoto, PhotoError> {
+    ) -> Result<bikesnest_application::RejectedPhoto, PhotoError> {
         let mut photos = self.photos.lock().unwrap();
         let p = photos.get_mut(&id).ok_or(PhotoError::NotFound)?;
         if p.state != PhotoModerationState::PendingReview {
             return Err(PhotoError::NotPending);
         }
         p.state = PhotoModerationState::Rejected;
-        Ok(bikenest_application::RejectedPhoto {
+        Ok(bikesnest_application::RejectedPhoto {
             storage_key: p.storage_key.clone(),
             thumbnail_key: p.thumbnail_key.clone(),
         })
@@ -220,12 +220,12 @@ impl PhotoRepository for FakePhotoRepo {
         &self,
         _after: Option<(chrono::DateTime<chrono::Utc>, i64)>,
         _limit: i64,
-    ) -> Result<Vec<bikenest_application::PendingPhoto>, PhotoError> {
+    ) -> Result<Vec<bikesnest_application::PendingPhoto>, PhotoError> {
         let photos = self.photos.lock().unwrap();
         Ok(photos
             .values()
             .filter(|p| p.state == PhotoModerationState::PendingReview)
-            .map(|p| bikenest_application::PendingPhoto {
+            .map(|p| bikesnest_application::PendingPhoto {
                 id: p.id,
                 kind: p.kind,
                 parent_id: p.parent_id,
@@ -244,11 +244,11 @@ impl PhotoRepository for FakePhotoRepo {
         &self,
         _kind: PhotoKind,
         id: i64,
-    ) -> Result<Option<bikenest_application::PhotoForModeration>, PhotoError> {
+    ) -> Result<Option<bikesnest_application::PhotoForModeration>, PhotoError> {
         let photos = self.photos.lock().unwrap();
         Ok(photos
             .get(&id)
-            .map(|p| bikenest_application::PhotoForModeration {
+            .map(|p| bikesnest_application::PhotoForModeration {
                 id: p.id,
                 kind: p.kind,
                 parent_id: p.parent_id,
@@ -268,7 +268,7 @@ impl Clock for FakeClock {
 
 /// Deterministic bytes, so the minted upload key is predictable in assertions.
 struct FakeTokens;
-impl bikenest_application::TokenGenerator for FakeTokens {
+impl bikesnest_application::TokenGenerator for FakeTokens {
     fn generate(&self) -> [u8; 32] {
         [0xab; 32]
     }
@@ -282,13 +282,13 @@ struct FakeRate {
     allow: bool,
 }
 #[async_trait]
-impl bikenest_application::RateLimiter for FakeRate {
+impl bikesnest_application::RateLimiter for FakeRate {
     async fn check(
         &self,
         _key: &str,
         _limit: u32,
         _window: Duration,
-    ) -> Result<bool, bikenest_application::RateLimitError> {
+    ) -> Result<bool, bikesnest_application::RateLimitError> {
         Ok(self.allow)
     }
 }
@@ -299,8 +299,8 @@ struct FakeAudit(Arc<Mutex<Vec<String>>>);
 impl AuditLog for FakeAudit {
     async fn record(
         &self,
-        event: bikenest_application::AuditEvent,
-    ) -> Result<(), bikenest_application::AuditError> {
+        event: bikesnest_application::AuditEvent,
+    ) -> Result<(), bikesnest_application::AuditError> {
         self.0.lock().unwrap().push(event.action);
         Ok(())
     }
@@ -310,18 +310,18 @@ impl AuditLog for FakeAudit {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn verified_user() -> bikenest_application::AuthenticatedUser {
+fn verified_user() -> bikesnest_application::AuthenticatedUser {
     authed_user(1, true, vec![])
 }
-fn moderator() -> bikenest_application::AuthenticatedUser {
+fn moderator() -> bikesnest_application::AuthenticatedUser {
     authed_user(2, true, vec![Role::Moderator])
 }
 fn authed_user(
     id: i64,
     verified: bool,
     roles: Vec<Role>,
-) -> bikenest_application::AuthenticatedUser {
-    bikenest_application::AuthenticatedUser {
+) -> bikesnest_application::AuthenticatedUser {
+    bikesnest_application::AuthenticatedUser {
         id: UserId(id),
         email: UserEmail::parse("user@example.com").unwrap(),
         display_name: None,
@@ -410,7 +410,7 @@ async fn upload_rejects_unverified_user() {
 #[tokio::test]
 async fn upload_rejects_over_size_before_processing() {
     let h = harness(FakeImageProcessor::ok());
-    let too_big = vec![0u8; bikenest_domain::MAX_PHOTO_BYTES + 1];
+    let too_big = vec![0u8; bikesnest_domain::MAX_PHOTO_BYTES + 1];
     assert!(matches!(
         h.service
             .upload_photo(
@@ -518,9 +518,9 @@ async fn upload_compensates_the_first_object_when_the_second_put_fails() {
         async fn put(
             &self,
             req: PutObject<'_>,
-        ) -> Result<String, bikenest_application::StorageError> {
+        ) -> Result<String, bikesnest_application::StorageError> {
             if req.key.contains("thumb") {
-                return Err(bikenest_application::StorageError::Unavailable);
+                return Err(bikesnest_application::StorageError::Unavailable);
             }
             self.0.puts.lock().unwrap().push(req.key.clone());
             Ok(req.key)
@@ -529,21 +529,22 @@ async fn upload_compensates_the_first_object_when_the_second_put_fails() {
             &self,
             key: &str,
             _ttl: Duration,
-        ) -> Result<String, bikenest_application::StorageError> {
+        ) -> Result<String, bikesnest_application::StorageError> {
             Ok(format!("/media/{key}"))
         }
-        async fn delete(&self, key: &str) -> Result<(), bikenest_application::StorageError> {
+        async fn delete(&self, key: &str) -> Result<(), bikesnest_application::StorageError> {
             self.0.deletes.lock().unwrap().push(key.to_string());
             Ok(())
         }
-        async fn exists(&self, key: &str) -> Result<bool, bikenest_application::StorageError> {
+        async fn exists(&self, key: &str) -> Result<bool, bikesnest_application::StorageError> {
             self.0.exists(key).await
         }
         async fn list(
             &self,
             prefix: &str,
             after: Option<&str>,
-        ) -> Result<bikenest_application::ObjectPage, bikenest_application::StorageError> {
+        ) -> Result<bikesnest_application::ObjectPage, bikesnest_application::StorageError>
+        {
             self.0.list(prefix, after).await
         }
     }
@@ -636,13 +637,13 @@ async fn upload_compensates_both_objects_when_the_insert_fails() {
     impl PhotoRepository for FailInsert {
         async fn insert_pending(
             &self,
-            _p: &bikenest_application::NewPendingPhoto,
+            _p: &bikesnest_application::NewPendingPhoto,
         ) -> Result<i64, PhotoError> {
             Err(PhotoError::Conflict)
         }
         async fn max_position(
             &self,
-            target: bikenest_application::PhotoTarget,
+            target: bikesnest_application::PhotoTarget,
         ) -> Result<i32, PhotoError> {
             self.0.max_position(target).await
         }
@@ -664,21 +665,21 @@ async fn upload_compensates_both_objects_when_the_insert_fails() {
             id: i64,
             moderator: UserId,
             reason: &str,
-        ) -> Result<bikenest_application::RejectedPhoto, PhotoError> {
+        ) -> Result<bikesnest_application::RejectedPhoto, PhotoError> {
             self.0.reject(kind, id, moderator, reason).await
         }
         async fn list_pending(
             &self,
             after: Option<(chrono::DateTime<chrono::Utc>, i64)>,
             limit: i64,
-        ) -> Result<Vec<bikenest_application::PendingPhoto>, PhotoError> {
+        ) -> Result<Vec<bikesnest_application::PendingPhoto>, PhotoError> {
             self.0.list_pending(after, limit).await
         }
         async fn get_for_moderation(
             &self,
             kind: PhotoKind,
             id: i64,
-        ) -> Result<Option<bikenest_application::PhotoForModeration>, PhotoError> {
+        ) -> Result<Option<bikesnest_application::PhotoForModeration>, PhotoError> {
             self.0.get_for_moderation(kind, id).await
         }
     }

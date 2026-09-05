@@ -1,10 +1,10 @@
-This Privacy Policy explains how BikeNest handles personal data, in line with Brazil's General Data Protection Law (Law No. 13,709/2018, "LGPD") and, where it applies to people located in the European Economic Area or the United Kingdom, the General Data Protection Regulation (Regulation (EU) 2016/679, "GDPR").
+This Privacy Policy explains how BikesNest handles personal data, in line with Brazil's General Data Protection Law (Law No. 13,709/2018, "LGPD") and, where it applies to people located in the European Economic Area or the United Kingdom, the General Data Protection Regulation (Regulation (EU) 2016/679, "GDPR").
 
-BikeNest is a community map of bicycle parking. Anyone can search without an account. An account is only needed to contribute (adding locations, photos, reviews and verifications).
+BikesNest is a community map of bicycle parking. Anyone can search without an account. An account is only needed to contribute (adding locations, photos, reviews and verifications).
 
 ## 1. Who the controller is
 
-**{{OPERATOR_NAME}}**, Brazilian company registration (CNPJ) No. {{OPERATOR_CNPJ}}, with registered office at {{OPERATOR_ADDRESS}} ("we"), is the controller of the personal data processed on BikeNest.
+**{{OPERATOR_NAME}}**, Brazilian company registration (CNPJ) No. {{OPERATOR_CNPJ}}, with registered office at {{OPERATOR_ADDRESS}} ("we"), is the controller of the personal data processed on BikesNest.
 
 Privacy contact channel and data protection officer (LGPD art. 41): **{{CONTACT_EMAIL}}**.
 
@@ -105,7 +105,7 @@ At any time you may (LGPD art. 18; GDPR arts. 15–22):
 
 ## 10. Minimum age
 
-BikeNest is intended for people aged **18 or older**. We do not knowingly create accounts for anyone under 18; if we become aware of such an account, we will delete it.
+BikesNest is intended for people aged **18 or older**. We do not knowingly create accounts for anyone under 18; if we become aware of such an account, we will delete it.
 
 ## 11. Cookies
 

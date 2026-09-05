@@ -10,8 +10,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use bikenest_application::{DEFAULT_RECOMMENDATION_CONFIG, FreshnessConfig, RecommendationConfig};
-use bikenest_domain::RetentionPolicy;
+use bikesnest_application::{DEFAULT_RECOMMENDATION_CONFIG, FreshnessConfig, RecommendationConfig};
+use bikesnest_domain::RetentionPolicy;
 use chrono::{DateTime, Utc};
 
 // ---------------------------------------------------------------------------
@@ -126,7 +126,7 @@ impl AppEnv {
     }
 }
 
-/// Email backend (§84). The variant carries its credentials, so a provider that
+/// Email backend. The variant carries its credentials, so a provider that
 /// was asked for but cannot be built is a startup error rather than a silent
 /// downgrade to the in-memory fake.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,7 +198,11 @@ impl Default for GeocodeLimits {
 /// endpoint; development defaults to the compose MinIO.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct S3Config {
+    /// Endpoint used for server-side S3 operations.
     pub endpoint: Option<String>,
+    /// Endpoint embedded in presigned URLs returned to browsers. This may
+    /// differ from `endpoint` when the app runs on a private container network.
+    pub public_endpoint: Option<String>,
     pub region: String,
     pub bucket: String,
     pub access_key_id: String,
@@ -316,10 +320,10 @@ impl Default for DbConfig {
 
 /// Photo upload/derivative limits, env-driven with the domain constants as
 /// defaults so operators can tune them without a rebuild.
-pub type PhotoConfig = bikenest_domain::PhotoLimits;
+pub type PhotoConfig = bikesnest_domain::PhotoLimits;
 
 /// Moderation limits, env-driven with the domain constants as defaults.
-pub type ModerationConfig = bikenest_domain::ModerationLimits;
+pub type ModerationConfig = bikesnest_domain::ModerationLimits;
 
 /// Background job queue knobs. Defaults target a single-instance dev worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -431,7 +435,7 @@ pub struct Config {
 const DEV_BASE_URL: &str = "http://localhost:8080";
 const DEV_S3_ENDPOINT: &str = "http://localhost:9000";
 /// The fake origin `Config::for_tests` puts in `security.media_hosts`, and
-/// what `bikenest_test_support::TestObjectStorage::presigned_get` signs its
+/// what `bikesnest_test_support::TestObjectStorage::presigned_get` signs its
 /// URLs under — a single source of truth so the CSP test's rendered-photo
 /// origin and its configured `media_hosts` can never drift apart. Deliberately
 /// not `http://localhost:9000` (the real dev MinIO origin): a test that hits
@@ -439,10 +443,10 @@ const DEV_S3_ENDPOINT: &str = "http://localhost:9000";
 /// dev/MinIO wiring, and `.invalid` (RFC 2606) can never resolve to a real host.
 pub const TEST_MEDIA_ORIGIN: &str = "http://media.test.invalid";
 pub const DEFAULT_S3_REGION: &str = "us-east-1";
-pub const DEFAULT_S3_BUCKET: &str = "bikenest";
+pub const DEFAULT_S3_BUCKET: &str = "bikesnest";
 const DEV_S3_KEY: &str = "minioadmin";
-const DEFAULT_EMAIL_FROM: &str = "no-reply@bikenest.local";
-const DEFAULT_POLICY_VERSION: &str = "2026-09-03.1";
+const DEFAULT_EMAIL_FROM: &str = "no-reply@bikesnest.local";
+const DEFAULT_POLICY_VERSION: &str = "2026-09-05.1";
 /// Compile-time location of the static assets, used only when neither
 /// `STATIC_ROOT` nor a `web/static` directory beside the CWD exists (so
 /// `cargo run` from anywhere in the repo still serves CSS/JS).
@@ -669,6 +673,7 @@ impl Config {
             geocode: GeocodeLimits::default(),
             storage: S3Config {
                 endpoint: Some(DEV_S3_ENDPOINT.to_string()),
+                public_endpoint: Some(DEV_S3_ENDPOINT.to_string()),
                 region: DEFAULT_S3_REGION.to_string(),
                 bucket: DEFAULT_S3_BUCKET.to_string(),
                 access_key_id: DEV_S3_KEY.to_string(),
@@ -689,7 +694,7 @@ impl Config {
             deleted_account_purge_after_days: 0,
             recommendation: DEFAULT_RECOMMENDATION_CONFIG,
             freshness: FreshnessConfig {
-                thresholds: bikenest_domain::DEFAULT_THRESHOLDS,
+                thresholds: bikesnest_domain::DEFAULT_THRESHOLDS,
             },
             retention: RetentionPolicy::default(),
             photo: PhotoConfig::default(),
@@ -845,8 +850,16 @@ fn s3_config(env: &EnvSource<'_>, dev: bool) -> S3Config {
             String::new()
         }
     };
+    let public_endpoint = match env.raw("S3_PUBLIC_ENDPOINT") {
+        Some(raw) => {
+            let trimmed = raw.trim().to_string();
+            (!trimmed.is_empty()).then_some(trimmed)
+        }
+        None => endpoint.clone(),
+    };
     S3Config {
         endpoint,
+        public_endpoint,
         region: env
             .string("S3_REGION")
             .unwrap_or_else(|| DEFAULT_S3_REGION.to_string()),
@@ -936,9 +949,9 @@ fn recommendation_config(env: &EnvSource<'_>) -> RecommendationConfig {
 
 /// Freshness thresholds, from env with the M1 defaults.
 fn freshness_config(env: &EnvSource<'_>) -> FreshnessConfig {
-    let d = bikenest_domain::DEFAULT_THRESHOLDS;
+    let d = bikesnest_domain::DEFAULT_THRESHOLDS;
     FreshnessConfig {
-        thresholds: bikenest_domain::FreshnessThresholds {
+        thresholds: bikesnest_domain::FreshnessThresholds {
             fresh_days: env.i64("FRESHNESS_FRESH_DAYS").unwrap_or(d.fresh_days),
             recent_days: env.i64("FRESHNESS_RECENT_DAYS").unwrap_or(d.recent_days),
             aging_days: env.i64("FRESHNESS_AGING_DAYS").unwrap_or(d.aging_days),
@@ -952,16 +965,16 @@ fn photo_config(env: &EnvSource<'_>) -> PhotoConfig {
     PhotoConfig {
         max_bytes: env
             .usize("PHOTO_MAX_BYTES")
-            .unwrap_or(bikenest_domain::MAX_PHOTO_BYTES),
+            .unwrap_or(bikesnest_domain::MAX_PHOTO_BYTES),
         max_megapixels: env
             .u64("PHOTO_MAX_MEGAPIXELS")
-            .unwrap_or(bikenest_domain::MAX_PHOTO_MEGAPIXELS),
+            .unwrap_or(bikesnest_domain::MAX_PHOTO_MEGAPIXELS),
         thumb_max_side: env
             .u32("PHOTO_THUMB_MAX_SIDE")
-            .unwrap_or(bikenest_domain::THUMBNAIL_MAX_SIDE),
+            .unwrap_or(bikesnest_domain::THUMBNAIL_MAX_SIDE),
         derivative_quality: env
             .u8("PHOTO_DERIVATIVE_QUALITY")
-            .unwrap_or(bikenest_domain::DERIVATIVE_QUALITY),
+            .unwrap_or(bikesnest_domain::DERIVATIVE_QUALITY),
     }
 }
 
@@ -1093,12 +1106,12 @@ mod tests {
     fn admin_seed_credentials_are_parsed_when_present_and_none_when_absent() {
         let c = config(&[
             DB,
-            ("ADMIN_EMAIL", "admin@bikenest.example"),
+            ("ADMIN_EMAIL", "admin@bikesnest.example"),
             ("ADMIN_PASSWORD", "correct horse battery"),
         ]);
         assert_eq!(
             c.admin_seed.email.as_deref(),
-            Some("admin@bikenest.example")
+            Some("admin@bikesnest.example")
         );
         assert_eq!(
             c.admin_seed.password.as_deref(),
@@ -1115,19 +1128,19 @@ mod tests {
         vec![
             DB,
             ("APP_ENV", "production"),
-            ("BASE_URL", "https://bikenest.example"),
+            ("BASE_URL", "https://bikesnest.example"),
             ("TLS_ON", "true"),
             ("S3_ENDPOINT", "https://s3.eu-west-1.amazonaws.com"),
-            ("S3_BUCKET", "bikenest-prod"),
+            ("S3_BUCKET", "bikesnest-prod"),
             ("S3_ACCESS_KEY_ID", "AKIAREAL"),
             ("S3_SECRET_ACCESS_KEY", "s3cret"),
             ("EMAIL_PROVIDER", "resend"),
             ("RESEND_API_KEY", "re_live_key"),
-            ("EMAIL_FROM", "BikeNest <no-reply@bikenest.example>"),
+            ("EMAIL_FROM", "BikesNest <no-reply@bikesnest.example>"),
             ("GEOCODER", "mapbox"),
             ("MAPBOX_ACCESS_TOKEN", "pk.real"),
             ("VALKEY_URL", "valkey://valkey:6379"),
-            ("CSP_MEDIA_HOSTS", "https://cdn.bikenest.example"),
+            ("CSP_MEDIA_HOSTS", "https://cdn.bikesnest.example"),
         ]
     }
 
@@ -1216,9 +1229,27 @@ mod tests {
         assert!(cfg.rate_limiter.fail_open);
         assert_eq!(cfg.base_url, DEV_BASE_URL);
         assert_eq!(cfg.storage.endpoint.as_deref(), Some(DEV_S3_ENDPOINT));
+        assert_eq!(
+            cfg.storage.public_endpoint.as_deref(),
+            Some(DEV_S3_ENDPOINT)
+        );
         assert_eq!(cfg.storage.access_key_id, DEV_S3_KEY);
         assert!(!cfg.google_oauth_enabled);
         assert_eq!(cfg.fakes_in_use().len(), 3);
+    }
+
+    #[test]
+    fn public_s3_endpoint_can_differ_from_the_internal_endpoint() {
+        let cfg = config(&[
+            DB,
+            ("S3_ENDPOINT", "http://minio:9000"),
+            ("S3_PUBLIC_ENDPOINT", "http://localhost:9000"),
+        ]);
+        assert_eq!(cfg.storage.endpoint.as_deref(), Some("http://minio:9000"));
+        assert_eq!(
+            cfg.storage.public_endpoint.as_deref(),
+            Some("http://localhost:9000")
+        );
     }
 
     #[test]
@@ -1278,7 +1309,7 @@ mod tests {
             ("SMTP_USERNAME", "u"),
             ("SMTP_PASSWORD", "p"),
             ("SMTP_TLS", "true"),
-            ("EMAIL_FROM", "BikeNest <no-reply@example>"),
+            ("EMAIL_FROM", "BikesNest <no-reply@example>"),
         ]);
         assert_eq!(
             cfg.email,
@@ -1288,7 +1319,7 @@ mod tests {
                 username: "u".to_string(),
                 password: "p".to_string(),
                 tls: true,
-                from: "BikeNest <no-reply@example>".to_string(),
+                from: "BikesNest <no-reply@example>".to_string(),
             }
         );
     }
@@ -1316,8 +1347,8 @@ mod tests {
 
     #[test]
     fn static_root_is_relocatable() {
-        let cfg = config(&[DB, ("STATIC_ROOT", "/srv/bikenest/static")]);
-        assert_eq!(cfg.static_root, PathBuf::from("/srv/bikenest/static"));
+        let cfg = config(&[DB, ("STATIC_ROOT", "/srv/bikesnest/static")]);
+        assert_eq!(cfg.static_root, PathBuf::from("/srv/bikesnest/static"));
         // Without the knob it still resolves to a directory that exists, so a
         // `cargo run` from the repo serves CSS/JS.
         assert!(config(&[DB]).static_root.is_dir());
@@ -1340,17 +1371,17 @@ mod tests {
     fn freshness_defaults_match_m1() {
         assert_eq!(
             config(&[DB]).freshness.thresholds,
-            bikenest_domain::DEFAULT_THRESHOLDS
+            bikesnest_domain::DEFAULT_THRESHOLDS
         );
     }
 
     #[test]
     fn photo_defaults_match_m4() {
         let got = config(&[DB]).photo;
-        assert_eq!(got.max_bytes, bikenest_domain::MAX_PHOTO_BYTES);
-        assert_eq!(got.max_megapixels, bikenest_domain::MAX_PHOTO_MEGAPIXELS);
-        assert_eq!(got.thumb_max_side, bikenest_domain::THUMBNAIL_MAX_SIDE);
-        assert_eq!(got.derivative_quality, bikenest_domain::DERIVATIVE_QUALITY);
+        assert_eq!(got.max_bytes, bikesnest_domain::MAX_PHOTO_BYTES);
+        assert_eq!(got.max_megapixels, bikesnest_domain::MAX_PHOTO_MEGAPIXELS);
+        assert_eq!(got.thumb_max_side, bikesnest_domain::THUMBNAIL_MAX_SIDE);
+        assert_eq!(got.derivative_quality, bikesnest_domain::DERIVATIVE_QUALITY);
     }
 
     #[test]
@@ -1415,12 +1446,12 @@ mod tests {
         let cfg = config(&[
             DB,
             ("POLICY_VERSION", "2026-10-01.1"),
-            ("POLICY_OPERATOR_NAME", "BikeNest Ltda."),
+            ("POLICY_OPERATOR_NAME", "BikesNest Ltda."),
         ]);
         assert_eq!(cfg.policy.version, "2026-10-01.1");
         assert_eq!(
             cfg.policy.placeholder("OPERATOR_NAME").as_deref(),
-            Some("BikeNest Ltda.")
+            Some("BikesNest Ltda.")
         );
         assert!(cfg.policy.placeholder("CONTACT_EMAIL").is_none());
     }

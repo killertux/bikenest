@@ -1,5 +1,5 @@
-//! Rate-limit stores (**Ledger #6**). Both implementations implement the
-//! [`RateLimiter`] port (§45).
+//! Rate-limit stores (****). Both implementations implement the
+//! [`RateLimiter`] port.
 //!
 //! - [`InMemoryRateLimiter`] — per-process sliding-window counter; fine for
 //!   single-instance dev (M2).
@@ -22,7 +22,7 @@
 use crate::config::{ConfigError, RateLimiterBackend, RateLimiterConfig};
 
 use async_trait::async_trait;
-use bikenest_application::{RateLimitError, RateLimiter};
+use bikesnest_application::{RateLimitError, RateLimiter};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

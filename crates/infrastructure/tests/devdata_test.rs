@@ -3,10 +3,10 @@
 //! drift from the `review` rows that back them, and enough locations sit
 //! within 1 km of the fake-geocoder centroid to reach a second results page.
 
-use bikenest_application::ObjectStorage;
-use bikenest_domain::PhotoLimits;
-use bikenest_infrastructure::{Db, LocalImageProcessor, parking::seed_mock};
-use bikenest_test_support::{TestObjectStorage, db_test, pool};
+use bikesnest_application::ObjectStorage;
+use bikesnest_domain::PhotoLimits;
+use bikesnest_infrastructure::{Db, LocalImageProcessor, parking::seed_mock};
+use bikesnest_test_support::{TestObjectStorage, db_test, pool};
 
 // One test function: `seed_mock` reseeds a *global* singleton dataset (a
 // fixed `seed_key`, not a per-test tag), so two `#[db_test]`s calling it would
@@ -15,7 +15,7 @@ use bikenest_test_support::{TestObjectStorage, db_test, pool};
 // idempotency check — in one function serializes the calls.
 #[db_test]
 async fn seed_mock_backs_photos_ratings_geo_spread_and_is_idempotent(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let db = Db::from_pool(pool().await);
     let storage = TestObjectStorage::new();
@@ -163,13 +163,13 @@ async fn seed_mock_backs_photos_ratings_geo_spread_and_is_idempotent(
     // Community reviewers are found-or-created by email (no seed_key column
     // on `users`), so re-seeding must not duplicate those accounts either.
     let (authors,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM users WHERE lower(email) LIKE '%@seed.bikenest.dev'")
+        sqlx::query_as("SELECT COUNT(*) FROM users WHERE lower(email) LIKE '%@seed.bikesnest.dev'")
             .fetch_one(tx.executor())
             .await
             .expect("count seeded review authors");
     assert_eq!(
         authors,
-        bikenest_infrastructure::devdata::REVIEW_AUTHORS.len() as i64,
+        bikesnest_infrastructure::devdata::REVIEW_AUTHORS.len() as i64,
         "re-seeding must not duplicate community reviewer accounts"
     );
 }

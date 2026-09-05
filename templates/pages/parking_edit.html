@@ -120,7 +120,7 @@
                data-lat="{{ lat }}" data-lon="{{ lon }}"
                data-default-lat="{{ lat }}" data-default-lon="{{ lon }}"
                data-lat-input="move_lat" data-lon-input="move_lon"
-               @bikenest:pin="onPin"></div>
+               @bikesnest:pin="onPin"></div>
           <p class="mt-2 text-xs text-muted">{{ tr.t("form.picked") }}: <span x-text="coords">{{ lat }}, {{ lon }}</span></p>
           <p x-show="message" class="mt-1 text-xs font-medium text-danger" x-text="message"></p>
           <button type="button" @click="useLocation"

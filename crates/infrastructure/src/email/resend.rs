@@ -5,7 +5,7 @@ use crate::config::{ConfigError, EmailConfig};
 
 use crate::email::templates::render;
 use async_trait::async_trait;
-use bikenest_application::{EmailError, EmailMessage, EmailProvider};
+use bikesnest_application::{EmailError, EmailMessage, EmailProvider};
 use reqwest::Client;
 
 #[derive(Clone)]
@@ -85,11 +85,11 @@ impl EmailProvider for ResendEmailProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bikenest_application::EmailKind;
-    use bikenest_domain::LocaleCode;
+    use bikesnest_application::EmailKind;
+    use bikesnest_domain::LocaleCode;
 
     fn provider() -> ResendEmailProvider {
-        ResendEmailProvider::new("test-key", "no-reply@bikenest.local")
+        ResendEmailProvider::new("test-key", "no-reply@bikesnest.local")
     }
 
     #[test]
@@ -98,13 +98,13 @@ mod tests {
             "a@example.com",
             LocaleCode::En,
             EmailKind::VerifyEmail {
-                link: "https://bikenest.test/verify-email?token=t".into(),
+                link: "https://bikesnest.test/verify-email?token=t".into(),
             },
         );
         let p = provider().payload(&msg);
-        assert_eq!(p["from"], "no-reply@bikenest.local");
+        assert_eq!(p["from"], "no-reply@bikesnest.local");
         assert_eq!(p["to"][0], "a@example.com");
-        assert_eq!(p["subject"], "Confirm your BikeNest email");
+        assert_eq!(p["subject"], "Confirm your BikesNest email");
         assert!(p["text"].as_str().unwrap().contains("verify-email?token=t"));
         // Plain text only: there is no HTML template for any kind.
         assert!(p.get("html").is_none());
@@ -116,10 +116,10 @@ mod tests {
             "a@example.com",
             LocaleCode::PtBr,
             EmailKind::VerifyEmail {
-                link: "https://bikenest.test/verify-email?token=t".into(),
+                link: "https://bikesnest.test/verify-email?token=t".into(),
             },
         );
         let p = provider().payload(&msg);
-        assert_eq!(p["subject"], "Confirme seu e-mail no BikeNest");
+        assert_eq!(p["subject"], "Confirme seu e-mail no BikesNest");
     }
 }

@@ -1,7 +1,7 @@
-//! Ports and read models for parking search (REQUIREMENTS §9, §21, §31–§34).
+//! Ports and read models for parking search.
 
 use async_trait::async_trait;
-use bikenest_domain::{Cost, FreshnessThresholds, GeoPoint, ParkingType, Rating};
+use bikesnest_domain::{Cost, FreshnessThresholds, GeoPoint, ParkingType, Rating};
 
 /// A geocoding result for a free-text destination.
 #[derive(Debug, Clone, PartialEq)]
@@ -18,7 +18,7 @@ pub enum GeocodeError {
     Unexpected(String),
 }
 
-/// Port: resolve a destination string to coordinates (§21).
+/// Port: resolve a destination string to coordinates.
 #[async_trait]
 pub trait Geocoder: Send + Sync {
     /// `Ok(None)` when nothing matches the query.
@@ -35,7 +35,7 @@ pub trait Geocoder: Send + Sync {
 /// bounding box, not a bigger circle.
 pub const RADIUS_OPTIONS_M: &[u32] = &[250, 500, 1000, 2000, 5000];
 pub const DEFAULT_RADIUS_M: u32 = 1000;
-/// Page size defaults/limits (§32).
+/// Page size defaults/limits.
 pub const DEFAULT_PAGE_SIZE: usize = 20;
 pub const MAX_PAGE_SIZE: usize = 100;
 
@@ -71,7 +71,7 @@ impl Sort {
     }
 }
 
-/// Cost filter (§33). `Paid` matches any paid location regardless of price.
+/// Cost filter. `Paid` matches any paid location regardless of price.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CostFilter {
     Free,
@@ -100,7 +100,7 @@ impl CostFilter {
     }
 }
 
-/// Structured filters (§33). All optional; all ANDed.
+/// Structured filters. All optional; all ANDed.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Filters {
     pub cost: Option<CostFilter>,
@@ -110,7 +110,7 @@ pub struct Filters {
     pub open_now: bool,
 }
 
-/// Opaque keyset cursor: `(sort_key, id)`, base64-encoded JSON (§32).
+/// Opaque keyset cursor: `(sort_key, id)`, base64-encoded JSON.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cursor {
     pub sort: Sort,
@@ -142,13 +142,13 @@ impl Cursor {
     }
 }
 
-/// Raw, untrusted search input from the web layer (§7: handlers only map
+/// Raw, untrusted search input from the web layer (: handlers only map
 /// HTTP params; business rules live here).
 #[derive(Debug, Clone, Default)]
 pub struct SearchInput {
-    /// Free-text destination (§21). Ignored when explicit coordinates exist.
+    /// Free-text destination. Ignored when explicit coordinates exist.
     pub query: Option<String>,
-    /// Explicit origin (browser geolocation §22, or bookmarked URL).
+    /// Explicit origin (browser geolocation or bookmarked URL).
     pub lat: Option<f64>,
     pub lon: Option<f64>,
     pub radius_m: Option<u32>,
@@ -211,7 +211,7 @@ pub struct SearchRequest {
 }
 
 impl SearchRequest {
-    /// Validates and clamps: radius to the allowlist, page size to §32 limits,
+    /// Validates and clamps: radius to the allowlist, page size to  limits,
     /// type codes, cursor/sort agreement (mismatched cursor → page 1).
     pub fn new(
         origin: GeoPoint,
@@ -243,7 +243,7 @@ impl SearchRequest {
             .security_all
             .iter()
             .map(|c| c.trim().to_string())
-            .filter(|c| bikenest_domain::is_known_security_code(c))
+            .filter(|c| bikesnest_domain::is_known_security_code(c))
             .collect();
         security_all.sort();
         security_all.dedup();
@@ -273,14 +273,14 @@ pub struct ParkingSummary {
     pub parking_type: ParkingType,
     pub cost: Cost,
     pub point: GeoPoint,
-    /// Distance from the search origin, meters (§31).
+    /// Distance from the search origin, in meters.
     pub distance_m: f64,
     /// Codes of security attributes explicitly confirmed present.
     pub security_yes: Vec<String>,
     pub rating: Rating,
     pub last_verified_at: Option<chrono::DateTime<chrono::Utc>>,
     pub timezone: chrono_tz::Tz,
-    /// Computed in SQL from wall-clock hours (§29/§33).
+    /// Computed in SQL from wall-clock hours.
     pub is_open_now: bool,
     /// Object-storage key of the location's primary approved photo, if any.
     /// The web layer resolves this to a presigned URL for the card; `None`
@@ -473,13 +473,13 @@ pub trait SitemapReader: Send + Sync {
     async fn active_parking_ids(&self) -> Result<Vec<i64>, ReaderError>;
 }
 
-/// Port: full aggregate for the details page (§24).
+/// Port: full aggregate for the details page.
 #[async_trait]
 pub trait ParkingDetailsReader: Send + Sync {
     async fn details(
         &self,
         id: i64,
-    ) -> Result<Option<bikenest_domain::ParkingLocation>, ReaderError>;
+    ) -> Result<Option<bikesnest_domain::ParkingLocation>, ReaderError>;
 }
 
 /// A stored photo reference: an opaque object-storage key plus its content type
@@ -525,7 +525,7 @@ pub struct FreshnessConfig {
 impl Default for FreshnessConfig {
     fn default() -> Self {
         Self {
-            thresholds: bikenest_domain::DEFAULT_THRESHOLDS,
+            thresholds: bikesnest_domain::DEFAULT_THRESHOLDS,
         }
     }
 }

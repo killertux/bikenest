@@ -4,9 +4,9 @@
 use axum::extract::{Form, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use bikenest_application::{ModerationError, ProposalField, ProposalOverride};
-use bikenest_domain::{ReportOutcome, ReportState, ReportTargetType, Role};
-use bikenest_infrastructure::MapConfig;
+use bikesnest_application::{ModerationError, ProposalField, ProposalOverride};
+use bikesnest_domain::{ReportOutcome, ReportState, ReportTargetType, Role};
+use bikesnest_infrastructure::MapConfig;
 
 use crate::auth::Auth;
 use crate::client_ip::ClientIp;

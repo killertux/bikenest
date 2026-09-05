@@ -103,7 +103,7 @@
         {% endif %}
       </section>
 
-      <!-- Add a photo (M4 §30): verified users only; holds for review. -->
+      <!-- Add a photo: verified users only; holds for review. -->
       {% if can_contribute %}
       <section class="mt-8">
         <h2 class="font-display text-lg font-semibold">{{ tr.t("photo.upload.title") }}</h2>
@@ -167,7 +167,7 @@
         </table>
       </section>
 
-      <!-- Security attributes (yes / no / unknown, §28) -->
+      <!-- Security attributes (yes / no / unknown) -->
       <section class="mt-8">
         <h2 class="font-display text-lg font-semibold">{{ tr.t("details.security.title") }}</h2>
         <ul class="mt-3 grid gap-2 sm:grid-cols-2 text-sm">
@@ -185,7 +185,7 @@
         </ul>
       </section>
 
-      <!-- Community signals: recommended because (P3 §105) -->
+      <!-- Community signals: recommended because -->
       {% if !reasons.is_empty() %}
         <section class="mt-8">
           <h2 class="font-display text-lg font-semibold">{{ tr.t("details.recommend.title") }}</h2>
@@ -272,7 +272,7 @@
         {% endif %}
       </div>
 
-      <!-- Confidence (M3 §106) -->
+      <!-- Confidence -->
       <div class="rounded-2xl border border-border bg-surface p-4 text-sm">
         <div class="flex items-center justify-between gap-2">
           <h2 class="font-display text-sm font-semibold">{{ tr.t("confidence.title") }}</h2>
@@ -293,7 +293,7 @@
         <p class="mt-2 text-xs text-muted">{{ tr.t("confidence.parked_here_count") }} <span class="font-medium text-fg">{{ parked_here_count }}</span></p>
       </div>
 
-      <!-- Verification panel (M3 §39) -->
+      <!-- Verification panel -->
       <div class="rounded-2xl border border-border bg-surface p-4 text-sm">
         <h2 class="font-display text-sm font-semibold">{{ tr.t("verification.title") }}</h2>
         <div id="verification-panel" class="mt-2" aria-live="polite" tabindex="-1">
@@ -355,13 +355,13 @@
 </div>
 
 {% if is_authenticated %}
-<!-- Report modal. Any `bikenest:report` event sets the target; the modal
+<!-- Report modal. Any `bikesnest:report` event sets the target; the modal
      posts to /reports with the resolved target_type + target_id. The feedback
      lands *inside* the modal (it used to target a container at the bottom of
      the page, off-screen behind the overlay) and the modal closes only on a
      2xx — see `reportModal.afterRequest` in web/static/js/app.js. -->
 <div x-data="reportModal" data-report-id="{{ id }}"
-     @bikenest:report.window="openReport"
+     @bikesnest:report.window="openReport"
      @keydown.escape.window="close">
   <div x-show="open" x-cloak
        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"

@@ -1,4 +1,4 @@
-//! Integration tests for the ValKey rate limiter (**Ledger #6**).
+//! Integration tests for the ValKey rate limiter (****).
 //!
 //! These connect to a real ValKey/Redis server, so they are **gated on env**:
 //! - `VALKEY_TEST_URL` — single-node URL (e.g. `valkey://localhost:6379`).
@@ -11,11 +11,11 @@
 //! ```bash
 //! VALKEY_TEST_URL=valkey://localhost:6379 \
 //! VALKEY_TEST_CLUSTER_URLS=valkey://localhost:7001,valkey://localhost:7002,valkey://localhost:7003 \
-//! cargo test -p bikenest-infrastructure --test valkey_rate_limit -- --nocapture
+//! cargo test -p bikesnest-infrastructure --test valkey_rate_limit -- --nocapture
 //! ```
 
-use bikenest_application::RateLimiter;
-use bikenest_infrastructure::ValKeyRateLimiter;
+use bikesnest_application::RateLimiter;
+use bikesnest_infrastructure::ValKeyRateLimiter;
 use std::time::Duration;
 
 /// A per-run unique key prefix so tests don't accumulate across re-runs

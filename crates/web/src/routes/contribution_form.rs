@@ -19,7 +19,7 @@
 //! definitive "no" — which the domain, the store and the details page all
 //! support — could never be recorded.
 
-use bikenest_domain::{
+use bikesnest_domain::{
     OpeningHours, SECURITY_FEATURE_CODES, SecurityFeature, SecurityState, TimeRange,
 };
 use chrono::Timelike;
@@ -640,7 +640,7 @@ pub fn security_editor_vm(tr: Translator, states: &[String; 8]) -> Vec<TriStateV
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bikenest_domain::hms;
+    use bikesnest_domain::hms;
 
     fn day(state: &str, r1: (&str, &str), r2: (&str, &str)) -> DayFields {
         DayFields::new(state, r1.0, r1.1, r2.0, r2.1)

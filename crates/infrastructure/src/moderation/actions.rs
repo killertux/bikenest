@@ -1,15 +1,15 @@
-//! SQL-backed moderation repository (plans/m5-moderation.md §6): target-existence
+//! SQL-backed moderation repository: target-existence
 //! checks, content flip actions (hide/restore), parking invalidation/restore and
 //! proposal apply/reject. All writes that touch the location bump `version` and
-//! append a ``moderation`` revision (§107) in one transaction.
+//! append a ``moderation`` revision in one transaction.
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     ModerationError, ModerationRepository, PhotoKind, Proposal, ProposalApplication,
     ReportTargetPreview, review_excerpt,
 };
-use bikenest_domain::{
+use bikesnest_domain::{
     ModerationState, ProposalKind, ProposalPayload, ProposalStatus, ReportTargetType, UserId,
 };
 use chrono::{DateTime, Utc};
@@ -53,7 +53,7 @@ impl SqlxModerationRepository {
     /// concurrently-running tests commit to these same global tables.
     pub async fn queue_counts_on<'e, E>(
         executor: E,
-    ) -> Result<bikenest_application::QueueCounts, ModerationError>
+    ) -> Result<bikesnest_application::QueueCounts, ModerationError>
     where
         E: sqlx::PgExecutor<'e>,
     {
@@ -61,7 +61,7 @@ impl SqlxModerationRepository {
             .fetch_one(executor)
             .await
             .map_err(|e| db_err("moderation.queue_counts", e))?;
-        Ok(bikenest_application::QueueCounts {
+        Ok(bikesnest_application::QueueCounts {
             pending_photos: row.pending_photos,
             open_reports: row.open_reports,
             under_review_reports: row.under_review_reports,
@@ -445,7 +445,7 @@ impl ModerationRepository for SqlxModerationRepository {
 
     /// The M1 dashboard's four counts in one statement (four scalar
     /// subqueries), instead of loading and `.len()`-ing four full lists.
-    async fn queue_counts(&self) -> Result<bikenest_application::QueueCounts, ModerationError> {
+    async fn queue_counts(&self) -> Result<bikesnest_application::QueueCounts, ModerationError> {
         Self::queue_counts_on(self.db.pool()).await
     }
 
@@ -703,7 +703,7 @@ async fn insert_revision(
 }
 
 /// Read an after-state snapshot (name/address/type/cost/point/tz/hours/security/
-/// moderation_state) for a location row — following the §107 snapshot shape —
+/// moderation_state) for a location row — following the  snapshot shape —
 /// reading the unchanged hours + security rows from the open transaction.
 async fn snapshot_with(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,

@@ -1,4 +1,4 @@
-//! M6 privacy infrastructure tests (plans/m6-privacy.md §12): the export
+//! Privacy infrastructure tests: the export
 //! payload (no secrets), the single-use download token, the anonymize-in-place
 //! transaction, the retention purge statements, and the policy reader.
 //!
@@ -6,16 +6,16 @@
 //! transaction and committed with `commit_fixture` so the repos (which read /
 //! write through shared pool connections) can see them.
 
-use bikenest_application::{
+use bikesnest_application::{
     AnonymizationRepository, AuditEvent, AuditLog, ExportAccount, ExportPayload, ExportRepository,
     NewExport, PolicyReader, PrivacyError, RetentionRepository,
 };
-use bikenest_domain::{PolicyKind, RetentionPolicy, UserId};
-use bikenest_infrastructure::{
+use bikesnest_domain::{PolicyKind, RetentionPolicy, UserId};
+use bikesnest_infrastructure::{
     AUDIT_METADATA_KEYS, Db, SqlxAnonymizationRepository, SqlxAuditLog, SqlxExportRepository,
     SqlxPolicyReader, SqlxRetentionRepository,
 };
-use bikenest_test_support::{ParkingBuilder, TestObjectStorage, UserBuilder, db_test, pool};
+use bikesnest_test_support::{ParkingBuilder, TestObjectStorage, UserBuilder, db_test, pool};
 use chrono::{DateTime, Duration, Utc};
 
 async fn db() -> Db {
@@ -61,7 +61,7 @@ fn af(t: impl AsRef<str>) -> DateTime<Utc> {
 }
 
 #[db_test]
-async fn export_payload_excludes_credential_hash(tx: &mut bikenest_test_support::TestTx) {
+async fn export_payload_excludes_credential_hash(tx: &mut bikesnest_test_support::TestTx) {
     let user = UserBuilder::new()
         .with_email("m6exp@example.com")
         .create(tx.executor())
@@ -97,7 +97,7 @@ async fn export_payload_excludes_credential_hash(tx: &mut bikenest_test_support:
 
 #[db_test]
 async fn export_consume_download_is_single_use_and_distinguishes_errors(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let user = UserBuilder::new()
         .with_email("m6exp2@example.com")
@@ -168,7 +168,7 @@ async fn export_consume_download_is_single_use_and_distinguishes_errors(
 }
 
 #[db_test]
-async fn anonymize_scrubs_identity_and_nulls_attribution(tx: &mut bikenest_test_support::TestTx) {
+async fn anonymize_scrubs_identity_and_nulls_attribution(tx: &mut bikesnest_test_support::TestTx) {
     // A location to hang content off of.
     let loc = ParkingBuilder::new()
         .with_name("M6 Anon")
@@ -267,7 +267,7 @@ async fn anonymize_scrubs_identity_and_nulls_attribution(tx: &mut bikenest_test_
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(email, format!("deleted+{uid}@bikenest.invalid"));
+    assert_eq!(email, format!("deleted+{uid}@bikesnest.invalid"));
     assert_eq!(state, "DELETED");
     assert!(deleted_at.is_some());
 
@@ -364,7 +364,7 @@ async fn anonymize_scrubs_identity_and_nulls_attribution(tx: &mut bikenest_test_
 }
 
 #[db_test]
-async fn retention_purges_only_expired(tx: &mut bikenest_test_support::TestTx) {
+async fn retention_purges_only_expired(tx: &mut bikesnest_test_support::TestTx) {
     // Everything here is scoped to this fixture's own rows. `purge_expired_*`
     // is a table-wide DELETE and the suite shares one database, so asserting
     // its *global* return count made the test depend on what every other test
@@ -430,7 +430,7 @@ async fn retention_purges_only_expired(tx: &mut bikenest_test_support::TestTx) {
 }
 
 #[db_test]
-async fn policy_reader_current_and_history(tx: &mut bikenest_test_support::TestTx) {
+async fn policy_reader_current_and_history(tx: &mut bikesnest_test_support::TestTx) {
     let reader = SqlxPolicyReader::new(db().await);
     let old = "m6-test-old";
     let new = "m6-test-new";
@@ -482,7 +482,7 @@ async fn policy_reader_current_and_history(tx: &mut bikenest_test_support::TestT
 }
 
 #[db_test]
-async fn export_payload_is_one_repeatable_read_snapshot(tx: &mut bikenest_test_support::TestTx) {
+async fn export_payload_is_one_repeatable_read_snapshot(tx: &mut bikesnest_test_support::TestTx) {
     // The export used to read its ~13 sections one at a time on the pool, so a
     // concurrent edit could land between two of them and the document would
     // describe a state that never existed. Now every section reads inside one
@@ -585,7 +585,7 @@ async fn export_payload_is_one_repeatable_read_snapshot(tx: &mut bikenest_test_s
 }
 
 #[db_test]
-async fn export_batches_revisions_across_many_reviews(tx: &mut bikenest_test_support::TestTx) {
+async fn export_batches_revisions_across_many_reviews(tx: &mut bikesnest_test_support::TestTx) {
     // Every review's history comes back, from one query rather than N.
     const TAG: &str = "wp16-revbatch";
     drop_users(&pool().await, &["wp16-revbatch@example.com"], &[]).await;
@@ -650,7 +650,7 @@ async fn export_batches_revisions_across_many_reviews(tx: &mut bikenest_test_sup
 }
 
 #[db_test]
-async fn anonymize_nulls_roles_this_account_granted(tx: &mut bikenest_test_support::TestTx) {
+async fn anonymize_nulls_roles_this_account_granted(tx: &mut bikesnest_test_support::TestTx) {
     const EMAILS: [&str; 4] = [
         "wp16-granter@example.com",
         "wp16-grantee@example.com",
@@ -727,7 +727,7 @@ async fn anonymize_nulls_roles_this_account_granted(tx: &mut bikenest_test_suppo
 }
 
 #[db_test]
-async fn anonymize_rewrites_an_email_shaped_audit_target(tx: &mut bikenest_test_support::TestTx) {
+async fn anonymize_rewrites_an_email_shaped_audit_target(tx: &mut bikesnest_test_support::TestTx) {
     // A failed login is audited with the attempted *email* as `target_id`
     // (there is no user id to record). Nulling `actor_user_id` never reaches
     // it, so erasure has to rewrite it.
@@ -764,15 +764,15 @@ async fn anonymize_rewrites_an_email_shaped_audit_target(tx: &mut bikenest_test_
     let rewritten: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM audit_events WHERE target_type = 'user' AND target_id = $1",
     )
-    .bind(format!("deleted+{uid}@bikenest.invalid"))
+    .bind(format!("deleted+{uid}@bikesnest.invalid"))
     .fetch_one(&pool)
     .await
     .unwrap();
     assert!(rewritten >= 1, "the row must survive, anonymized");
 
-    let mut audit_tx = bikenest_test_support::audit_mutation_tx(&pool).await;
+    let mut audit_tx = bikesnest_test_support::audit_mutation_tx(&pool).await;
     sqlx::query("DELETE FROM audit_events WHERE target_id = $1")
-        .bind(format!("deleted+{uid}@bikenest.invalid"))
+        .bind(format!("deleted+{uid}@bikesnest.invalid"))
         .execute(&mut *audit_tx)
         .await
         .unwrap();
@@ -786,7 +786,7 @@ async fn anonymize_rewrites_an_email_shaped_audit_target(tx: &mut bikenest_test_
 
 #[db_test]
 async fn audit_metadata_keys_stay_within_the_classified_allowlist(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     // `privacy/anonymize.rs` does not scrub `audit_events.metadata`, and that
     // is only correct while no key there can hold personal data. This is the
@@ -817,7 +817,7 @@ async fn audit_metadata_keys_stay_within_the_classified_allowlist(
 ///
 /// "Never zero administrators" is a whole-table property, so a test that needs
 /// a known admin count has to own the table for its duration — see
-/// [`bikenest_test_support::admin_set_lock`].
+/// [`bikesnest_test_support::admin_set_lock`].
 ///
 /// **A test using this must not assert until it has restored.** The park is a
 /// committed DELETE (the repository reads it from another connection, so it
@@ -894,7 +894,7 @@ async fn drop_users(pool: &sqlx::PgPool, emails: &[&str], ids: &[i64]) {
 
 #[db_test]
 async fn concurrent_deletions_of_the_last_two_admins_cannot_both_win(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     // Two admins deleting their accounts at the same moment used to both read
     // "another admin exists" and both proceed, leaving the system with none.
@@ -909,7 +909,7 @@ async fn concurrent_deletions_of_the_last_two_admins_cannot_both_win(
     let pool = pool().await;
     drop_users(&pool, &refs, &[]).await;
 
-    let mut admin_lock = bikenest_test_support::admin_set_lock(&pool).await;
+    let mut admin_lock = bikesnest_test_support::admin_set_lock(&pool).await;
     let parked = park_admin_set(&pool, &mut admin_lock).await;
 
     let mut ids = Vec::new();
@@ -964,7 +964,7 @@ async fn concurrent_deletions_of_the_last_two_admins_cannot_both_win(
 }
 
 #[db_test]
-async fn audit_events_are_append_only_but_purgeable(tx: &mut bikenest_test_support::TestTx) {
+async fn audit_events_are_append_only_but_purgeable(tx: &mut bikesnest_test_support::TestTx) {
     let _ = tx;
     let pool = pool().await;
     // Dated in the distant past so the purge below can name a cutoff that
@@ -1022,7 +1022,7 @@ async fn audit_events_are_append_only_but_purgeable(tx: &mut bikenest_test_suppo
 
 #[db_test]
 async fn orphan_sweep_deletes_aged_unreferenced_objects_only(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     const TAG: &str = "wp16-orphan";
     drop_locations(&pool().await, TAG).await;
@@ -1081,7 +1081,7 @@ async fn orphan_sweep_deletes_aged_unreferenced_objects_only(
 }
 
 #[db_test]
-async fn orphan_sweep_propagates_a_listing_failure(tx: &mut bikenest_test_support::TestTx) {
+async fn orphan_sweep_propagates_a_listing_failure(tx: &mut bikesnest_test_support::TestTx) {
     // The old filesystem sweep swallowed its `read_dir` error and returned
     // `Ok(0)`, so media retention was a silent no-op for as long as the
     // directory was missing. A store that cannot be listed must be an error.
@@ -1097,7 +1097,7 @@ async fn orphan_sweep_propagates_a_listing_failure(tx: &mut bikenest_test_suppor
 }
 
 #[db_test]
-async fn reconcile_drops_aged_pending_rows_with_no_object(tx: &mut bikenest_test_support::TestTx) {
+async fn reconcile_drops_aged_pending_rows_with_no_object(tx: &mut bikesnest_test_support::TestTx) {
     const TAG: &str = "wp16-reconcile";
     drop_locations(&pool().await, TAG).await;
     let loc = ParkingBuilder::new()
@@ -1155,7 +1155,7 @@ async fn reconcile_drops_aged_pending_rows_with_no_object(tx: &mut bikenest_test
 
 #[db_test]
 async fn revoke_role_guarded_serializes_on_the_locked_admin_rows(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     // The guard and the delete are one transaction that takes `FOR UPDATE` on
     // the ADMIN rows. That is what makes the count it reads true at the moment
@@ -1166,8 +1166,8 @@ async fn revoke_role_guarded_serializes_on_the_locked_admin_rows(
     // (The refusal itself — "this would leave zero admins" — is asserted
     // deterministically in `crates/application/tests/auth_test.rs`, where the
     // admin set is the test's own.)
-    use bikenest_application::AccountRepository;
-    use bikenest_domain::Role;
+    use bikesnest_application::AccountRepository;
+    use bikesnest_domain::Role;
 
     const EMAILS: [&str; 2] = [
         "wp16-forupdate-a@example.com",
@@ -1179,7 +1179,7 @@ async fn revoke_role_guarded_serializes_on_the_locked_admin_rows(
     // This test adds ADMIN rows, so it takes the same shared lock as the tests
     // that need to own the set — otherwise the two perturb each other's counts
     // and deadlock on the row locks they each take.
-    let admin_lock = bikenest_test_support::admin_set_lock(&pool).await;
+    let admin_lock = bikesnest_test_support::admin_set_lock(&pool).await;
 
     let mut ids = Vec::new();
     for email in EMAILS {
@@ -1209,7 +1209,7 @@ async fn revoke_role_guarded_serializes_on_the_locked_admin_rows(
             .await
             .unwrap();
 
-    let repo = bikenest_infrastructure::SqlxAccountRepository::new(db().await);
+    let repo = bikesnest_infrastructure::SqlxAccountRepository::new(db().await);
     let target = UserId(ids[0]);
     let mut revoke = Box::pin(repo.revoke_role_guarded(target, Role::Admin));
     let blocked = tokio::time::timeout(std::time::Duration::from_millis(300), &mut revoke).await;
@@ -1234,14 +1234,16 @@ async fn revoke_role_guarded_serializes_on_the_locked_admin_rows(
 }
 
 #[db_test]
-async fn revoke_role_guarded_refuses_the_sole_admin_in_sql(tx: &mut bikenest_test_support::TestTx) {
+async fn revoke_role_guarded_refuses_the_sole_admin_in_sql(
+    tx: &mut bikesnest_test_support::TestTx,
+) {
     // The refusal itself, against the real SQL rather than a hand-written
     // mirror of it. Without this, weakening the repository's own comparison
     // (`admins.len() <= 1` → `<= 0`) passes the whole suite: the FOR UPDATE
     // test deliberately seeds a second admin so the revoke is never refused,
     // and the application-level test drives a fake repository.
-    use bikenest_application::AccountRepository;
-    use bikenest_domain::Role;
+    use bikesnest_application::AccountRepository;
+    use bikesnest_domain::Role;
 
     let sole_email = unique_tag("wp16-sql-sole") + "@example.com";
     let second_email = unique_tag("wp16-sql-second") + "@example.com";
@@ -1249,7 +1251,7 @@ async fn revoke_role_guarded_refuses_the_sole_admin_in_sql(tx: &mut bikenest_tes
     let pool = pool().await;
     drop_users(&pool, &refs, &[]).await;
 
-    let mut admin_lock = bikenest_test_support::admin_set_lock(&pool).await;
+    let mut admin_lock = bikesnest_test_support::admin_set_lock(&pool).await;
     let parked = park_admin_set(&pool, &mut admin_lock).await;
 
     let sole = UserBuilder::new()
@@ -1272,7 +1274,7 @@ async fn revoke_role_guarded_refuses_the_sole_admin_in_sql(tx: &mut bikenest_tes
             .unwrap();
     }
 
-    let repo = bikenest_infrastructure::SqlxAccountRepository::new(db().await);
+    let repo = bikesnest_infrastructure::SqlxAccountRepository::new(db().await);
     let count_role = async |user_id: i64, role: &str| -> i64 {
         sqlx::query_scalar("SELECT count(*) FROM user_roles WHERE user_id = $1 AND role = $2")
             .bind(user_id)
@@ -1318,7 +1320,7 @@ async fn revoke_role_guarded_refuses_the_sole_admin_in_sql(tx: &mut bikenest_tes
     assert!(
         matches!(
             refusal,
-            Err(bikenest_application::AuthError::RefuseAdminSelfRevoke)
+            Err(bikesnest_application::AuthError::RefuseAdminSelfRevoke)
         ),
         "demoting the only admin must be refused, got {refusal:?}"
     );

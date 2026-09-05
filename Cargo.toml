@@ -16,14 +16,14 @@ edition = "2024"
 license = "UNLICENSED"
 
 [workspace.dependencies]
-bikenest-domain = { path = "crates/domain" }
-bikenest-application = { path = "crates/application" }
+bikesnest-domain = { path = "crates/domain" }
+bikesnest-application = { path = "crates/application" }
 # The message catalog: shared by the web layer (pages) and infrastructure
 # (transactional emails rendered in the recipient's stored locale).
-bikenest-i18n = { path = "crates/i18n" }
-bikenest-infrastructure = { path = "crates/infrastructure" }
-bikenest-web = { path = "crates/web" }
-bikenest-test-support = { path = "crates/test-support" }
+bikesnest-i18n = { path = "crates/i18n" }
+bikesnest-infrastructure = { path = "crates/infrastructure" }
+bikesnest-web = { path = "crates/web" }
+bikesnest-test-support = { path = "crates/test-support" }
 
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # `CancellationToken`: one shutdown signal shared by the HTTP server and the

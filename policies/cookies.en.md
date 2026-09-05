@@ -1,4 +1,4 @@
-This Cookie Policy describes the cookies BikeNest stores in your browser. It complements the [Privacy Policy](/privacy).
+This Cookie Policy describes the cookies BikesNest stores in your browser. It complements the [Privacy Policy](/privacy).
 
 ## What we use
 
@@ -14,7 +14,7 @@ We do not use local storage (*localStorage*) or other tracking technologies.
 
 ## Third-party cookies
 
-We do not let third parties set cookies on BikeNest. When the map is displayed, your browser loads map tiles directly from the map provider; that request carries your IP address to the provider, but it does not set cookies through our site. See "Who we share data with" in the [Privacy Policy](/privacy).
+We do not let third parties set cookies on BikesNest. When the map is displayed, your browser loads map tiles directly from the map provider; that request carries your IP address to the provider, but it does not set cookies through our site. See "Who we share data with" in the [Privacy Policy](/privacy).
 
 ## How to control cookies
 

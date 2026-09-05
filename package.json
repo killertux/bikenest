@@ -1,5 +1,5 @@
 {
-  "name": "bikenest-frontend",
+  "name": "bikesnest-frontend",
   "private": true,
   "scripts": {
     "build:css": "tailwindcss -i web/static/css/input.css -o web/static/css/app.css --minify",

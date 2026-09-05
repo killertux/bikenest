@@ -1,24 +1,24 @@
-//! SQL-backed parking contribution repository (plans/m3-community.md §6).
+//! SQL-backed parking contribution repository.
 //!
 //! Owns the create / optimistic-edit / proposal / history / duplicate-detection
 //! writes. Sensitive changes (move / removal) become `PENDING` proposals; only
-//! reversible fields are applied directly (§37/§100/§107).
+//! reversible fields are applied directly (//).
 
 use crate::Db;
 use crate::parking::SqlxParkingDetailsReader;
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     ContributionError, DuplicateCandidate, NewParkingLocation, NewProposal,
     ParkingContributionRepository, ParkingDetailsReader, ParkingEdit,
 };
-use bikenest_domain::{
+use bikesnest_domain::{
     ChangeKind, Cost, GeoPoint, OpeningHours, ParkingLocation, RevisionSummary, SecurityFeature,
     SecurityState, UserId,
 };
 
-/// Advisory duplicate radius (metres, §36).
+/// Advisory duplicate radius in metres.
 const DUPLICATE_RADIUS_M: u32 = 500;
-/// Similarity threshold above which a candidate is flagged (§36).
+/// Similarity threshold above which a candidate is flagged.
 const DUPLICATE_SIMILARITY: f64 = 0.55;
 
 /// Returned `id` for the INSERT...RETURNING writes (compile-time checked).
@@ -180,7 +180,7 @@ impl ParkingContributionRepository for SqlxParkingContributionRepository {
         let Some((current_version, current_state)) = guard else {
             return Err(ContributionError::NotFound);
         };
-        if current_state != bikenest_domain::ModerationState::Active.as_code() {
+        if current_state != bikesnest_domain::ModerationState::Active.as_code() {
             return Err(ContributionError::LocationNotActive);
         }
         if current_version != expected_version {
@@ -397,10 +397,10 @@ fn db_err(context: &'static str, e: sqlx::Error) -> ContributionError {
     crate::db_error::classify_and_log(context, e).into()
 }
 
-fn map_reader_err_to_contribution(e: bikenest_application::ReaderError) -> ContributionError {
+fn map_reader_err_to_contribution(e: bikesnest_application::ReaderError) -> ContributionError {
     match e {
-        bikenest_application::ReaderError::Unavailable => ContributionError::Unavailable,
-        bikenest_application::ReaderError::Unexpected(_) => ContributionError::Internal,
+        bikesnest_application::ReaderError::Unavailable => ContributionError::Unavailable,
+        bikesnest_application::ReaderError::Unexpected(_) => ContributionError::Internal,
     }
 }
 
@@ -475,7 +475,7 @@ async fn write_hours(
 
 /// Upserts a location's security attributes in one statement (was: one
 /// DELETE plus N single-row INSERTs). Every call writes all codes in
-/// [`bikenest_domain::SECURITY_FEATURE_CODES`] (defaulting to `Unknown` for
+/// [`bikesnest_domain::SECURITY_FEATURE_CODES`] (defaulting to `Unknown` for
 /// codes the caller didn't set) — the row set per location never shrinks —
 /// so `ON CONFLICT … DO UPDATE` is equivalent to delete-then-insert with no
 /// separate DELETE needed.
@@ -484,7 +484,7 @@ async fn write_security(
     id: i64,
     security: &[SecurityFeature],
 ) -> Result<(), ContributionError> {
-    let codes: Vec<&'static str> = bikenest_domain::SECURITY_FEATURE_CODES.to_vec();
+    let codes: Vec<&'static str> = bikesnest_domain::SECURITY_FEATURE_CODES.to_vec();
     let states: Vec<i16> = codes
         .iter()
         .map(|code| {
@@ -549,7 +549,7 @@ async fn insert_revision(
     Ok(())
 }
 
-/// Snapshot of the tracked fields AFTER a change (§107). Used for history and
+/// Snapshot of the tracked fields AFTER a change. Used for history and
 /// stateless reconstruction at any version.
 #[allow(clippy::too_many_arguments)]
 fn snapshot_of(
@@ -606,7 +606,7 @@ fn snapshot_of(
 }
 
 // ---------------------------------------------------------------------------
-// Duplicate name-similarity (§36): case/diacritic-folded trigram Jaccard,
+// Duplicate name-similarity: case/diacritic-folded trigram Jaccard,
 // blended with address token overlap. Pure, deterministic, no external crate.
 // ---------------------------------------------------------------------------
 

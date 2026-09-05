@@ -1,4 +1,4 @@
-//! S3-compatible object storage (**Ledger #7**).
+//! S3-compatible object storage.
 //!
 //! Replaces the local-disk store with an S3-compatible backend (AWS S3,
 //! Cloudflare R2, Backblaze B2, MinIO). Writes go to the bucket; object reads
@@ -19,7 +19,7 @@ use aws_sdk_s3::Config;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_smithy_types::byte_stream::ByteStream;
-use bikenest_application::{ObjectInfo, ObjectPage, ObjectStorage, PutObject, StorageError};
+use bikesnest_application::{ObjectInfo, ObjectPage, ObjectStorage, PutObject, StorageError};
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,6 +32,7 @@ const LIST_PAGE_KEYS: i32 = 1000;
 #[derive(Clone)]
 pub struct S3ObjectStorage {
     client: aws_sdk_s3::Client,
+    presign_client: aws_sdk_s3::Client,
     bucket: String,
 }
 
@@ -43,27 +44,69 @@ impl S3ObjectStorage {
         access_key: String,
         secret_key: String,
     ) -> Self {
+        Self::new_with_public_endpoint(
+            endpoint.clone(),
+            endpoint,
+            region,
+            bucket,
+            access_key,
+            secret_key,
+        )
+    }
+
+    /// Construct storage with separate endpoints for private server traffic
+    /// and browser-facing presigned URLs.
+    pub fn new_with_public_endpoint(
+        endpoint: Option<String>,
+        public_endpoint: Option<String>,
+        region: String,
+        bucket: String,
+        access_key: String,
+        secret_key: String,
+    ) -> Self {
+        let client = Self::client(
+            endpoint,
+            region.clone(),
+            access_key.clone(),
+            secret_key.clone(),
+        );
+        let presign_client = Self::client(public_endpoint, region, access_key, secret_key);
+        Self {
+            client,
+            presign_client,
+            bucket,
+        }
+    }
+
+    fn client(
+        endpoint: Option<String>,
+        region: String,
+        access_key: String,
+        secret_key: String,
+    ) -> aws_sdk_s3::Client {
         let mut builder = Config::builder()
             .behavior_version(BehaviorVersion::latest())
             .region(Region::new(region))
             .credentials_provider(Credentials::new(
-                access_key, secret_key, None, None, "bikenest",
+                access_key,
+                secret_key,
+                None,
+                None,
+                "bikesnest",
             ))
             .force_path_style(true);
         if let Some(endpoint) = endpoint {
             builder = builder.endpoint_url(endpoint);
         }
-        Self {
-            client: aws_sdk_s3::Client::from_conf(builder.build()),
-            bucket,
-        }
+        aws_sdk_s3::Client::from_conf(builder.build())
     }
 
     /// Build from the parsed `S3_*` configuration. Construction is local (no
     /// network), so this cannot fail.
     pub fn from_config(config: &S3Config) -> Self {
-        Self::new(
+        Self::new_with_public_endpoint(
             config.endpoint.clone(),
+            config.public_endpoint.clone(),
             config.region.clone(),
             config.bucket.clone(),
             config.access_key_id.clone(),
@@ -95,7 +138,7 @@ impl ObjectStorage for S3ObjectStorage {
         let cfg = PresigningConfig::expires_in(ttl)
             .map_err(|e| StorageError::Unexpected(format!("presign config: {e}")))?;
         let request = self
-            .client
+            .presign_client
             .get_object()
             .bucket(&self.bucket)
             .key(key)
@@ -251,11 +294,30 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn presigned_get_uses_the_browser_facing_endpoint() {
+        let s = S3ObjectStorage::new_with_public_endpoint(
+            Some("http://minio:9000".to_string()),
+            Some("http://localhost:9000".to_string()),
+            "us-east-1".to_string(),
+            "bikesnest".to_string(),
+            "minioadmin".to_string(),
+            "minioadmin".to_string(),
+        );
+        let url = s
+            .presigned_get("seed/x.jpg", Duration::from_secs(60))
+            .await
+            .expect("presigning does not contact either endpoint");
+        assert!(url.starts_with("http://localhost:9000/bikesnest/seed/x.jpg?"));
+        assert!(!url.contains("minio:9000"));
+    }
+
     #[test]
     fn development_config_targets_the_compose_minio() {
         let s3 = Config::for_tests("postgres://localhost/x").storage;
         assert_eq!(s3.bucket, crate::config::DEFAULT_S3_BUCKET);
         assert_eq!(s3.region, crate::config::DEFAULT_S3_REGION);
         assert_eq!(s3.endpoint.as_deref(), Some("http://localhost:9000"));
+        assert_eq!(s3.public_endpoint.as_deref(), Some("http://localhost:9000"));
     }
 }

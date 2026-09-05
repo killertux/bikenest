@@ -8,7 +8,7 @@ use crate::config::{ConfigError, EmailConfig};
 
 use crate::email::templates::render;
 use async_trait::async_trait;
-use bikenest_application::{EmailError, EmailMessage, EmailProvider};
+use bikesnest_application::{EmailError, EmailMessage, EmailProvider};
 use lettre::message::Mailbox;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
@@ -118,8 +118,8 @@ impl EmailProvider for SmtpEmailProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bikenest_application::EmailKind;
-    use bikenest_domain::LocaleCode;
+    use bikesnest_application::EmailKind;
+    use bikesnest_domain::LocaleCode;
 
     fn provider() -> SmtpEmailProvider {
         SmtpEmailProvider::new(
@@ -127,7 +127,7 @@ mod tests {
             1025,
             String::new(),
             String::new(),
-            "no-reply@bikenest.local".into(),
+            "no-reply@bikesnest.local".into(),
             false,
         )
         .unwrap()
@@ -141,7 +141,7 @@ mod tests {
             "x@example.com",
             LocaleCode::PtBr,
             EmailKind::ResetPassword {
-                link: "https://bikenest.test/password-reset/new?token=t".into(),
+                link: "https://bikesnest.test/password-reset/new?token=t".into(),
             },
         );
         let built = provider().message(&message).unwrap();

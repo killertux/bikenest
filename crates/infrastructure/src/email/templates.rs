@@ -1,4 +1,4 @@
-//! Transactional email rendering (REQUIREMENTS §12).
+//! Transactional email rendering.
 //!
 //! Subject and body come from the shared message catalog, in the *recipient's*
 //! locale — the one stored on their account, not the one of whichever request
@@ -6,12 +6,12 @@
 //! `email.send` job). No user-facing string is written here or in the
 //! application layer; this module only picks the keys and fills placeholders.
 
-use bikenest_application::{EmailKind, EmailMessage};
-use bikenest_i18n::{Locale, Translator};
+use bikesnest_application::{EmailKind, EmailMessage};
+use bikesnest_i18n::{Locale, Translator};
 
 /// The product name, interpolated into `{app}`. One place, so a rename does
 /// not need six catalog edits.
-pub const APP_NAME: &str = "BikeNest";
+pub const APP_NAME: &str = "BikesNest";
 
 /// A message ready for a relay/ESP: plain text only. Both providers send
 /// text/plain; an HTML alternative would be a second template per key with no
@@ -56,7 +56,7 @@ fn fill(template: &str, link: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bikenest_domain::LocaleCode;
+    use bikesnest_domain::LocaleCode;
 
     const LINK: &str = "http://localhost:8080/verify-email?token=abc-123";
 
@@ -105,26 +105,26 @@ mod tests {
             LocaleCode::PtBr,
             EmailKind::VerifyEmail { link: LINK.into() },
         ));
-        assert_eq!(pt.subject, "Confirme seu e-mail no BikeNest");
-        assert!(pt.text.starts_with("Bem-vindo ao BikeNest"));
+        assert_eq!(pt.subject, "Confirme seu e-mail no BikesNest");
+        assert!(pt.text.starts_with("Bem-vindo ao BikesNest"));
 
         let en = render(&msg(
             LocaleCode::En,
             EmailKind::VerifyEmail { link: LINK.into() },
         ));
-        assert_eq!(en.subject, "Confirm your BikeNest email");
-        assert!(en.text.starts_with("Welcome to BikeNest"));
+        assert_eq!(en.subject, "Confirm your BikesNest email");
+        assert!(en.text.starts_with("Welcome to BikesNest"));
 
         let pt_reset = render(&msg(
             LocaleCode::PtBr,
             EmailKind::ResetPassword { link: LINK.into() },
         ));
-        assert_eq!(pt_reset.subject, "Redefina sua senha do BikeNest");
+        assert_eq!(pt_reset.subject, "Redefina sua senha do BikesNest");
         let en_reset = render(&msg(
             LocaleCode::En,
             EmailKind::ResetPassword { link: LINK.into() },
         ));
-        assert_eq!(en_reset.subject, "Reset your BikeNest password");
+        assert_eq!(en_reset.subject, "Reset your BikesNest password");
     }
 
     /// The three kinds must be distinguishable in the inbox: a password reset

@@ -1,6 +1,6 @@
-//! Offline, deterministic timezone resolution (plans/m3-community.md §6).
+//! Offline, deterministic timezone resolution.
 //!
-//! **Ledger #16:** this is a coarse bounding-box resolver, not a polygon
+//! **:** this is a coarse bounding-box resolver, not a polygon
 //! dataset. It is deliberately small and offline (the "no network in the hot
 //! path" rule) and returns a deterministic IANA zone for any point. M7 may
 //! replace it with a real geocoder reverse-timezone; the offline resolver stays
@@ -8,8 +8,8 @@
 //! country-capital table, then to the app's home zone.
 
 use async_trait::async_trait;
-use bikenest_application::{TimezoneError, TimezoneResolver};
-use bikenest_domain::GeoPoint;
+use bikesnest_application::{TimezoneError, TimezoneResolver};
+use bikesnest_domain::GeoPoint;
 
 /// A bounding box in WGS84 (lat_min, lat_max, lon_min, lon_max).
 type BBox = (f64, f64, f64, f64);
@@ -22,7 +22,7 @@ type BBox = (f64, f64, f64, f64);
 /// This is deliberately **not** a polygon dataset (that would bundle hundreds
 /// of MB and needs a real polygon engine). It is a bounded, offline,
 /// deterministic approximation — any point inside a box maps to that box's
-/// zone. Points between boxes fall back to [`DEFAULT_ZONE`]. **Ledger #16**: a
+/// zone. Points between boxes fall back to [`DEFAULT_ZONE`]. ****: a
 /// real online/polygon reverse-timezone replaces or refines this in M7; keep
 /// this as the offline fallback.
 const ZONES: &[(BBox, chrono_tz::Tz)] = &[
@@ -101,7 +101,7 @@ const CAPITALS: &[(BBox, chrono_tz::Tz)] = &[
 
 /// The deterministic fallback zone for any point not covered above. Chosen as
 /// a widely-recognized zone, but note it may be wrong for a genuinely
-/// uncovered point — the offline box table is an approximation (Ledger #16).
+/// uncovered point — the offline box table is an approximation.
 const DEFAULT_ZONE: chrono_tz::Tz = chrono_tz::Tz::Etc__UTC;
 
 #[derive(Debug, Clone, Copy)]

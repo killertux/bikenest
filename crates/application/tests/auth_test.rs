@@ -1,14 +1,14 @@
 //! Application-layer auth tests with in-memory fakes. These validate the
-//! security-critical use-case behaviour without a database (§45/§47/§19).
+//! security-critical use-case behaviour without a database (//).
 
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     AccountRepository, AuditEvent, AuditLog, AuthError, AuthService, AuthenticatedUser, Clock,
     EmailError, EmailKind, EmailMessage, EmailQueue, IdentityRecord, LoginOutcome, NewAccount,
     OAuthProvider, PasswordHasher, RateLimitError, RateLimiter, Session, SessionStore,
     TokenGenerator, TokenStore, UserActivity, UserSearch,
 };
-use bikenest_domain::{
+use bikesnest_domain::{
     AccountState, AuthenticationProvider, CsrfToken, LocaleCode, Password, ProviderIdentity, Role,
     SessionId, User, UserEmail, UserId, VerificationToken,
 };
@@ -575,7 +575,7 @@ impl RateLimiter for FakeRate {
 struct FakeAudit;
 #[async_trait]
 impl AuditLog for FakeAudit {
-    async fn record(&self, _event: AuditEvent) -> Result<(), bikenest_application::AuditError> {
+    async fn record(&self, _event: AuditEvent) -> Result<(), bikesnest_application::AuditError> {
         Ok(())
     }
 }
@@ -645,7 +645,7 @@ async fn login_bad_credentials_and_suspended_share_one_generic_error() {
         let err = auth.login("1.1.1.1", "a@example.com", "wrong").await;
         assert_eq!(err.unwrap_err(), AuthError::InvalidCredentials);
     }
-    // Suspended, RIGHT password → same generic error (no leak §45).
+    // Suspended, RIGHT password → same generic error (no leak).
     {
         let db = Arc::new(Mutex::new(FakeDb::default()));
         let id = seed_active_user(&db, "a@example.com", "correct-horse");
@@ -699,10 +699,7 @@ async fn register_email_taken_is_leak_free() {
             LocaleCode::PtBr,
         )
         .await;
-    assert!(
-        result.is_ok(),
-        "taken email returns Ok (no-existence-leak §45)"
-    );
+    assert!(result.is_ok(), "taken email returns Ok (no-existence-leak)");
     // No verification email was sent.
     assert!(db.lock().unwrap().emails.is_empty());
     // No new user was created.
@@ -990,7 +987,7 @@ async fn the_repository_owns_the_last_admin_guard_not_the_service() {
     // which two concurrent revokes could both pass. Calling the repository
     // directly proves the guard has moved and cannot be bypassed by any other
     // caller of the port.
-    use bikenest_application::AccountRepository;
+    use bikesnest_application::AccountRepository;
 
     let db = Arc::new(Mutex::new(FakeDb::default()));
     let a = seed_user_with_roles(&db, "guard-a@example.com", vec![Role::User, Role::Admin]);

@@ -1,15 +1,15 @@
 //! M4 photo infrastructure tests: the image processor (EXIF strip/orientation,
 //! format gate, thumbnailing) and the SQL photo repository.
 
-use bikenest_application::{
+use bikesnest_application::{
     ImageProcessor, NewPendingPhoto, ParkingPhotoReader, PhotoError, PhotoKind, PhotoRepository,
     PhotoTarget,
 };
-use bikenest_domain::{PhotoDimensions, PhotoLimits, UserId};
-use bikenest_infrastructure::{
+use bikesnest_domain::{PhotoDimensions, PhotoLimits, UserId};
+use bikesnest_infrastructure::{
     Db, LocalImageProcessor, SqlxParkingPhotoReader, SqlxPhotoRepository,
 };
-use bikenest_test_support::{ParkingBuilder, UserBuilder, db_test, pool};
+use bikesnest_test_support::{ParkingBuilder, UserBuilder, db_test, pool};
 
 async fn db() -> Db {
     Db::from_pool(pool().await)
@@ -207,7 +207,7 @@ struct Fixture {
 }
 
 /// Create a committed user + moderator + location and return ids for cleanup.
-async fn fresh_fixture(tx: &mut bikenest_test_support::TestTx, email: &str) -> Fixture {
+async fn fresh_fixture(tx: &mut bikesnest_test_support::TestTx, email: &str) -> Fixture {
     let pool = pool().await;
     let tag = format!("photo-fixture-{email}");
     let moderator_email = format!("mod-{email}");
@@ -287,7 +287,7 @@ fn new_pending(fx: &Fixture, slug: &str) -> NewPendingPhoto {
 }
 
 #[db_test]
-async fn repo_insert_pending_creates_pending_row(tx: &mut bikenest_test_support::TestTx) {
+async fn repo_insert_pending_creates_pending_row(tx: &mut bikesnest_test_support::TestTx) {
     let fx = fresh_fixture(tx, "photo-insert@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
     let id = repo
@@ -321,7 +321,7 @@ async fn repo_insert_pending_creates_pending_row(tx: &mut bikenest_test_support:
 }
 
 #[db_test]
-async fn parking_photo_rejects_an_empty_storage_key(tx: &mut bikenest_test_support::TestTx) {
+async fn parking_photo_rejects_an_empty_storage_key(tx: &mut bikesnest_test_support::TestTx) {
     // The CHECK from migration 0019: a row that names no object is not
     // representable, so the crash window the old two-step insert had cannot
     // reopen without this test failing.
@@ -350,7 +350,7 @@ async fn parking_photo_rejects_an_empty_storage_key(tx: &mut bikenest_test_suppo
 }
 
 #[db_test]
-async fn repo_approve_sets_position_and_reviewer(tx: &mut bikenest_test_support::TestTx) {
+async fn repo_approve_sets_position_and_reviewer(tx: &mut bikesnest_test_support::TestTx) {
     let fx = fresh_fixture(tx, "photo-approve@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
     let id = repo
@@ -384,7 +384,7 @@ async fn repo_approve_sets_position_and_reviewer(tx: &mut bikenest_test_support:
 }
 
 #[db_test]
-async fn repo_reject_records_reason_and_returns_keys(tx: &mut bikenest_test_support::TestTx) {
+async fn repo_reject_records_reason_and_returns_keys(tx: &mut bikesnest_test_support::TestTx) {
     let fx = fresh_fixture(tx, "photo-reject@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
     let id = repo
@@ -418,7 +418,7 @@ async fn repo_reject_records_reason_and_returns_keys(tx: &mut bikenest_test_supp
 }
 
 #[db_test]
-async fn repo_max_position_and_queue_ordering(tx: &mut bikenest_test_support::TestTx) {
+async fn repo_max_position_and_queue_ordering(tx: &mut bikesnest_test_support::TestTx) {
     let fx = fresh_fixture(tx, "photo-order@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
 
@@ -457,7 +457,7 @@ async fn repo_max_position_and_queue_ordering(tx: &mut bikenest_test_support::Te
 }
 
 #[db_test]
-async fn reader_returns_thumbnail_key_for_processed_photo(tx: &mut bikenest_test_support::TestTx) {
+async fn reader_returns_thumbnail_key_for_processed_photo(tx: &mut bikesnest_test_support::TestTx) {
     let fx = fresh_fixture(tx, "photo-thumb@example.com").await;
     let repo = SqlxPhotoRepository::new(db().await);
     let id = repo

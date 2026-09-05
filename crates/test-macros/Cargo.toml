@@ -1,5 +1,5 @@
 [package]
-name = "bikenest-test-macros"
+name = "bikesnest-test-macros"
 version.workspace = true
 edition.workspace = true
 

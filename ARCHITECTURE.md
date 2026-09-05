@@ -1,11 +1,11 @@
 # Architecture
 
-How BikeNest is put together. Written for both humans and coding agents — the
+How BikesNest is put together. Written for both humans and coding agents — the
 "why" is here; the "where" index is in [`AGENTS.md`](AGENTS.md).
 
 ## Overview
 
-BikeNest is a server-rendered Rust web application: axum serves HTML rendered
+BikesNest is a server-rendered Rust web application: axum serves HTML rendered
 from Askama templates, with htmx swapping fragments and Alpine/MapLibre
 handling client-side behavior. All business logic lives in a framework-free
 core (`domain` + `application`); PostgreSQL/PostGIS is the source of truth.
@@ -45,13 +45,13 @@ browser ──> reverse proxy / TLS ──> axum (web) ──> application servi
 
 | Crate | Responsibility | May depend on |
 |---|---|---|
-| `bikenest-domain` (`crates/domain`) | pure business concepts: value objects, enums, rules (hours, freshness, confidence, cost, security), the typed proposal payload | nothing framework-level (chrono, thiserror, serde_json for the proposal payload) |
-| `bikenest-application` (`crates/application`) | use cases (services) + ports (`trait`s). Orchestrates domain objects; no I/O of its own | `domain` |
-| `bikenest-infrastructure` (`crates/infrastructure`) | SQLx repositories, config loading, providers (S3, SMTP, Mapbox, ValKey, image, timezone), seeders, job worker | `domain`, `application` |
-| `bikenest-i18n` (`crates/i18n`) | the en + pt-BR string catalog (`Locale`, `Translator`); the axum request extractor sits behind the `axum` feature so infrastructure can render emails without it | nothing framework-level (axum only with the feature) |
-| `bikenest-web` (`crates/web`) | axum router, handlers, middleware, view models, Askama templates; re-exports the i18n catalog. **The binary** (`bikenest-web`) | `domain`, `application`, `infrastructure`, `i18n` |
-| `bikenest-test-support` (`crates/test-support`) | shared `#[db_test]` harness, pool fixture, domain-rich builders, fast test doubles | `domain`, `application`, `infrastructure`, `test-macros` |
-| `bikenest-test-macros` (`crates/test-macros`) | the `#[db_test]` proc macro | (proc-macro deps) |
+| `bikesnest-domain` (`crates/domain`) | pure business concepts: value objects, enums, rules (hours, freshness, confidence, cost, security), the typed proposal payload | nothing framework-level (chrono, thiserror, serde_json for the proposal payload) |
+| `bikesnest-application` (`crates/application`) | use cases (services) + ports (`trait`s). Orchestrates domain objects; no I/O of its own | `domain` |
+| `bikesnest-infrastructure` (`crates/infrastructure`) | SQLx repositories, config loading, providers (S3, SMTP, Mapbox, ValKey, image, timezone), seeders, job worker | `domain`, `application` |
+| `bikesnest-i18n` (`crates/i18n`) | the en + pt-BR string catalog (`Locale`, `Translator`); the axum request extractor sits behind the `axum` feature so infrastructure can render emails without it | nothing framework-level (axum only with the feature) |
+| `bikesnest-web` (`crates/web`) | axum router, handlers, middleware, view models, Askama templates; re-exports the i18n catalog. **The binary** (`bikesnest-web`) | `domain`, `application`, `infrastructure`, `i18n` |
+| `bikesnest-test-support` (`crates/test-support`) | shared `#[db_test]` harness, pool fixture, domain-rich builders, fast test doubles | `domain`, `application`, `infrastructure`, `test-macros` |
+| `bikesnest-test-macros` (`crates/test-macros`) | the `#[db_test]` proc macro | (proc-macro deps) |
 
 Crate boundaries are enforced by what each crate is allowed to import; there is
 no build-time cycle (Cargo would reject it anyway). `application` never
@@ -142,7 +142,7 @@ The adapters: `Sqlx*` repositories for every persistence port, `Config::from_env
 (`fake`/`smtp`/`resend`), `ValKeyRateLimiter`/`InMemoryRateLimiter`,
 `OfflineTimezoneResolver`, `SystemClock`, `OsRngTokenGenerator`,
 `Argon2PasswordHasher`, `SqlxJobRepository` + `Worker`, the `devdata`/seeders
-(`seed-mock`, `seed-admin`, `seed-policies`), and `Db`/`probe`.
+(`seed-mock`, `seed-admin`, `seed-policies`, `seed-full-fresh`), and `Db`/`probe`.
 
 Providers are selected from environment variables in `config.rs` and wired into
 the router in `crates/web/src/wiring.rs` — the one module that names them.
@@ -151,7 +151,7 @@ the router in `crates/web/src/wiring.rs` — the one module that names them.
 
 `main.rs` loads env, connects the DB, runs migrations, optionally starts the
 job worker, then serves the router. Subcommands dispatch before `serve`:
-`seed-mock`, `seed-admin`, `seed-policies`, `retention`.
+`seed-mock`, `seed-admin`, `seed-policies`, `seed-full-fresh`, `retention`.
 
 The router is split three ways:
 
@@ -194,6 +194,9 @@ logging; `markdown.rs` the sanitizing renderer for the legal pages.
   forward-only migrations applied on startup).
 - **Caching/limits:** ValKey (Redis-compatible) for the shared rate limiter.
 - **Media:** S3-compatible object storage (aws-sdk-s3) with presigned GET URLs.
+  The server-side endpoint and the public signing endpoint are configurable
+  separately for container networks whose internal DNS names are not visible
+  to browsers.
 - **Crypto:** argon2id (passwords), HMAC signing, SHA-256-hashed sessions at rest.
 - **Email:** lettre (SMTP) or the Resend API.
 - **Maps/geocoding:** Mapbox Geocoding API (or a deterministic fake), MapLibre
@@ -223,7 +226,7 @@ Versioned, forward-only migrations in `migrations/`:
 | `0017_indexes.sql` | FK/read-path indexes, narrowing CHECKs |
 | `0018_user_locale.sql` | per-account locale |
 | `0019_photo_key_and_audit_integrity.sql` | non-empty `storage_key`, append-only audit |
-| `0020_open_now_fn.sql` | `bikenest_is_open_at()` + confirmed-attribute index |
+| `0020_open_now_fn.sql` | `bikesnest_is_open_at()` + confirmed-attribute index |
 
 Key modeling notes:
 
@@ -231,12 +234,12 @@ Key modeling notes:
   timezone; "open now" is computed in that timezone.
 - **"Open now" is one implementation with two shapes.** The rule (same-day
   ranges, all-day rows, and ranges that run past midnight counting on both
-  days) lives in SQL as `bikenest_is_open_at(location, timezone, instant)`
+  days) lives in SQL as `bikesnest_is_open_at(location, timezone, instant)`
   (migration `0020`), which the search query calls twice: once as the
   `open_now` filter and once as each row's flag. The domain keeps
   `OpeningHours::status_at` because the details page needs a *tri-state* — it
   must say "hours unknown" rather than "closed", which a card's boolean cannot
-  express. `bikenest_is_open_at` is exactly `status_at(...) == Open`, and a
+  express. `bikesnest_is_open_at` is exactly `status_at(...) == Open`, and a
   table-driven `#[db_test]` (`parking_test.rs`) holds the two together across
   same-day boundaries, overnight ranges, all-day rows, a DST transition and
   locations with no hours at all.

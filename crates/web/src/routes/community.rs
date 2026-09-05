@@ -6,12 +6,12 @@
 use axum::extract::{Form, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use bikenest_application::{ContributionError, NewParkingLocation, ParkingEdit};
-use bikenest_domain::{
+use bikesnest_application::{ContributionError, NewParkingLocation, ParkingEdit};
+use bikesnest_domain::{
     Cost, CurrencyCode, GeoPoint, ModerationState, Money, ParkingLocation, ParkingType,
     PricingUnit, ProposalKind, ProposalPayload, ProposedChange,
 };
-use bikenest_infrastructure::{FEATURED_ORIGIN, MapConfig};
+use bikesnest_infrastructure::{FEATURED_ORIGIN, MapConfig};
 
 use crate::auth::Auth;
 use crate::client_ip::ClientIp;
@@ -814,7 +814,7 @@ pub(crate) fn proposal_error(id: i64) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bikenest_domain::{OpeningHours, SecurityState, TimeRange, hms};
+    use bikesnest_domain::{OpeningHours, SecurityState, TimeRange, hms};
 
     fn en() -> Translator {
         Translator::new(Locale::En)

@@ -1,6 +1,6 @@
 # Testing
 
-How BikeNest is tested and how to write a test.
+How BikesNest is tested and how to write a test.
 
 ## Running tests
 
@@ -8,7 +8,7 @@ How BikeNest is tested and how to write a test.
 cargo test                    # domain + application only (no database needed)
 docker compose up -d db       # required once, before DB-backed tests
 cargo test --workspace        # everything, including #[db_test] integration/HTTP tests
-cargo test -p bikenest-web    # a single crate
+cargo test -p bikesnest-web    # a single crate
 cargo test search_            # filter by name substring
 ```
 
@@ -34,14 +34,14 @@ RUST_LOG=info cargo test -- --nocapture
 
 ## The `#[db_test]` harness
 
-`#[db_test]` (from `bikenest_test_support`) turns an `async fn` into a test that
+`#[db_test]` (from `bikesnest_test_support`) turns an `async fn` into a test that
 runs against **real PostgreSQL** inside a transaction that is **automatically
 rolled back** at the end. All `#[db_test]`s share one multi-threaded tokio
 runtime, one connection pool, and one migration pass — so the suite is fast and
 tests are isolated with zero cleanup code.
 
 ```rust
-use bikenest_test_support::db_test;
+use bikesnest_test_support::db_test;
 
 #[db_test]
 async fn my_test(tx: &mut TestTx) {
@@ -101,20 +101,20 @@ exactly once across the pages before deleting the fixture by tag.
 
 ## Tracing in tests
 
-`bikenest_test_support::init_test_tracing()` installs a `tracing_subscriber::fmt()`
+`bikesnest_test_support::init_test_tracing()` installs a `tracing_subscriber::fmt()`
 writer once per test binary (`OnceLock` + `try_init`, so calling it from many
 tests is harmless), directed at the test harness's own captured output
 (`with_test_writer()`) and filtered by `RUST_LOG` (default `warn`). `run_db_test`
 calls it before every `#[db_test]`, so it is automatic — nothing to opt into.
 
 Without this, `tracing::warn!`/`error!` lines a repository logs through
-`bikenest_infrastructure::classify_and_log` (the single place a `sqlx::Error`
+`bikesnest_infrastructure::classify_and_log` (the single place a `sqlx::Error`
 becomes a `DbFailure`) had **no destination at all**: not suppressed, simply
 dropped, because no subscriber was ever installed. That made a repository's
 error classification unverifiable from the test suite. Now:
 
 ```bash
-RUST_LOG=info cargo test -p bikenest-infrastructure --test db_error_test -- --nocapture
+RUST_LOG=info cargo test -p bikesnest-infrastructure --test db_error_test -- --nocapture
 ```
 
 prints a structured line per classified failure (`context`, `kind`, `sqlstate`,
@@ -163,7 +163,7 @@ by its exact origin appearing in the matching directive (`img-src`/`script-src`/
 per the task this codifies).
 
 `TestObjectStorage::presigned_get` (`crates/test-support/src/object_storage.rs`)
-signs every URL under `bikenest_infrastructure::TEST_MEDIA_ORIGIN`
+signs every URL under `bikesnest_infrastructure::TEST_MEDIA_ORIGIN`
 (`http://media.test.invalid` — an RFC 2606 `.invalid` host, so it can never
 resolve to anything real), and `Config::for_tests` puts that exact string in
 `security.media_hosts` — one constant, so the two can never drift apart. This
@@ -179,7 +179,7 @@ The test also separately asserts, independent of any one rendered page, that
 every host in `test_config().security.media_hosts` appears in `img-src`.
 
 **Mutation evidence** (empty `Config::for_tests`'s `security.media_hosts`,
-`crates/infrastructure/src/config.rs`, then `cargo test -p bikenest-web --test
+`crates/infrastructure/src/config.rs`, then `cargo test -p bikesnest-web --test
 csp_test`): the very first page checked (`/`, which renders a seeded featured
 photo) now fails inside `assert_page_is_csp_consistent`, before the test even
 reaches the parking/moderation pages:
@@ -242,7 +242,7 @@ missing translated dataset attribute, not copy shown in the normal path.
 
 ## Builders and doubles
 
-`bikenest_test_support` provides domain-rich builders and fast fakes:
+`bikesnest_test_support` provides domain-rich builders and fast fakes:
 
 - **`UserBuilder`** — creates `users` rows and returns a domain `User`.
 - **`ParkingBuilder`** — creates a full `parking_location` (hours, security
@@ -258,13 +258,13 @@ For HTTP tests, inject doubles through the test constructor:
 
 ```rust
 let db = Db::from_pool(pool().await);
-let app = bikenest_web::app_router_with(
+let app = bikesnest_web::app_router_with(
     db,
     std::time::Duration::from_secs(2),
     Box::new(FakeEmailProvider::default()),       // or a capture double
-    bikenest_infrastructure::FakeOAuthProvider::default(),
+    bikesnest_infrastructure::FakeOAuthProvider::default(),
     TestPasswordHasher,
-    Box::new(bikenest_infrastructure::InMemoryRateLimiter::default()),
+    Box::new(bikesnest_infrastructure::InMemoryRateLimiter::default()),
     std::sync::Arc::new(TestObjectStorage::default()),
 );
 let res = app.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
@@ -321,7 +321,7 @@ Use `#[db_test]` + `pool()` + `app_router(_with)` + `tower::ServiceExt::oneshot`
 ```rust
 #[db_test]
 async fn healthz_is_alive(_tx: &mut TestTx) {
-    let app = bikenest_web::app_router(Db::from_pool(pool().await), std::time::Duration::from_secs(2));
+    let app = bikesnest_web::app_router(Db::from_pool(pool().await), std::time::Duration::from_secs(2));
     let res = app.oneshot(
         Request::builder().uri("/healthz").body(axum::body::Body::empty()).unwrap()
     ).await.unwrap();
@@ -368,7 +368,7 @@ Two jobs:
   Node 22 + `npm ci` + `npm run build:css` + `git diff --exit-code
   web/static/css/app.css` (the committed CSS must be exactly the build
   output); `cargo test --workspace`.
-- **`docker`**: `docker build -t bikenest .`, then a step that runs the image
+- **`docker`**: `docker build -t bikesnest .`, then a step that runs the image
   with `APP_ENV=production` and nothing else configured (a bogus
   `DATABASE_URL`, no S3/email/geocoder/TLS/`CSP_MEDIA_HOSTS`/ValKey) and
   asserts it exits non-zero — `Config::validate_for_production()`'s whole

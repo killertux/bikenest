@@ -1,14 +1,14 @@
-//! SQL-backed review repository (plans/m3-community.md §6).
+//! SQL-backed review repository.
 //!
-//! One active review per user per location (§38). `upsert_review` is a single
+//! One active review per user per location. `upsert_review` is a single
 //! transaction: one `INSERT … ON CONFLICT DO UPDATE` for the row, append a
 //! `review_revision` holding the values just published, and recompute the
 //! location rating aggregate from `ACTIVE` reviews.
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{ContributionError, Review, ReviewRepository};
-use bikenest_domain::{ReviewBody, StarRating, UserId};
+use bikesnest_application::{ContributionError, Review, ReviewRepository};
+use bikesnest_domain::{ReviewBody, StarRating, UserId};
 
 pub struct SqlxReviewRepository {
     db: Db,

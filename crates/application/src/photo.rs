@@ -1,22 +1,22 @@
-//! Photo use cases (REQUIREMENTS §30, §44–§45, §80, §116.2).
+//! Photo use cases.
 //!
 //! Ports + read models + [`PhotoService`]. Infrastructure implements the ports;
 //! the web layer calls the service for every upload/moderation action. The
-//! verified-email gate (§16), rate limiting (§45), the upload validation rules
+//! verified-email gate, rate limiting, and the upload validation rules
 //! and the moderation lifecycle all live here.
 //!
 //! M5 generalizes the service over [`PhotoTarget`] so a single queue serves
 //! both location photos (`PhotoTarget::Parking`) and review photos
-//! (`PhotoTarget::Review`, §38). The `ImageProcessor` / domain constants /
+//! (`PhotoTarget::Review`). The `ImageProcessor` / domain constants /
 //! derivative policy are unchanged; only the repository dispatch and the target
-//! type changed (plans/m5-moderation.md §2).
+//! type changed as moderation behavior evolved.
 
 use crate::audit::{AuditEvent, AuditLog};
 use crate::auth::Clock;
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use crate::storage::{ObjectStorage, PutObject, StorageError};
 use async_trait::async_trait;
-use bikenest_domain::{
+use bikesnest_domain::{
     PhotoDimensions, PhotoLimits, PhotoModerationState, Role, UserId, bytes_within_limit,
 };
 use chrono::{DateTime, Utc};
@@ -28,7 +28,7 @@ use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PhotoError {
-    /// The session principal has not verified their email (the §16 gate).
+    /// The session principal has not verified their email (the  gate).
     #[error("verify your email to add photos")]
     NotVerified,
     #[error("too many photo uploads, try again later")]
@@ -86,7 +86,7 @@ impl From<crate::ports::ReaderError> for PhotoError {
 
 /// A processed image: the full JPEG derivative, the thumbnail, and the
 /// dimensions of the full derivative. EXIF is stripped, orientation applied,
-/// and re-encoded to JPEG (§30/§80).
+/// and re-encoded to JPEG.
 #[derive(Debug, Clone)]
 pub struct ProcessedImage {
     pub full: Vec<u8>,
@@ -95,7 +95,7 @@ pub struct ProcessedImage {
     pub content_type: &'static str,
 }
 
-/// The kind of photo: attached to a parking location or to a review (§38).
+/// The kind of photo: attached to a parking location or to a review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PhotoKind {
     Parking,
@@ -279,8 +279,8 @@ pub trait PhotoRepository: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Rate-limit defaults (§45). `photo:upload:user:{id}` and `photo:upload:ip:{ip}`.
-// Moderator actions are audited, not rate-limited (Ledger #6, tuned in M7).
+// Rate-limit defaults. `photo:upload:user:{id}` and `photo:upload:ip:{ip}`.
+// Moderator actions are audited, not rate-limited; limits are configurable.
 // ---------------------------------------------------------------------------
 
 const PHOTO_UPLOAD_USER_LIMIT: u32 = 10;
@@ -288,7 +288,7 @@ const PHOTO_UPLOAD_IP_LIMIT: u32 = 20;
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Max length of the accessible `alt` caption (§103, trimmed in the domain).
+/// Max length of the accessible `alt` caption, trimmed in the domain.
 const MAX_ALT_LEN: usize = 500;
 
 // ---------------------------------------------------------------------------
@@ -305,7 +305,7 @@ pub struct PhotoDeps {
     pub clock: Box<dyn Clock>,
     /// Random bytes for the upload's storage key, minted before any write.
     pub tokens_gen: Box<dyn crate::auth::TokenGenerator>,
-    /// Runtime photo pipeline limits (§30, Ledger #18); defaults to the domain constants.
+    /// Runtime photo pipeline limits; defaults to the domain constants.
     pub limits: PhotoLimits,
 }
 
@@ -330,7 +330,7 @@ impl PhotoService {
         }
     }
 
-    /// Moderators and admins may moderate (§44).
+    /// Moderators and admins may moderate.
     fn require_moderator(&self, user: &crate::auth::AuthenticatedUser) -> Result<(), PhotoError> {
         if user.has_role(Role::Moderator) || user.has_role(Role::Admin) {
             Ok(())
@@ -347,7 +347,7 @@ impl PhotoService {
         }
     }
 
-    /// Normalize + length-limit the `alt` caption (§103). Returns `None` for a
+    /// Normalize + length-limit the `alt` caption. Returns `None` for a
     /// whitespace-only caption.
     fn normalize_alt(alt: Option<&str>) -> Result<Option<String>, PhotoError> {
         match alt {
@@ -381,7 +381,7 @@ impl PhotoService {
     }
 
     // -----------------------------------------------------------------------
-    // Upload (§30)
+    // Upload
     // -----------------------------------------------------------------------
 
     /// Validate → process → mint the storage key → write both derivatives →
@@ -486,7 +486,7 @@ impl PhotoService {
     }
 
     // -----------------------------------------------------------------------
-    // Moderation (§44)
+    // Moderation
     // -----------------------------------------------------------------------
 
     /// Approve a pending photo: place it at the end of the target's gallery.

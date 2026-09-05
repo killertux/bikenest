@@ -4,13 +4,13 @@
 //! are what's under test.
 
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     AuditFilter, AuditLog, AuditLogReader, AuditPage, AuthenticatedUser, ContributionHistoryReader,
     ContributionItem, ModerationDeps, ModerationError, ModerationRepository, ModerationService,
     PhotoKind, Proposal, ProposalApplication, ProposalField, ProposalOverride, RateLimitError,
     RateLimiter, Report, ReportRepository, ReportTargetPreview,
 };
-use bikenest_domain::{
+use bikesnest_domain::{
     AccountState, ModerationLimits, ModerationState, ProposalKind, ProposalStatus, ProposedChange,
     ReportOutcome, ReportState, ReportTargetType, Role, UserEmail, UserId,
 };
@@ -53,7 +53,7 @@ impl FakeReports {
 
 #[async_trait]
 impl ReportRepository for FakeReports {
-    async fn create(&self, r: &bikenest_application::NewReport) -> Result<i64, ModerationError> {
+    async fn create(&self, r: &bikesnest_application::NewReport) -> Result<i64, ModerationError> {
         let id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -236,8 +236,8 @@ impl ModerationRepository for FakeModeration {
         props.truncate(limit.clamp(1, 200) as usize);
         Ok(props)
     }
-    async fn queue_counts(&self) -> Result<bikenest_application::QueueCounts, ModerationError> {
-        Ok(bikenest_application::QueueCounts {
+    async fn queue_counts(&self) -> Result<bikesnest_application::QueueCounts, ModerationError> {
+        Ok(bikesnest_application::QueueCounts {
             pending_photos: 0,
             open_reports: 0,
             under_review_reports: 0,
@@ -289,7 +289,7 @@ impl ModerationRepository for FakeModeration {
 struct FakeAuditReader;
 #[async_trait]
 impl AuditLogReader for FakeAuditReader {
-    async fn list(&self, _f: AuditFilter) -> Result<AuditPage, bikenest_application::AuditError> {
+    async fn list(&self, _f: AuditFilter) -> Result<AuditPage, bikesnest_application::AuditError> {
         Ok(AuditPage {
             items: Vec::new(),
             next_cursor: None,
@@ -306,7 +306,7 @@ impl ContributionHistoryReader for FakeHistory {
         _u: UserId,
         _after: Option<(chrono::DateTime<chrono::Utc>, i64)>,
         _limit: i64,
-    ) -> Result<Vec<ContributionItem>, bikenest_application::ContributionError> {
+    ) -> Result<Vec<ContributionItem>, bikesnest_application::ContributionError> {
         Ok(Vec::new())
     }
 }
@@ -328,8 +328,8 @@ struct FakeAudit(Arc<Mutex<Vec<String>>>);
 impl AuditLog for FakeAudit {
     async fn record(
         &self,
-        e: bikenest_application::AuditEvent,
-    ) -> Result<(), bikenest_application::AuditError> {
+        e: bikesnest_application::AuditEvent,
+    ) -> Result<(), bikesnest_application::AuditError> {
         self.0.lock().unwrap().push(e.action);
         Ok(())
     }

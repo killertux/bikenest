@@ -7,7 +7,7 @@ use crate::job::email::SendEmailHandler;
 use crate::job::repo::SqlxJobRepository;
 use crate::privacy::SqlxRetentionRepository;
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     EmailProvider, JOB_JOBS_GC, JOB_RETENTION, JobError, JobHandler, JobPayload,
 };
 use std::collections::HashMap;
@@ -66,7 +66,7 @@ pub struct JobServices {
 pub fn job_services(
     db: Db,
     config: &Config,
-    storage: Arc<dyn bikenest_application::ObjectStorage>,
+    storage: Arc<dyn bikesnest_application::ObjectStorage>,
     email: Arc<dyn EmailProvider>,
 ) -> JobServices {
     let repo = SqlxJobRepository::new(db.clone());
@@ -103,25 +103,25 @@ pub fn job_services(
 /// Runs the existing `RetentionJob` use case as a background job. Idempotent
 /// (every purge is `DELETE WHERE expires_at < now()`), so at-least-once is safe.
 pub struct RetentionJobHandler {
-    job: bikenest_application::RetentionJob,
+    job: bikesnest_application::RetentionJob,
 }
 
 impl RetentionJobHandler {
     pub fn new(
         db: Db,
         config: &Config,
-        storage: Arc<dyn bikenest_application::ObjectStorage>,
+        storage: Arc<dyn bikesnest_application::ObjectStorage>,
     ) -> Self {
         // `storage` is the same object store the request path writes uploads to:
         // the retention orphan sweep lists it under `uploads/` and deletes aged,
         // unreferenced keys, so the job and the uploads it collects cannot
         // disagree about where the objects live.
         let retention = SqlxRetentionRepository::new(db.clone(), config.retention, storage.clone());
-        let job = bikenest_application::RetentionJob::new(
+        let job = bikesnest_application::RetentionJob::new(
             Box::new(retention),
             Box::new(SqlxAuditLog::new(db.clone())),
             Box::new(SystemClock),
-            bikenest_application::RetentionConfig {
+            bikesnest_application::RetentionConfig {
                 inactive_account_anonymize_after_days: config.inactive_account_anonymize_after_days,
                 deleted_account_purge_after_days: config.deleted_account_purge_after_days,
             },

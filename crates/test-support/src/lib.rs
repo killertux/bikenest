@@ -1,18 +1,18 @@
-//! Shared test infrastructure for BikeNest.
+//! Shared test infrastructure for BikesNest.
 //!
 //! - ONE multi-threaded tokio runtime shared by all `#[db_test]` tests
 //!   (avoids creating a runtime + pool + migrations per test).
-//! - ONE real PostgreSQL connection pool (§49), migrated once.
-//! - Transaction-per-test with automatic rollback (§50).
-//! - Explicit SAVEPOINT helper for nested transactional behavior (§51).
-//! - Domain-rich builders (§53/§54).
+//! - ONE real PostgreSQL connection pool, migrated once.
+//! - Transaction-per-test with automatic rollback.
+//! - Explicit SAVEPOINT helper for nested transactional behavior.
+//! - Domain-rich builders.
 
 use sqlx::postgres::{PgPoolOptions, Postgres};
 use sqlx::{PgPool, Transaction};
 use tokio::sync::OnceCell;
 
-/// Re-exported so test crates only need `bikenest_test_support` in scope.
-pub use bikenest_test_macros::db_test;
+/// Re-exported so test crates only need `bikesnest_test_support` in scope.
+pub use bikesnest_test_macros::db_test;
 
 pub mod object_storage;
 pub use object_storage::TestObjectStorage;
@@ -40,11 +40,11 @@ fn shared_pool() -> &'static OnceCell<PgPool> {
 }
 
 /// Installs a `tracing` subscriber that writes to the test harness's captured
-/// output (`with_test_writer()`, so it only shows up under `--nocapture` or
+/// output (`with_test_writer()`), so it only shows up under `--nocapture` or
 /// for a failing test), filtered by `RUST_LOG` (default `warn`).
 ///
 /// Without this, every `tracing::error!`/`warn!` a repository logs through
-/// [`bikenest_infrastructure::classify_and_log`] is silently dropped: no
+/// [`bikesnest_infrastructure::classify_and_log`] is silently dropped: no
 /// subscriber means no destination, not "printed and ignored". `try_init` +
 /// `OnceLock` make this safe to call once per test (via [`run_db_test`]) even
 /// though every test in the binary shares the same process.
@@ -63,14 +63,14 @@ pub fn init_test_tracing() {
 fn database_url() -> String {
     std::env::var("TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
-        .unwrap_or_else(|_| "postgres://bikenest:bikenest@localhost:5432/bikenest".to_string())
+        .unwrap_or_else(|_| "postgres://bikesnest:bikesnest@localhost:5432/bikesnest".to_string())
 }
 
 /// The configuration the HTTP tests build their router from: a development
 /// config with every provider on its fake, pointed at the test database. Tests
 /// override individual fields rather than touching the process environment.
-pub fn test_config() -> bikenest_infrastructure::Config {
-    bikenest_infrastructure::Config::for_tests(database_url())
+pub fn test_config() -> bikesnest_infrastructure::Config {
+    bikesnest_infrastructure::Config::for_tests(database_url())
 }
 
 async fn connect_and_migrate() -> PgPool {
@@ -95,14 +95,14 @@ async fn connect_and_migrate() -> PgPool {
 /// An open PostgreSQL transaction for one test.
 ///
 /// Dropping it rolls back (sqlx `Transaction` does this in its own `Drop`),
-/// so tests are isolated without cleanup logic (§50).
+/// so tests are isolated without cleanup logic.
 pub struct TestTx {
     tx: Option<Transaction<'static, Postgres>>,
     pool: PgPool,
 }
 
 impl TestTx {
-    /// Opens a named SAVEPOINT on the test transaction (§51).
+    /// Opens a named SAVEPOINT on the test transaction.
     ///
     /// End it explicitly with [`Savepoint::commit`] (RELEASE) or
     /// [`Savepoint::rollback`] (ROLLBACK TO). A dropped, still-open savepoint
@@ -110,7 +110,7 @@ impl TestTx {
     pub async fn savepoint(&mut self) -> Savepoint<'_> {
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let name = format!(
-            "__bikenest_sp_{}",
+            "__bikesnest_sp_{}",
             N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         );
         sqlx::query(&format!("SAVEPOINT {name}"))
@@ -148,7 +148,7 @@ impl TestTx {
     }
 }
 
-/// A named SAVEPOINT opened inside a [`TestTx`] (§51).
+/// A named SAVEPOINT opened inside a [`TestTx`].
 pub struct Savepoint<'a> {
     conn: &'a mut sqlx::PgConnection,
     name: String,
@@ -266,12 +266,12 @@ pub fn run_db_test(f: impl AsyncFnOnce(&mut TestTx)) {
             pool: pool.clone(),
         };
         f(&mut tx).await;
-        // tx drops here → rollback (§50, via sqlx Transaction's Drop)
+        // tx drops here → rollback, via sqlx Transaction's Drop
     });
 }
 
 // ---------------------------------------------------------------------------
-// Builders (§53/§54)
+// Builders
 // ---------------------------------------------------------------------------
 
 /// Builder: creates `users` rows and returns domain entities.
@@ -296,7 +296,7 @@ impl UserBuilder {
 
     pub fn with_email(mut self, email: impl Into<String>) -> Self {
         // Normalize through the domain type so stored data matches it.
-        self.email = bikenest_domain::UserEmail::parse(&email.into())
+        self.email = bikesnest_domain::UserEmail::parse(&email.into())
             .expect("builder email is valid")
             .to_string();
         self
@@ -312,7 +312,7 @@ impl UserBuilder {
     /// Runtime query (not `query!`) so the workspace builds without
     /// `DATABASE_URL` at compile time; compile-time checked macros arrive
     /// with the M1 schema work (with `.env` + offline cache).
-    pub async fn create<'e, E>(&self, exec: E) -> Result<bikenest_domain::User, sqlx::Error>
+    pub async fn create<'e, E>(&self, exec: E) -> Result<bikesnest_domain::User, sqlx::Error>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
     {
@@ -323,9 +323,10 @@ impl UserBuilder {
                 .fetch_one(exec)
                 .await?;
 
-        let email = bikenest_domain::UserEmail::parse(&self.email).expect("builder email is valid");
-        Ok(bikenest_domain::User::new(
-            bikenest_domain::UserId(row.0),
+        let email =
+            bikesnest_domain::UserEmail::parse(&self.email).expect("builder email is valid");
+        Ok(bikesnest_domain::User::new(
+            bikesnest_domain::UserId(row.0),
             email,
             self.display_name.clone(),
         ))
@@ -336,7 +337,7 @@ impl UserBuilder {
 // Parking builder (M1)
 // ---------------------------------------------------------------------------
 
-use bikenest_domain::{Cost, ParkingType, TimeRange};
+use bikesnest_domain::{Cost, ParkingType, TimeRange};
 
 /// Builder: creates `parking_location` rows (+ hours + security) and returns
 /// the domain aggregate. Coordinates default to Av. Paulista with ~10 m
@@ -358,9 +359,9 @@ pub struct ParkingBuilder {
     verified_days_ago: Option<i64>,
     moderation_state: &'static str,
     /// Tag stored in `seed_key` so committed fixture rows can be cleaned up
-    /// by tag (`seed_key` column, Ledger #13).
+    /// by tag (`seed_key` column).
     fixture_tag: Option<String>,
-    /// Optimistic-concurrency version (§100). Defaults to 1 for fresh inserts.
+    /// Optimistic-concurrency version. Defaults to 1 for fresh inserts.
     version: i64,
 }
 
@@ -508,7 +509,7 @@ impl ParkingBuilder {
     pub async fn create(
         &self,
         conn: &mut sqlx::PgConnection,
-    ) -> Result<bikenest_domain::ParkingLocation, sqlx::Error> {
+    ) -> Result<bikesnest_domain::ParkingLocation, sqlx::Error> {
         let (cost_kind, price_cents, price_currency, price_unit) = match &self.cost {
             Cost::Free => ("free", None, None, None),
             Cost::Unknown => ("unknown", None, None, None),
@@ -574,7 +575,7 @@ impl ParkingBuilder {
             .await?;
         }
 
-        // Every catalog feature is recorded: explicit values, or unknown (§28).
+        // Every catalog feature is recorded: explicit values, or unknown.
         let recorded: Vec<&str> = self.security.iter().map(|(c, _)| c.as_str()).collect();
         for feature in [
             "dedicated_locking_point",
@@ -603,19 +604,19 @@ impl ParkingBuilder {
             .await?;
         }
 
-        Ok(bikenest_domain::ParkingLocation::new(
+        Ok(bikesnest_domain::ParkingLocation::new(
             id,
             self.name.clone(),
             "Rua Teste, 100",
             None,
             self.parking_type,
             self.cost.clone(),
-            bikenest_domain::GeoPoint::new(self.lat, self.lon).expect("builder coords"),
+            bikesnest_domain::GeoPoint::new(self.lat, self.lon).expect("builder coords"),
             self.timezone.parse().expect("builder timezone"),
             if self.hours_unknown {
-                bikenest_domain::OpeningHours::Unknown
+                bikesnest_domain::OpeningHours::Unknown
             } else {
-                bikenest_domain::OpeningHours::weekly(
+                bikesnest_domain::OpeningHours::weekly(
                     self.hours_rows
                         .iter()
                         .map(|(d, o, c, ad)| {
@@ -638,14 +639,14 @@ impl ParkingBuilder {
             self.security
                 .iter()
                 .map(|(code, state)| {
-                    bikenest_domain::SecurityFeature::new(
+                    bikesnest_domain::SecurityFeature::new(
                         code.clone(),
-                        bikenest_domain::SecurityState::from_smallint(*state).expect("state"),
+                        bikesnest_domain::SecurityState::from_smallint(*state).expect("state"),
                     )
                 })
                 .collect(),
-            bikenest_domain::ModerationState::from_code(self.moderation_state).expect("state"),
-            bikenest_domain::Rating::new(self.rating_avg, self.rating_count).expect("rating"),
+            bikesnest_domain::ModerationState::from_code(self.moderation_state).expect("state"),
+            bikesnest_domain::Rating::new(self.rating_avg, self.rating_count).expect("rating"),
             chrono::Utc::now(),
             chrono::Utc::now(),
             None,
@@ -661,8 +662,8 @@ impl ParkingBuilder {
 // ---------------------------------------------------------------------------
 
 use async_trait::async_trait;
-use bikenest_application::{AuthError, PasswordHasher};
-use bikenest_domain::Password;
+use bikesnest_application::{AuthError, PasswordHasher};
+use bikesnest_domain::Password;
 
 /// A non-cryptographic password hash for tests. Identical prefixes so `hash` is
 /// trivially verifiable, but it never runs argon2 — web/test suites stay fast.

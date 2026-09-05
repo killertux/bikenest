@@ -5,7 +5,7 @@
 //! `{"cron":"…"}` → the next tick after `now` evaluated in **UTC** (`cron::Schedule::after`).
 //! An invalid/unsupported schedule is a permanent error (the worker dead-letters).
 
-use bikenest_application::JobError;
+use bikesnest_application::JobError;
 use chrono::{DateTime, Duration, Utc};
 use rand::Rng;
 use serde_json::Value;

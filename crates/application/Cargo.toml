@@ -1,5 +1,5 @@
 [package]
-name = "bikenest-application"
+name = "bikesnest-application"
 version.workspace = true
 edition.workspace = true
 
@@ -9,7 +9,7 @@ workspace = true
 [dependencies]
 async-trait = { workspace = true }
 base64 = "0.22"
-bikenest-domain = { workspace = true }
+bikesnest-domain = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = "0.10"
 serde = { version = "1", features = ["derive"] }

@@ -10,8 +10,8 @@
 //! several times the decoded image).
 
 use async_trait::async_trait;
-use bikenest_application::{PhotoError, ProcessedImage};
-use bikenest_domain::{PhotoDimensions, PhotoLimits};
+use bikesnest_application::{PhotoError, ProcessedImage};
+use bikesnest_domain::{PhotoDimensions, PhotoLimits};
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops;
 use image::metadata::Orientation;
@@ -20,7 +20,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-/// [`ImageProcessor`](bikenest_application::ImageProcessor) via the `image`
+/// [`ImageProcessor`](bikesnest_application::ImageProcessor) via the `image`
 /// crate. Deterministic, pure-Rust decode/re-encode for jpeg/png/webp inputs.
 pub struct LocalImageProcessor {
     limits: PhotoLimits,
@@ -122,7 +122,7 @@ impl LocalImageProcessor {
 }
 
 #[async_trait]
-impl bikenest_application::ImageProcessor for LocalImageProcessor {
+impl bikesnest_application::ImageProcessor for LocalImageProcessor {
     async fn process(&self, bytes: &[u8]) -> Result<ProcessedImage, PhotoError> {
         // Wait for a slot *before* copying the upload onto a blocking thread,
         // so a burst queues here — holding nothing but the caller's own buffer

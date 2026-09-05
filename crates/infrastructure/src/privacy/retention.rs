@@ -1,4 +1,4 @@
-//! SQL-backed retention job repository (plans/m6-privacy.md §6, §75).
+//! SQL-backed retention job repository.
 //!
 //! Every purge is a `DELETE WHERE expires_at|revoked_at|cursor < now()` so a
 //! re-run is a no-op (idempotent). The two config-gated steps are no-ops when
@@ -8,10 +8,10 @@
 use crate::Db;
 use crate::privacy::SqlxAnonymizationRepository;
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     AnonymizationRepository, ObjectStorage, PrivacyError, RetentionRepository, StorageError,
 };
-use bikenest_domain::{RetentionPolicy, UserId};
+use bikesnest_domain::{RetentionPolicy, UserId};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashSet;
 use std::sync::Arc;

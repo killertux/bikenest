@@ -6,7 +6,7 @@ Orientation for AI coding agents (and anyone new to the codebase). Read
 
 ## What this is
 
-**BikeNest** is a community-maintained bicycle parking finder. A Rust web app
+**BikesNest** is a community-maintained bicycle parking finder. A Rust web app
 (axum + Askama server-rendered templates + htmx/Alpine) backed by
 PostgreSQL/PostGIS. Users search a destination, browse parking spots on a map,
 and the community adds, edits, reviews, verifies, photographs and moderates
@@ -24,7 +24,7 @@ that data. Bilingual (en + pt-BR). Works on mobile and desktop browsers.
 - **Every external dependency is behind a port** (a `trait` in
   `crates/application`). Replacing a provider = new impl + wiring change, never
   a domain change.
-- **User-facing strings** live only in the `bikenest-i18n` catalog
+- **User-facing strings** live only in the `bikesnest-i18n` catalog
   (`crates/i18n/src/lib.rs`, en + pt-BR; re-exported as `crates/web/src/i18n.rs`
   and used by infrastructure to render emails), never hard-coded in
   domain/application/web logic.
@@ -56,10 +56,10 @@ that data. Bilingual (en + pt-BR). Works on mobile and desktop browsers.
 ```bash
 cargo build                              # self-contained; no DB needed
 cargo run                                # serve (default subcommand), BIND_ADDR (:8080)
-cargo run -p bikenest-web -- seed-mock   # dev: 24 sample Curitiba locations + photos
-cargo run -p bikenest-web -- seed-admin  # create admin (ADMIN_EMAIL/ADMIN_PASSWORD)
-cargo run -p bikenest-web -- seed-policies  # version legal pages (POLICY_* env)
-cargo run -p bikenest-web -- retention   # run the retention purge job
+cargo run -p bikesnest-web -- seed-mock   # dev: 24 sample Curitiba locations + photos
+cargo run -p bikesnest-web -- seed-admin  # create admin (ADMIN_EMAIL/ADMIN_PASSWORD)
+cargo run -p bikesnest-web -- seed-policies  # version legal pages (POLICY_* env)
+cargo run -p bikesnest-web -- retention   # run the retention purge job
 
 cargo test                               # domain + application (no DB)
 docker compose up -d db                  # needed before DB-backed tests
@@ -88,7 +88,7 @@ npm run build:css                        # Tailwind → web/static/css/app.css
   `crates/web/src` passes 1200 lines.
 - **Background jobs** (M9) are a Postgres-backed queue (`background_job` table)
   with an in-process worker; handlers live in `crates/infrastructure/src/job/`
-  and implement `bikenest_application::JobHandler`. Set `JOBS_ENABLED=false` for
+  and implement `bikesnest_application::JobHandler`. Set `JOBS_ENABLED=false` for
   web-only instances. A test that claims jobs directly (rather than simulating
   a claim with a plain `UPDATE`) must use `SqlxJobRepository::claim_kinds` with
   a kind unique to that test, not the unscoped `claim` — see "Job-queue test

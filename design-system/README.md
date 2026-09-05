@@ -1,6 +1,6 @@
-# BikeNest Design System
+# BikesNest Design System
 
-The reusable design system behind BikeNest's UI — human-approachable, cool
+The reusable design system behind BikesNest's UI — human-approachable, cool
 near-white neutrals, one green-teal accent (OKLch hue 170), and a semantic
 freshness scale.
 
@@ -14,7 +14,7 @@ photography.
 | --- | --- |
 | `DESIGN.md` | The authoritative system: theme, color, type, spacing, layout, components, motion, voice, anti-patterns |
 | `colors_and_type.css` | Token block + base type + core component recipes (the canonical source of the tokens used in `web/static/css/input.css`) |
-| `SKILL.md` | Usage contract for agents generating new BikeNest screens |
+| `SKILL.md` | Usage contract for agents generating new BikesNest screens |
 | `context/provenance.md` | Where every token, pattern, and image came from |
 | `assets/imagery/` | 7 optimized Pexels photographs |
 | `preview/` | Focused review cards (colors, typography, spacing, components, brand assets) |
@@ -27,7 +27,7 @@ photography.
 3. Copy the token block from `colors_and_type.css` into any new screen.
 4. Check component shapes against `ui_kits/app/` and `preview/components-buttons.html`.
 5. For imagery, take files from `assets/imagery/` — copy locally, never hotlink.
-6. Verify against `DESIGN.md` §9 anti-patterns and the SKILL verification checklist.
+6. Verify against `DESIGN.md`  anti-patterns and the SKILL verification checklist.
 
 ## Review cards
 

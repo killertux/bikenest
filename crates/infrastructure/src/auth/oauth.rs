@@ -1,4 +1,4 @@
-//! Dev-only Google OAuth stub (**Ledger #5**). No real Google credentials — it
+//! Dev-only Google OAuth stub (****). No real Google credentials — it
 //! serves `/auth/google` + `/auth/google/callback` locally with a deterministic
 //! identity. The port signature stays compatible with a real Google client
 //! (PKCE / state / nonce) that lands in M7.
@@ -6,8 +6,8 @@
 use crate::config::FakeOAuthConfig;
 
 use async_trait::async_trait;
-use bikenest_application::{AuthError, OAuthProvider};
-use bikenest_domain::{AuthenticationProvider, ProviderIdentity, UserEmail};
+use bikesnest_application::{AuthError, OAuthProvider};
+use bikesnest_domain::{AuthenticationProvider, ProviderIdentity, UserEmail};
 
 #[derive(Debug, Clone)]
 pub struct FakeOAuthProvider {

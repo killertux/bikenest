@@ -4,7 +4,7 @@ Every artifact in this design-system package traces to evidence copied from the 
 
 ## Source
 
-- Source project: **Check Ui Design Md File There** (`e98bd5dc-ce25-43fb-ac40-079fb0c84b43`), a BikeNest web prototype (kind: `prototype`, linked dir `/Users/clemento/Dev/Projects/bikenest`).
+- Source project: **Check Ui Design Md File There** (`e98bd5dc-ce25-43fb-ac40-079fb0c84b43`), a BikesNest web prototype (kind: `prototype`, linked dir `/Users/clemento/Dev/Projects/bikesnest`).
 - New design-system project: `9cd2bb4d-8637-4c6e-a2f0-b14099dfb5cb`, design-system id `user:check-ui-design-md-file-there-design-system`.
 
 ## Tokens

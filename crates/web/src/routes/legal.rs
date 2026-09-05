@@ -4,8 +4,8 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Response;
-use bikenest_application::POLICY_FALLBACK_LOCALE;
-use bikenest_domain::PolicyKind;
+use bikesnest_application::POLICY_FALLBACK_LOCALE;
+use bikesnest_domain::PolicyKind;
 
 use crate::auth::Auth;
 use crate::i18n::{Locale, Translator};
@@ -21,7 +21,7 @@ pub(crate) async fn current_policy(
     state: &AppState,
     kind: PolicyKind,
     locale: Locale,
-) -> Option<bikenest_application::PolicyDocument> {
+) -> Option<bikesnest_application::PolicyDocument> {
     let code = locale.html_lang();
     match state.policy.current(kind, code).await {
         Ok(Some(doc)) => Some(doc),
@@ -40,7 +40,7 @@ pub(crate) async fn policy_history(
     state: &AppState,
     kind: PolicyKind,
     locale: Locale,
-) -> Vec<bikenest_application::PolicyDocument> {
+) -> Vec<bikesnest_application::PolicyDocument> {
     let code = locale.html_lang();
     let docs = state.policy.history(kind, code).await.unwrap_or_default();
     if docs.is_empty() && code != POLICY_FALLBACK_LOCALE {
@@ -75,7 +75,7 @@ pub(crate) async fn policy_page_impl(
     let tr = Translator::new(locale);
     let (kind_code, kind_label) = policy_kind_meta(tr, kind);
     let layout = PageLayout::for_request(
-        format!("{kind_label} — BikeNest"),
+        format!("{kind_label} — BikesNest"),
         kind_code,
         auth,
         &state.map,
@@ -152,7 +152,7 @@ pub(crate) async fn policy_versions_impl(
     render(
         PolicyVersionsPage {
             layout: PageLayout::for_request(
-                format!("{} — BikeNest", tr.t("policy.versions_title")),
+                format!("{} — BikesNest", tr.t("policy.versions_title")),
                 kind_code,
                 auth,
                 &state.map,

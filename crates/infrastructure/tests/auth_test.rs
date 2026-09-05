@@ -1,18 +1,18 @@
-//! Database-backed auth integration tests against real PostgreSQL (§49).
+//! Database-backed auth integration tests against real PostgreSQL.
 //!
 //! The auth repo/store write through the pool (they take `Db`, not the test
 //! transaction), so each test seeds a user with a unique email marker, asserts
 //! against readers, deletes the user (cascading to identities/sessions/tokens/
 //! roles), and never leaks rows.
 
-use bikenest_application::{AccountRepository, AuditEvent, AuditLog, SessionStore, TokenStore};
-use bikenest_domain::{
+use bikesnest_application::{AccountRepository, AuditEvent, AuditLog, SessionStore, TokenStore};
+use bikesnest_domain::{
     AccountState, AuthenticationProvider, CsrfToken, Role, SessionId, UserEmail, VerificationToken,
 };
-use bikenest_infrastructure::{
+use bikesnest_infrastructure::{
     Db, SqlxAccountRepository, SqlxAuditLog, SqlxSessionStore, SqlxTokenStore,
 };
-use bikenest_test_support::{db_test, pool};
+use bikesnest_test_support::{db_test, pool};
 use chrono::{Duration, Utc};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -20,7 +20,7 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn unique_email(label: &str) -> String {
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    format!("{label}-{}-{n}@bikenest.test", std::process::id())
+    format!("{label}-{}-{n}@bikesnest.test", std::process::id())
 }
 
 fn marker_email(label: &str) -> String {
@@ -36,7 +36,7 @@ async fn cleanup_user(email: &str) {
 }
 
 #[db_test]
-async fn account_repo_round_trip(_tx: &mut bikenest_test_support::TestTx) {
+async fn account_repo_round_trip(_tx: &mut bikesnest_test_support::TestTx) {
     let db = Db::from_pool(pool().await);
     let repo = SqlxAccountRepository::new(db);
     let email = marker_email("repo");
@@ -44,12 +44,12 @@ async fn account_repo_round_trip(_tx: &mut bikenest_test_support::TestTx) {
     let eu = UserEmail::parse(&email).unwrap();
 
     let id = repo
-        .create(bikenest_application::NewAccount {
+        .create(bikesnest_application::NewAccount {
             email: &eu,
             display_name: Some("Ada"),
             password_hash: "$argon2id$test",
             state: AccountState::Active,
-            locale: bikenest_domain::LocaleCode::PtBr,
+            locale: bikesnest_domain::LocaleCode::PtBr,
         })
         .await
         .unwrap();
@@ -85,7 +85,7 @@ async fn account_repo_round_trip(_tx: &mut bikenest_test_support::TestTx) {
 }
 
 #[db_test]
-async fn update_canonical_email_keeps_identity_in_sync(_tx: &mut bikenest_test_support::TestTx) {
+async fn update_canonical_email_keeps_identity_in_sync(_tx: &mut bikesnest_test_support::TestTx) {
     let db = Db::from_pool(pool().await);
     let repo = SqlxAccountRepository::new(db);
     let email = marker_email("sync");
@@ -93,17 +93,17 @@ async fn update_canonical_email_keeps_identity_in_sync(_tx: &mut bikenest_test_s
     let eu = UserEmail::parse(&email).unwrap();
 
     let id = repo
-        .create(bikenest_application::NewAccount {
+        .create(bikesnest_application::NewAccount {
             email: &eu,
             display_name: None,
             password_hash: "h",
             state: AccountState::Active,
-            locale: bikenest_domain::LocaleCode::PtBr,
+            locale: bikesnest_domain::LocaleCode::PtBr,
         })
         .await
         .unwrap();
 
-    let new_email = UserEmail::parse("renamed@bikenest.test").unwrap();
+    let new_email = UserEmail::parse("renamed@bikesnest.test").unwrap();
     repo.update_canonical_email(id, &new_email).await.unwrap();
 
     // Login lookup key (password subject) is now the new email; old subject gone.
@@ -121,11 +121,11 @@ async fn update_canonical_email_keeps_identity_in_sync(_tx: &mut bikenest_test_s
     assert_eq!(idrec.user_id, id);
 
     cleanup_user(&email).await;
-    cleanup_user("renamed@bikenest.test").await;
+    cleanup_user("renamed@bikesnest.test").await;
 }
 
 #[db_test]
-async fn session_store_create_resolve_expire_revoke(_tx: &mut bikenest_test_support::TestTx) {
+async fn session_store_create_resolve_expire_revoke(_tx: &mut bikesnest_test_support::TestTx) {
     let db = Db::from_pool(pool().await);
     let store = SqlxSessionStore::new(db);
     let email = marker_email("session");
@@ -135,7 +135,7 @@ async fn session_store_create_resolve_expire_revoke(_tx: &mut bikenest_test_supp
         .fetch_one(&pool().await)
         .await
         .unwrap();
-    let user_id = bikenest_domain::UserId(user_id);
+    let user_id = bikesnest_domain::UserId(user_id);
 
     let raw = SessionId::new([7u8; 32]);
     let csrf = CsrfToken::new([9u8; 32]);
@@ -172,7 +172,7 @@ async fn session_store_create_resolve_expire_revoke(_tx: &mut bikenest_test_supp
 }
 
 #[db_test]
-async fn token_store_single_use_is_atomic(_tx: &mut bikenest_test_support::TestTx) {
+async fn token_store_single_use_is_atomic(_tx: &mut bikesnest_test_support::TestTx) {
     let db = Db::from_pool(pool().await);
     let store = SqlxTokenStore::new(db);
     let email = marker_email("token");
@@ -182,7 +182,7 @@ async fn token_store_single_use_is_atomic(_tx: &mut bikenest_test_support::TestT
         .fetch_one(&pool().await)
         .await
         .unwrap();
-    let user_id = bikenest_domain::UserId(user_id);
+    let user_id = bikesnest_domain::UserId(user_id);
     let now = Utc::now();
 
     let raw = VerificationToken::new([42u8; 32]);
@@ -217,7 +217,7 @@ async fn token_store_single_use_is_atomic(_tx: &mut bikenest_test_support::TestT
 }
 
 #[db_test]
-async fn token_expiry_blocks_consumption_after_ttl(_tx: &mut bikenest_test_support::TestTx) {
+async fn token_expiry_blocks_consumption_after_ttl(_tx: &mut bikesnest_test_support::TestTx) {
     let db = Db::from_pool(pool().await);
     let store = SqlxTokenStore::new(db);
     let email = marker_email("expiry");
@@ -227,7 +227,7 @@ async fn token_expiry_blocks_consumption_after_ttl(_tx: &mut bikenest_test_suppo
         .fetch_one(&pool().await)
         .await
         .unwrap();
-    let user_id = bikenest_domain::UserId(user_id);
+    let user_id = bikesnest_domain::UserId(user_id);
     let now = Utc::now();
     let raw = VerificationToken::new([5u8; 32]);
 
@@ -258,7 +258,7 @@ async fn token_expiry_blocks_consumption_after_ttl(_tx: &mut bikenest_test_suppo
 }
 
 #[db_test]
-async fn audit_insert_round_trip(_tx: &mut bikenest_test_support::TestTx) {
+async fn audit_insert_round_trip(_tx: &mut bikesnest_test_support::TestTx) {
     let db = Db::from_pool(pool().await);
     let audit = SqlxAuditLog::new(db);
     let email = marker_email("audit");
@@ -271,7 +271,7 @@ async fn audit_insert_round_trip(_tx: &mut bikenest_test_support::TestTx) {
 
     audit
         .record(AuditEvent::success(
-            Some(bikenest_domain::UserId(user_id)),
+            Some(bikesnest_domain::UserId(user_id)),
             "auth.login",
             "user",
             user_id.to_string(),
@@ -296,7 +296,7 @@ async fn audit_insert_round_trip(_tx: &mut bikenest_test_support::TestTx) {
 /// is unaffected: the column may lag by five minutes, which is immaterial
 /// against 30 days.
 #[db_test]
-async fn resolve_throttles_the_last_seen_write(_tx: &mut bikenest_test_support::TestTx) {
+async fn resolve_throttles_the_last_seen_write(_tx: &mut bikesnest_test_support::TestTx) {
     let db = Db::from_pool(pool().await);
     let store = SqlxSessionStore::new(db);
     let email = marker_email("session-throttle");
@@ -306,7 +306,7 @@ async fn resolve_throttles_the_last_seen_write(_tx: &mut bikenest_test_support::
         .fetch_one(&pool().await)
         .await
         .unwrap();
-    let user_id = bikenest_domain::UserId(uid);
+    let user_id = bikesnest_domain::UserId(uid);
 
     let raw = SessionId::new([31u8; 32]);
     let csrf = CsrfToken::new([32u8; 32]);
@@ -368,23 +368,23 @@ async fn resolve_throttles_the_last_seen_write(_tx: &mut bikenest_test_support::
 
 #[db_test]
 async fn search_users_matches_email_or_name_and_pages_by_keyset(
-    _tx: &mut bikenest_test_support::TestTx,
+    _tx: &mut bikesnest_test_support::TestTx,
 ) {
     let repo = SqlxAccountRepository::new(Db::from_pool(pool().await));
     let needle = format!("wp13needle{}", std::process::id());
     let mut ids = Vec::new();
     let mut emails = Vec::new();
     for n in 0..3 {
-        let email = format!("{needle}-{n}@bikenest.test");
+        let email = format!("{needle}-{n}@bikesnest.test");
         cleanup_user(&email).await;
         let eu = UserEmail::parse(&email).unwrap();
         let id = repo
-            .create(bikenest_application::NewAccount {
+            .create(bikesnest_application::NewAccount {
                 email: &eu,
                 display_name: Some(&format!("Wp13 Person {n}")),
                 password_hash: "$argon2id$test",
                 state: AccountState::Active,
-                locale: bikenest_domain::LocaleCode::PtBr,
+                locale: bikesnest_domain::LocaleCode::PtBr,
             })
             .await
             .unwrap();
@@ -394,7 +394,7 @@ async fn search_users_matches_email_or_name_and_pages_by_keyset(
     ids.sort_unstable();
 
     let search = |query: Option<&'static str>, after_id, limit| {
-        repo.search_users(bikenest_application::UserSearch {
+        repo.search_users(bikesnest_application::UserSearch {
             query,
             after_id,
             limit,
@@ -403,7 +403,7 @@ async fn search_users_matches_email_or_name_and_pages_by_keyset(
 
     // Matching on the email substring finds exactly these three.
     let hits = repo
-        .search_users(bikenest_application::UserSearch {
+        .search_users(bikesnest_application::UserSearch {
             query: Some(&needle),
             after_id: None,
             limit: 50,
@@ -423,7 +423,7 @@ async fn search_users_matches_email_or_name_and_pages_by_keyset(
 
     // Matching on the display name works too.
     let by_name = repo
-        .search_users(bikenest_application::UserSearch {
+        .search_users(bikesnest_application::UserSearch {
             query: Some("Wp13 Person 1"),
             after_id: None,
             limit: 50,
@@ -434,7 +434,7 @@ async fn search_users_matches_email_or_name_and_pages_by_keyset(
 
     // Keyset paging: limit 2, then continue below the last id seen.
     let page1 = repo
-        .search_users(bikenest_application::UserSearch {
+        .search_users(bikesnest_application::UserSearch {
             query: Some(&needle),
             after_id: None,
             limit: 2,
@@ -443,7 +443,7 @@ async fn search_users_matches_email_or_name_and_pages_by_keyset(
         .unwrap();
     assert_eq!(page1.len(), 2);
     let page2 = repo
-        .search_users(bikenest_application::UserSearch {
+        .search_users(bikesnest_application::UserSearch {
             query: Some(&needle),
             after_id: Some(page1.last().unwrap().id.0),
             limit: 2,
@@ -464,15 +464,15 @@ async fn search_users_matches_email_or_name_and_pages_by_keyset(
     );
     // …and a literal underscore in the term matches a literal underscore
     // (the escape character must be the one the query declares).
-    let under_email = format!("{needle}-under@bikenest.test");
+    let under_email = format!("{needle}-under@bikesnest.test");
     cleanup_user(&under_email).await;
     let under = UserEmail::parse(&under_email).unwrap();
-    repo.create(bikenest_application::NewAccount {
+    repo.create(bikesnest_application::NewAccount {
         email: &under,
         display_name: Some("Wp13 Under_score"),
         password_hash: "$argon2id$test",
         state: AccountState::Active,
-        locale: bikenest_domain::LocaleCode::PtBr,
+        locale: bikesnest_domain::LocaleCode::PtBr,
     })
     .await
     .unwrap();
@@ -523,19 +523,19 @@ async fn search_users_matches_email_or_name_and_pages_by_keyset(
 
 #[db_test]
 async fn activity_for_reports_last_seen_and_a_contribution_total(
-    _tx: &mut bikenest_test_support::TestTx,
+    _tx: &mut bikesnest_test_support::TestTx,
 ) {
     let repo = SqlxAccountRepository::new(Db::from_pool(pool().await));
     let email = marker_email("wp13-activity");
     cleanup_user(&email).await;
     let eu = UserEmail::parse(&email).unwrap();
     let id = repo
-        .create(bikenest_application::NewAccount {
+        .create(bikesnest_application::NewAccount {
             email: &eu,
             display_name: None,
             password_hash: "$argon2id$test",
             state: AccountState::Active,
-            locale: bikenest_domain::LocaleCode::PtBr,
+            locale: bikesnest_domain::LocaleCode::PtBr,
         })
         .await
         .unwrap()
@@ -615,8 +615,8 @@ async fn activity_for_reports_last_seen_and_a_contribution_total(
 /// model carries it, and the language toggle updates it. This column is the
 /// only thing a background job can read to know which language to write in.
 #[db_test]
-async fn account_locale_is_persisted_and_updatable(_tx: &mut bikenest_test_support::TestTx) {
-    use bikenest_domain::LocaleCode;
+async fn account_locale_is_persisted_and_updatable(_tx: &mut bikesnest_test_support::TestTx) {
+    use bikesnest_domain::LocaleCode;
 
     let db = Db::from_pool(pool().await);
     let repo = SqlxAccountRepository::new(db);
@@ -625,7 +625,7 @@ async fn account_locale_is_persisted_and_updatable(_tx: &mut bikenest_test_suppo
     let eu = UserEmail::parse(&email).unwrap();
 
     let id = repo
-        .create(bikenest_application::NewAccount {
+        .create(bikesnest_application::NewAccount {
             email: &eu,
             display_name: None,
             password_hash: "$argon2id$test",

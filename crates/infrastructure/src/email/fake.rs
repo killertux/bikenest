@@ -8,7 +8,7 @@
 
 use crate::email::templates::render;
 use async_trait::async_trait;
-use bikenest_application::{EmailError, EmailMessage, EmailProvider};
+use bikesnest_application::{EmailError, EmailMessage, EmailProvider};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -137,8 +137,8 @@ fn token_from(text: &str, path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bikenest_application::EmailKind;
-    use bikenest_domain::LocaleCode;
+    use bikesnest_application::EmailKind;
+    use bikesnest_domain::LocaleCode;
 
     #[tokio::test]
     async fn captures_the_rendered_message_and_recovers_the_token() {
@@ -159,7 +159,7 @@ mod tests {
         assert_eq!(captured.to, "a@example.com");
         assert_eq!(captured.locale, "pt-BR");
         assert_eq!(captured.kind, "verify");
-        assert_eq!(captured.subject, "Confirme seu e-mail no BikeNest");
+        assert_eq!(captured.subject, "Confirme seu e-mail no BikesNest");
         assert_eq!(
             fake.token_for("/verify-email").as_deref(),
             Some("abc-123_XYZ")

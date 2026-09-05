@@ -1,4 +1,4 @@
-/* BikeNest — Tailwind CSS 4.3 entry.
+/* BikesNest — Tailwind CSS 4.3 entry.
    Design tokens ported from design-system/colors_and_type.css (canonical
    OKLch values, see design-system/DESIGN.md). Load via @theme so utilities
    like bg-bg, text-fg, border-border, bg-accent, rounded-lg, shadow-card,
@@ -54,7 +54,7 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Focus — never remove, never dim (design-system/colors_and_type.css §7,
+/* Focus — never remove, never dim (design-system/colors_and_type.css,
    ported verbatim). Plain CSS outside any `@layer`, so it always wins over
    a Tailwind utility on the same element regardless of source order or
    specificity — including a stray `outline-none`/`focus:outline-none` that

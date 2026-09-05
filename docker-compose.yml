@@ -2,20 +2,22 @@
 # (auto-recompiling via cargo-watch) and the Tailwind CSS watcher.
 # DB-only: `docker compose up -d db`.
 
+name: bikesnest
+
 services:
   db:
     image: imresamu/postgis:17-3.5  # arm64-compatible PostGIS build
-    container_name: bikenest-db
+    container_name: bikesnest-db
     environment:
-      POSTGRES_USER: bikenest
-      POSTGRES_PASSWORD: bikenest
-      POSTGRES_DB: bikenest
+      POSTGRES_USER: bikesnest
+      POSTGRES_PASSWORD: bikesnest
+      POSTGRES_DB: bikesnest
     ports:
       - "${DB_HOST_PORT:-5432}:5432"
     volumes:
-      - bikenest-pgdata:/var/lib/postgresql/data
+      - bikesnest-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bikenest -d bikenest"]
+      test: ["CMD-SHELL", "pg_isready -U bikesnest -d bikesnest"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -33,27 +35,40 @@ services:
     # as its ENTRYPOINT).
     init: true
     environment:
-      DATABASE_URL: postgres://bikenest:bikenest@db:5432/bikenest
+      DATABASE_URL: postgres://bikesnest:bikesnest@db:5432/bikesnest
       BIND_ADDR: 0.0.0.0:8080
       RUST_LOG: info
       # Where the development e-mail outbox writes readable messages. Media
       # itself lives in MinIO below; nothing reads this directory for photos.
       MEDIA_ROOT: /app/media
-      # Object storage (Ledger #7): MinIO (S3-compatible) for dev. Media is
+      # Object storage: MinIO (S3-compatible) for dev. Media is
       # served via direct S3 presigned URLs (no app signing secret).
       S3_ENDPOINT: http://minio:9000
+      # Presigned URLs are opened by the host browser, not by this container.
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
       S3_REGION: us-east-1
-      S3_BUCKET: bikenest
+      S3_BUCKET: bikesnest
       S3_ACCESS_KEY_ID: minioadmin
       S3_SECRET_ACCESS_KEY: minioadmin
-      # Rate limiter (Ledger #6): ValKey backend, shared across auth/photo/
+      CSP_MEDIA_HOSTS: http://localhost:9000
+      # Rate limiter: ValKey backend, shared across auth/photo/
       # contribution/moderation. Ephemeral keys (TTL), so no persistence.
       VALKEY_URL: valkey://valkey:6379
       # Email: the app uses SMTP in dev, delivering to Mailpit (see below).
       EMAIL_PROVIDER: smtp
-      EMAIL_FROM: BikeNest <no-reply@bikenest.local>
+      EMAIL_FROM: BikesNest <no-reply@bikesnest.local>
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
+      # CLI seed inputs. Compose reads these substitutions from the project's
+      # .env file, making them available to `docker compose exec app ...`.
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      POLICY_VERSION: ${POLICY_VERSION:-}
+      POLICY_EFFECTIVE_AT: ${POLICY_EFFECTIVE_AT:-}
+      POLICY_OPERATOR_NAME: ${POLICY_OPERATOR_NAME:-}
+      POLICY_OPERATOR_CNPJ: ${POLICY_OPERATOR_CNPJ:-}
+      POLICY_OPERATOR_ADDRESS: ${POLICY_OPERATOR_ADDRESS:-}
+      POLICY_CONTACT_EMAIL: ${POLICY_CONTACT_EMAIL:-}
     ports:
       - "8080:8080"
     volumes:
@@ -78,7 +93,7 @@ services:
       - -c
       - |
         if ! cargo watch --version >/dev/null 2>&1; then echo 'installing cargo-watch (first start only)…'; cargo install --locked cargo-watch; fi
-        exec cargo watch -w crates -w migrations -w templates -w Cargo.toml -c -x 'run -q -p bikenest-web'
+        exec cargo watch -w crates -w migrations -w templates -w Cargo.toml -c -x 'run -q -p bikesnest-web'
 
   # Tailwind CSS 4.3 watcher: rebuilds web/static/css/app.css as the entry
   # or templates change. node_modules lives in a named volume so the Linux
@@ -111,18 +126,18 @@ services:
   # auditable. The app (EMAIL_PROVIDER=smtp) delivers here via SMTP_HOST:mailpit.
   mailpit:
     image: axllent/mailpit:latest
-    container_name: bikenest-mailpit
+    container_name: bikesnest-mailpit
     ports:
       - "1025:1025"   # SMTP relay (what the app connects to)
       - "8025:8025"   # web UI: http://localhost:8025
 
-  # ValKey (Ledger #6): shared rate-limit store behind the ValKeyRateLimiter
+  # ValKey: shared rate-limit store behind the ValKeyRateLimiter
   # (single-node path, VALKEY_URL). Redis-compatible. Ephemeral by design
   # (no persistence — rate-limit keys carry their own TTL), so the data volume is
   # optional and the image is easy to scrape clean.
   valkey:
     image: valkey/valkey:8
-    container_name: bikenest-valkey
+    container_name: bikesnest-valkey
     command:
       - "valkey-server"
       - "--port"
@@ -134,19 +149,19 @@ services:
     ports:
       - "${VALKEY_HOST_PORT:-6380}:6379"
     volumes:
-      - bikenest-valkeydata:/data
+      - bikesnest-valkeydata:/data
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
 
-  # MinIO (Ledger #7): S3-compatible object storage for dev media. The app
+  # MinIO: S3-compatible object storage for dev media. The app
   # (S3_* env) writes here and serves media via signed /media URLs. Console at
   # http://localhost:9001 (minioadmin/minioadmin).
   minio:
     image: minio/minio:latest
-    container_name: bikenest-minio
+    container_name: bikesnest-minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -155,7 +170,7 @@ services:
       - "9000:9000"   # S3 API
       - "9001:9001"   # web console
     volumes:
-      - bikenest-minio:/data
+      - bikesnest-minio:/data
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
       interval: 5s
@@ -170,16 +185,16 @@ services:
         condition: service_healthy
     entrypoint: ["sh", "-c"]
     command:
-      - "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb --ignore-existing local/bikenest"
+      - "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb --ignore-existing local/bikesnest"
 
-  # Real ValKey cluster (Ledger #6, cluster path) is optional — see
+  # A real ValKey cluster (cluster path) is optional — see
   # docker-compose.valkey-cluster.yml (single cluster-enabled node covering all
   # slots; portable on Docker Desktop for Mac).
 
 volumes:
-  bikenest-pgdata:
-  bikenest-valkeydata:
-  bikenest-minio:
+  bikesnest-pgdata:
+  bikesnest-valkeydata:
+  bikesnest-minio:
   cargo-target:
   cargo-registry:
   node_modules:

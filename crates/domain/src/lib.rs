@@ -1,7 +1,7 @@
-//! BikeNest domain crate.
+//! BikesNest domain crate.
 //!
 //! Pure business concepts. MUST NOT depend on axum, sqlx, askama, or any
-//! infrastructure (REQUIREMENTS §4 / §113).
+//! infrastructure.
 
 use thiserror::Error;
 
@@ -99,13 +99,13 @@ impl std::fmt::Display for UserEmail {
     }
 }
 
-/// The language a user reads (REQUIREMENTS §12). Stored on the account so
+/// The language a user reads. Stored on the account so
 /// anything written *outside* a request — a transactional email rendered by a
 /// background job — can still address the person in their own language.
 ///
 /// This is a validated code, not a presentation object: the domain and
 /// application layers pass it around, and only the layers that actually render
-/// text (web, infrastructure) turn it into a `bikenest_i18n::Locale`. That is
+/// text (web, infrastructure) turn it into a `bikesnest_i18n::Locale`. That is
 /// what keeps the message catalog out of the inner layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocaleCode {

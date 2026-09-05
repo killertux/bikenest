@@ -1,10 +1,10 @@
-//! SQL-backed parking details (REQUIREMENTS §24, §28, §29).
+//! SQL-backed parking details.
 
 use crate::Db;
 use crate::parking::search::reader_err;
 use async_trait::async_trait;
-use bikenest_application::{ParkingDetailsReader, ReaderError};
-use bikenest_domain::{
+use bikesnest_application::{ParkingDetailsReader, ReaderError};
+use bikesnest_domain::{
     Cost, CurrencyCode, GeoPoint, ModerationState, Money, OpeningHours, ParkingLocation,
     ParkingType, PricingUnit, Rating, SecurityFeature, SecurityState, TimeRange,
 };

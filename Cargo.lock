@@ -761,12 +761,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "bikenest-application"
+name = "bikesnest-application"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "bikenest-domain",
+ "bikesnest-domain",
  "chrono",
  "chrono-tz",
  "serde",
@@ -776,7 +776,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bikenest-domain"
+name = "bikesnest-domain"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -787,14 +787,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "bikenest-i18n"
+name = "bikesnest-i18n"
 version = "0.1.0"
 dependencies = [
  "axum",
 ]
 
 [[package]]
-name = "bikenest-infrastructure"
+name = "bikesnest-infrastructure"
 version = "0.1.0"
 dependencies = [
  "argon2",
@@ -803,10 +803,10 @@ dependencies = [
  "aws-credential-types",
  "aws-sdk-s3",
  "aws-smithy-types",
- "bikenest-application",
- "bikenest-domain",
- "bikenest-i18n",
- "bikenest-test-support",
+ "bikesnest-application",
+ "bikesnest-domain",
+ "bikesnest-i18n",
+ "bikesnest-test-support",
  "chrono",
  "chrono-tz",
  "cron",
@@ -827,7 +827,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bikenest-test-macros"
+name = "bikesnest-test-macros"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
@@ -836,14 +836,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "bikenest-test-support"
+name = "bikesnest-test-support"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "bikenest-application",
- "bikenest-domain",
- "bikenest-infrastructure",
- "bikenest-test-macros",
+ "bikesnest-application",
+ "bikesnest-domain",
+ "bikesnest-infrastructure",
+ "bikesnest-test-macros",
  "chrono",
  "chrono-tz",
  "sqlx",
@@ -853,16 +853,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "bikenest-web"
+name = "bikesnest-web"
 version = "0.1.0"
 dependencies = [
  "askama",
  "axum",
- "bikenest-application",
- "bikenest-domain",
- "bikenest-i18n",
- "bikenest-infrastructure",
- "bikenest-test-support",
+ "bikesnest-application",
+ "bikesnest-domain",
+ "bikesnest-i18n",
+ "bikesnest-infrastructure",
+ "bikesnest-test-support",
  "chrono",
  "chrono-tz",
  "dotenvy",

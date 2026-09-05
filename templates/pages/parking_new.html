@@ -77,7 +77,7 @@
                data-lat="{{ lat }}" data-lon="{{ lon }}"
                data-default-lat="{{ default_lat }}" data-default-lon="{{ default_lon }}"
                data-lat-input="lat" data-lon-input="lon"
-               @bikenest:pin="onPin"></div>
+               @bikesnest:pin="onPin"></div>
           <p class="mt-2 text-xs text-muted">{{ tr.t("form.picked") }}: <span x-text="coords">{% if lat.is_empty() || lon.is_empty() %}{{ tr.t("form.picked_none") }}{% else %}{{ lat }}, {{ lon }}{% endif %}</span></p>
           <p x-show="message" class="mt-1 text-xs font-medium text-danger" x-text="message"></p>
         </div>

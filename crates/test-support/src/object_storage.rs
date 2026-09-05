@@ -7,15 +7,15 @@
 //! origin the app never proxies) — purely as a stable, inspectable string for
 //! gallery-link assertions; nothing actually serves that origin.
 //!
-//! [`bikenest_infrastructure::TEST_MEDIA_ORIGIN`] is the single source of
+//! [`bikesnest_infrastructure::TEST_MEDIA_ORIGIN`] is the single source of
 //! truth for that origin: `Config::for_tests` puts the same string in
 //! `security.media_hosts`, so a rendered `<img src>` here and the CSP's
 //! `img-src` allowlist are asserting on the same host by construction (see
 //! `crates/web/tests/csp_test.rs`).
 
 use async_trait::async_trait;
-use bikenest_application::{ObjectInfo, ObjectPage, ObjectStorage, PutObject, StorageError};
-use bikenest_infrastructure::TEST_MEDIA_ORIGIN;
+use bikesnest_application::{ObjectInfo, ObjectPage, ObjectStorage, PutObject, StorageError};
+use bikesnest_infrastructure::TEST_MEDIA_ORIGIN;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Mutex;

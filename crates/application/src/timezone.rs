@@ -1,12 +1,12 @@
-//! Timezone-resolution port (§29 / plans/m3-community.md §5.1).
+//! Timezone-resolution port.
 //!
 //! Contributors supply arbitrary coordinates, so a destination's IANA timezone
 //! can no longer be a static map (as in M1). The infrastructure layer provides
-//! an offline resolver; M7 may swap in a real geocoder reverse-timezone (Ledger
+//! an offline resolver; it may later swap in a real geocoder reverse-timezone
 //! #16 — keep the offline resolver as the fallback).
 
 use async_trait::async_trait;
-use bikenest_domain::GeoPoint;
+use bikesnest_domain::GeoPoint;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TimezoneError {

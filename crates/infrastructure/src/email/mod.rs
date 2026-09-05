@@ -29,7 +29,7 @@ use crate::config::{ConfigError, EmailConfig};
 /// when the configuration asked for it (development default).
 pub fn from_config(
     config: &EmailConfig,
-) -> Result<Box<dyn bikenest_application::EmailProvider>, ConfigError> {
+) -> Result<Box<dyn bikesnest_application::EmailProvider>, ConfigError> {
     match config {
         EmailConfig::Fake { outbox_root } => {
             Ok(Box::new(FakeEmailProvider::with_root(outbox_root.clone())))

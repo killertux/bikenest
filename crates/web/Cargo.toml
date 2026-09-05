@@ -1,5 +1,5 @@
 [package]
-name = "bikenest-web"
+name = "bikesnest-web"
 version.workspace = true
 edition.workspace = true
 
@@ -10,11 +10,11 @@ workspace = true
 askama = { workspace = true }
 # `multipart` on top of the workspace feature set: the photo upload endpoint.
 axum = { workspace = true, features = ["multipart"] }
-bikenest-application = { workspace = true }
-bikenest-domain = { workspace = true }
+bikesnest-application = { workspace = true }
+bikesnest-domain = { workspace = true }
 # `axum`: makes `Locale` a request extractor (web-only concern).
-bikenest-i18n = { workspace = true, features = ["axum"] }
-bikenest-infrastructure = { workspace = true }
+bikesnest-i18n = { workspace = true, features = ["axum"] }
+bikesnest-infrastructure = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = "0.10"
 dotenvy = "0.15"
@@ -33,7 +33,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
-bikenest-test-support = { workspace = true }
+bikesnest-test-support = { workspace = true }
 http-body-util = "0.1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 regex = "1"

@@ -1,5 +1,5 @@
 [package]
-name = "bikenest-test-support"
+name = "bikesnest-test-support"
 version.workspace = true
 edition.workspace = true
 
@@ -8,10 +8,10 @@ workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-bikenest-application = { workspace = true }
-bikenest-domain = { workspace = true }
-bikenest-infrastructure = { workspace = true }
-bikenest-test-macros = { version = "0.1.0", path = "../test-macros" }
+bikesnest-application = { workspace = true }
+bikesnest-domain = { workspace = true }
+bikesnest-infrastructure = { workspace = true }
+bikesnest-test-macros = { version = "0.1.0", path = "../test-macros" }
 chrono = { workspace = true }
 chrono-tz = "0.10"
 sqlx = { workspace = true }

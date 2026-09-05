@@ -1,7 +1,7 @@
 //! Adapter implementing the application-layer `DatabaseProbe` port.
 
 use async_trait::async_trait;
-use bikenest_application::{DatabaseProbe, ProbeError};
+use bikesnest_application::{DatabaseProbe, ProbeError};
 
 use crate::db::{Db, ProbeFailure};
 

@@ -1,4 +1,4 @@
-# Optional ValKey cluster (Ledger #6, cluster path).
+# Optional ValKey cluster configuration (cluster path).
 #
 # A single cluster-enabled ValKey node that owns all 16384 slots. This is a real
 # ValKey cluster: it speaks the cluster protocol (CLUSTER SLOTS + slot-based
@@ -20,14 +20,14 @@
 #
 #   docker compose -f docker-compose.valkey-cluster.yml up -d
 #   VALKEY_TEST_CLUSTER_URLS=valkey://127.0.0.1:7001 \
-#     cargo test -p bikenest-infrastructure --test valkey_rate_limit -- --nocapture
+#     cargo test -p bikesnest-infrastructure --test valkey_rate_limit -- --nocapture
 #
 # To teardown: `docker compose -f docker-compose.valkey-cluster.yml down -v`.
 
 services:
   valkey-cluster:
     image: valkey/valkey:8
-    container_name: bikenest-valkey-cluster
+    container_name: bikesnest-valkey-cluster
     # Self-init: start the server (cluster-enabled), then create a single-node
     # cluster on itself so the node registers the host-reachable 127.0.0.1:7001
     # in the slot map (a host-side client reaches it via the port mapping).

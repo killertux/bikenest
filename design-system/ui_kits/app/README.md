@@ -1,6 +1,6 @@
-# BikeNest UI Kit — applied interface kit
+# BikesNest UI Kit — applied interface kit
 
-A live, token-bound component kit reflecting the source BikeNest prototype. Open `index.html` in a browser to browse; every page binds `../../../colors_and_type.css` (the verbatim source token block).
+A live, token-bound component kit reflecting the source BikesNest prototype. Open `index.html` in a browser to browse; every page binds `../../../colors_and_type.css` (the verbatim source token block).
 
 ## Structure
 

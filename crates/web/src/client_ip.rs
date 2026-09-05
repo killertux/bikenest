@@ -12,7 +12,7 @@
 //! of a hop count, and is trivially spoofable — a single header would let one
 //! client occupy an unbounded number of rate-limit buckets.
 //!
-//! [`Config::trusted_proxy_hops`]: bikenest_infrastructure::Config::trusted_proxy_hops
+//! [`Config::trusted_proxy_hops`]: bikesnest_infrastructure::Config::trusted_proxy_hops
 
 use axum::extract::{ConnectInfo, FromRequestParts};
 use axum::http::request::Parts;

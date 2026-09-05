@@ -42,7 +42,7 @@
 //! viewport has no origin, no sort and no cursor, so it gets its own
 //! `BOUNDS_FILTERS`/`BOUNDS_ORIGIN` pair rather than bending the radius one.
 //!
-//! "Open now" is not written here at all: it is `bikenest_is_open_at`
+//! "Open now" is not written here at all: it is `bikesnest_is_open_at`
 //! (migration 0020), called once as a filter and once as the row's flag. The
 //! domain keeps `OpeningHours::status_at` for the details page, which needs
 //! the Open/Closed/**Unknown** tri-state that a card's boolean cannot carry;
@@ -50,11 +50,11 @@
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     BoundsPage, BoundsQuery, Cluster, CostFilter, FreshnessConfig, ParkingSummary, ReaderError,
     RecommendationConfig, SearchPage, SearchRequest, Sort,
 };
-use bikenest_domain::{Cost, CurrencyCode, GeoPoint, Money, ParkingType, PricingUnit, Rating};
+use bikesnest_domain::{Cost, CurrencyCode, GeoPoint, Money, ParkingType, PricingUnit, Rating};
 
 pub struct SqlxParkingSearchReader {
     db: Db,
@@ -141,7 +141,7 @@ const FILTERS: &str = r#"
       AND ST_DWithin(pl.location, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography, $3)
       AND ($4::text IS NULL OR pl.cost_kind = $4)
       AND ($5::text[] IS NULL OR pl.parking_type = ANY($5))
-      AND ($6 = false OR bikenest_is_open_at(pl.id, pl.timezone, $8))
+      AND ($6 = false OR bikesnest_is_open_at(pl.id, pl.timezone, $8))
       AND NOT EXISTS (
           SELECT 1 FROM unnest($7::text[]) AS wanted(code)
           WHERE NOT EXISTS (
@@ -170,7 +170,7 @@ const BOUNDS_FILTERS: &str = r#"
       AND pl.location && ST_MakeEnvelope($1, $2, $3, $4, 4326)::geography
       AND ($5::text IS NULL OR pl.cost_kind = $5)
       AND ($6::text[] IS NULL OR pl.parking_type = ANY($6))
-      AND ($7 = false OR bikenest_is_open_at(pl.id, pl.timezone, $9))
+      AND ($7 = false OR bikesnest_is_open_at(pl.id, pl.timezone, $9))
       AND NOT EXISTS (
           SELECT 1 FROM unnest($8::text[]) AS wanted(code)
           WHERE NOT EXISTS (
@@ -206,7 +206,7 @@ const SECURITY_COUNT_JOIN: &str = r#"
 /// Whole days since the last verification, `NULL` when never verified —
 /// `chrono`'s `(now - verified).num_days().max(0)`, which the freshness ladder
 /// then compares against the configured thresholds exactly as
-/// `bikenest_domain::categorize` does.
+/// `bikesnest_domain::categorize` does.
 const FRESHNESS_DAYS_JOIN: &str = r#"
     CROSS JOIN LATERAL (
         SELECT GREATEST(
@@ -270,7 +270,7 @@ fn sort_key_sql(sort: Sort) -> (String, String) {
 }
 
 #[async_trait]
-impl bikenest_application::ParkingSearchReader for SqlxParkingSearchReader {
+impl bikesnest_application::ParkingSearchReader for SqlxParkingSearchReader {
     async fn search(
         &self,
         request: &SearchRequest,
@@ -377,7 +377,7 @@ impl SqlxParkingSearchReader {
         types: &Option<Vec<String>>,
         security_all: &Option<Vec<String>>,
         now: chrono::DateTime<chrono::Utc>,
-        cursor: Option<bikenest_application::Cursor>,
+        cursor: Option<bikesnest_application::Cursor>,
         limit: usize,
     ) -> Result<Vec<ParkingSummary>, ReaderError> {
         let (sort_key, sort_key_joins) = sort_key_sql(request.sort);
@@ -412,7 +412,7 @@ impl SqlxParkingSearchReader {
                 pl.last_verified_at,
                 ST_Distance(pl.location, {ORIGIN}) AS distance_m,
                 codes.security_yes_codes,
-                bikenest_is_open_at(pl.id, pl.timezone, $8) AS is_open_now,
+                bikesnest_is_open_at(pl.id, pl.timezone, $8) AS is_open_now,
                 photo.storage_key AS photo_key,
                 c.sort_key
             FROM candidates c
@@ -578,7 +578,7 @@ impl SqlxParkingSearchReader {
                 pl.last_verified_at,
                 c.distance_m,
                 codes.security_yes_codes,
-                bikenest_is_open_at(pl.id, pl.timezone, $9) AS is_open_now,
+                bikesnest_is_open_at(pl.id, pl.timezone, $9) AS is_open_now,
                 photo.storage_key AS photo_key,
                 -- Browse is not paginated, so these rows carry no keyset key:
                 -- a cursor minted from one would page through a viewport that
@@ -682,7 +682,7 @@ impl SqlxParkingSearchReader {
 /// each fragment tests for `NULL` rather than building different SQL, so the
 /// count, the page and the cluster grid are one statement text each.
 fn filter_binds(
-    filters: &bikenest_application::Filters,
+    filters: &bikesnest_application::Filters,
 ) -> (Option<String>, Option<Vec<String>>, Option<Vec<String>>) {
     let cost = filters.cost.map(|c: CostFilter| match c {
         CostFilter::Free => "free".to_string(),

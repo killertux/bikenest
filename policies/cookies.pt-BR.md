@@ -1,4 +1,4 @@
-Esta Política de Cookies descreve os cookies que o BikeNest grava no seu navegador. Ela complementa a [Política de Privacidade](/privacy).
+Esta Política de Cookies descreve os cookies que o BikesNest grava no seu navegador. Ela complementa a [Política de Privacidade](/privacy).
 
 ## O que usamos
 
@@ -14,7 +14,7 @@ Não usamos armazenamento local (*localStorage*) nem outras tecnologias de rastr
 
 ## Cookies de terceiros
 
-Não permitimos que terceiros gravem cookies no BikeNest. Ao exibir o mapa, seu navegador carrega os "tiles" diretamente do provedor de mapas; essa requisição leva seu endereço IP ao provedor, mas ele não grava cookies pelo nosso site. Veja a seção "Com quem compartilhamos" da [Política de Privacidade](/privacy).
+Não permitimos que terceiros gravem cookies no BikesNest. Ao exibir o mapa, seu navegador carrega os "tiles" diretamente do provedor de mapas; essa requisição leva seu endereço IP ao provedor, mas ele não grava cookies pelo nosso site. Veja a seção "Com quem compartilhamos" da [Política de Privacidade](/privacy).
 
 ## Como controlar
 

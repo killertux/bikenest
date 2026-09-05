@@ -1,4 +1,4 @@
-/* BikeNest Alpine components — CSP build (plans/m7-hardening.md §3.3).
+/* BikesNest Alpine components — CSP build.
  *
  * The CSP build forbids `eval`/`new Function`, so every inline `x-data` object
  * literal, assignment-style `@click`, arrow-function or global access has been
@@ -145,8 +145,8 @@ document.addEventListener('alpine:init', function () {
    * MapLibre); the two talk over events that bubble from #map, so nothing
    * leaks across a boosted navigation:
    *
-   *   this component --bikenest:map-toggle--> #map   (panel shown/hidden)
-   *   #map           --bikenest:map-moved---> this   (panned/zoomed; the box)
+   *   this component --bikesnest:map-toggle--> #map   (panel shown/hidden)
+   *   #map           --bikesnest:map-moved---> this   (panned/zoomed; the box)
    *
    * The listener is on `$el` (this component's root, an ancestor of #map)
    * rather than on `document`, so a swapped-in page cannot leave a handler
@@ -167,7 +167,7 @@ document.addEventListener('alpine:init', function () {
         var stored = null;
         try { stored = window.localStorage.getItem('bn.search.mapOpen'); } catch (e) { stored = null; }
         this.mapOpen = stored === null ? window.innerWidth >= 1024 : stored === '1';
-        this.$el.addEventListener('bikenest:map-moved', function (e) {
+        this.$el.addEventListener('bikesnest:map-moved', function (e) {
           var bbox = e && e.detail && e.detail.bbox;
           if (!bbox) return;
           var input = document.getElementById('bbox-input');
@@ -188,7 +188,7 @@ document.addEventListener('alpine:init', function () {
       publishMapState: function () {
         var el = document.getElementById('map');
         if (!el) return;
-        el.dispatchEvent(new CustomEvent('bikenest:map-toggle', {
+        el.dispatchEvent(new CustomEvent('bikesnest:map-toggle', {
           bubbles: true,
           detail: { open: this.mapOpen },
         }));
@@ -276,8 +276,8 @@ document.addEventListener('alpine:init', function () {
    * element-scoped events on #pin-map, so nothing leaks across a boosted
    * navigation:
    *
-   *   this component --bikenest:pin-set--> #pin-map   (move the pin there)
-   *   #pin-map       --bikenest:pin------> this        (the pin moved)
+   *   this component --bikesnest:pin-set--> #pin-map   (move the pin there)
+   *   #pin-map       --bikesnest:pin------> this        (the pin moved)
    *
    * With no map at all, the buttons still write the lat/lon inputs directly,
    * so geolocation and address lookup work without MapLibre. */
@@ -332,7 +332,7 @@ document.addEventListener('alpine:init', function () {
         this.message = '';
         var el = this.mapEl();
         if (el) {
-          el.dispatchEvent(new CustomEvent('bikenest:pin-set', {
+          el.dispatchEvent(new CustomEvent('bikesnest:pin-set', {
             detail: { lat: lat, lon: lon },
           }));
         }
@@ -407,7 +407,7 @@ document.addEventListener('alpine:init', function () {
        * exactly the dialog FocusTrap should cycle within. */
       trapTab: function (e) { FocusTrap.trapTab(e, e.currentTarget); },
       report: function (type, id) {
-        this.$dispatch('bikenest:report', { type: type, id: id });
+        this.$dispatch('bikesnest:report', { type: type, id: id });
       },
     };
   });

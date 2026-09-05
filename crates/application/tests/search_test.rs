@@ -1,12 +1,12 @@
 //! Application-layer tests for `SearchParking` / `GetParkingDetails` using
 //! fake ports (no database — the real-SQL tests live in infrastructure).
 
-use bikenest_application::{
+use bikesnest_application::{
     BoundsPage, BoundsQuery, Cursor, Filters, GeoHit, GeocodeError, Geocoder, GetParkingDetails,
     ParkingDetailsReader, ParkingSearchReader, ParkingSummary, ReaderError, SearchError,
     SearchInput, SearchParking,
 };
-use bikenest_domain::{Cost, GeoPoint, ParkingLocation, ParkingType, Rating, TimeRange, hms};
+use bikesnest_domain::{Cost, GeoPoint, ParkingLocation, ParkingType, Rating, TimeRange, hms};
 use std::sync::{Arc, Mutex};
 
 fn sp_tz() -> chrono_tz::Tz {
@@ -99,17 +99,17 @@ impl FakeReader {
 impl ParkingSearchReader for FakeReader {
     async fn search(
         &self,
-        _request: &bikenest_application::SearchRequest,
+        _request: &bikesnest_application::SearchRequest,
         limit: usize,
         apply_cursor: bool,
-    ) -> Result<bikenest_application::SearchPage, ReaderError> {
+    ) -> Result<bikesnest_application::SearchPage, ReaderError> {
         self.received_limit.lock().unwrap().push(limit);
         self.received_apply_cursor
             .lock()
             .unwrap()
             .push(apply_cursor);
         let items = self.items.iter().take(limit).cloned().collect();
-        Ok(bikenest_application::SearchPage {
+        Ok(bikesnest_application::SearchPage {
             items,
             total: self.items.len() as i64,
             next_cursor: None,
@@ -273,7 +273,7 @@ async fn recommended_sort_pages_through_the_reader_like_the_other_sorts() {
         "reader order is the page order"
     );
     let next = page.next_cursor.expect("a second page exists");
-    assert_eq!(next.sort, bikenest_application::Sort::Recommended);
+    assert_eq!(next.sort, bikesnest_application::Sort::Recommended);
     assert!(
         (next.v - (-0.68)).abs() < 1e-9,
         "the cursor anchors on the reader's own sort key, not a recomputed score"
@@ -284,12 +284,12 @@ async fn recommended_sort_pages_through_the_reader_like_the_other_sorts() {
     let mut crossed = input;
     crossed.sort = Some("distance".to_string());
     crossed.cursor = Some(next.encode());
-    let request = bikenest_application::SearchRequest::new(
+    let request = bikesnest_application::SearchRequest::new(
         GeoPoint::new(-23.5, -46.6).unwrap(),
         None,
         1000,
         Filters::default(),
-        bikenest_application::Sort::Distance,
+        bikesnest_application::Sort::Distance,
         20,
         Some(&next.encode()),
     );
@@ -328,7 +328,7 @@ async fn sql_sorts_pass_cursor_to_reader_and_build_next_cursor() {
 #[tokio::test]
 async fn cursor_roundtrip_and_mismatched_sort_are_handled() {
     let c = Cursor {
-        sort: bikenest_application::Sort::Rating,
+        sort: bikesnest_application::Sort::Rating,
         v: -4.2,
         id: 77,
     };
@@ -336,12 +336,12 @@ async fn cursor_roundtrip_and_mismatched_sort_are_handled() {
     assert_eq!(decoded, c);
     assert!(Cursor::decode("garbage!!!").is_none());
     // A cursor for a different sort is dropped by SearchRequest (page 1).
-    let request = bikenest_application::SearchRequest::new(
+    let request = bikesnest_application::SearchRequest::new(
         GeoPoint::new(-23.5, -46.6).unwrap(),
         Some("x".into()),
         1000,
         Filters::default(),
-        bikenest_application::Sort::Distance,
+        bikesnest_application::Sort::Distance,
         20,
         Some(&c.encode()),
     );
@@ -359,7 +359,7 @@ async fn filters_parse_from_input() {
         ..Default::default()
     };
     let filters: Filters = input.filters();
-    assert_eq!(filters.cost, Some(bikenest_application::CostFilter::Free));
+    assert_eq!(filters.cost, Some(bikesnest_application::CostFilter::Free));
     // Parsing keeps unknown codes out; deduplication is SearchRequest's job.
     assert_eq!(
         filters.types,
@@ -369,12 +369,12 @@ async fn filters_parse_from_input() {
     assert!(filters.open_now);
 
     // SearchRequest::new normalizes: dedup types, trim/sort security codes.
-    let request = bikenest_application::SearchRequest::new(
+    let request = bikesnest_application::SearchRequest::new(
         GeoPoint::new(-23.5, -46.6).unwrap(),
         Some("x".into()),
         1000,
         filters,
-        bikenest_application::Sort::Distance,
+        bikesnest_application::Sort::Distance,
         20,
         None,
     );
@@ -395,7 +395,7 @@ async fn filters_parse_from_input() {
 #[tokio::test]
 async fn unknown_security_codes_are_dropped_from_the_request() {
     let request = |codes: Vec<&str>| {
-        bikenest_application::SearchRequest::new(
+        bikesnest_application::SearchRequest::new(
             GeoPoint::new(-23.5, -46.6).unwrap(),
             None,
             1000,
@@ -403,7 +403,7 @@ async fn unknown_security_codes_are_dropped_from_the_request() {
                 security_all: codes.into_iter().map(str::to_string).collect(),
                 ..Filters::default()
             },
-            bikenest_application::Sort::Distance,
+            bikesnest_application::Sort::Distance,
             20,
             None,
         )
@@ -435,7 +435,7 @@ impl ParkingDetailsReader for OneLocationReader {
     }
 }
 
-fn location(hours: bikenest_domain::OpeningHours) -> ParkingLocation {
+fn location(hours: bikesnest_domain::OpeningHours) -> ParkingLocation {
     ParkingLocation::new(
         42,
         "Estação Vila Mariana",
@@ -447,7 +447,7 @@ fn location(hours: bikenest_domain::OpeningHours) -> ParkingLocation {
         sp_tz(),
         hours,
         vec![],
-        bikenest_domain::ModerationState::Active,
+        bikesnest_domain::ModerationState::Active,
         Rating::new(Some(4.5), 2).unwrap(),
         chrono::Utc::now(),
         chrono::Utc::now(),
@@ -462,17 +462,17 @@ fn location(hours: bikenest_domain::OpeningHours) -> ParkingLocation {
 async fn details_view_computes_freshness_and_open_status() {
     // Open 09:00–18:00 on Mondays (SP local).
     let hours =
-        bikenest_domain::OpeningHours::weekly(vec![(1, TimeRange::new(hms(9, 0), hms(18, 0)))]);
+        bikesnest_domain::OpeningHours::weekly(vec![(1, TimeRange::new(hms(9, 0), hms(18, 0)))]);
     let uc = GetParkingDetails::new(
         Box::new(OneLocationReader(Some(location(hours)))),
         Default::default(),
     );
     let view = uc.execute(42).await.unwrap().unwrap();
-    assert_eq!(view.freshness, bikenest_domain::FreshnessCategory::Fresh);
+    assert_eq!(view.freshness, bikesnest_domain::FreshnessCategory::Fresh);
     // Unknown hours would be Unknown; with schedule, depends on now — just check it computes.
     assert!(matches!(
         view.is_open_now,
-        bikenest_domain::OpenStatus::Open | bikenest_domain::OpenStatus::Closed
+        bikesnest_domain::OpenStatus::Open | bikesnest_domain::OpenStatus::Closed
     ));
 }
 
@@ -565,16 +565,16 @@ async fn browse_passes_the_box_and_every_filter_to_the_reader() {
     assert_eq!(seen[0].south, -25.45);
     assert_eq!(seen[0].east, -49.25);
     assert_eq!(seen[0].north, -25.41);
-    assert_eq!(seen[0].limit, bikenest_application::BROWSE_MARKER_CAP);
+    assert_eq!(seen[0].limit, bikesnest_application::BROWSE_MARKER_CAP);
     assert_eq!(
         seen[0].filters.cost,
-        Some(bikenest_application::CostFilter::Free)
+        Some(bikesnest_application::CostFilter::Free)
     );
     assert_eq!(
         seen[0].filters.types,
         vec![
-            bikenest_domain::ParkingType::Rack,
-            bikenest_domain::ParkingType::Locker
+            bikesnest_domain::ParkingType::Rack,
+            bikesnest_domain::ParkingType::Locker
         ]
     );
     assert_eq!(seen[0].filters.security_all, vec!["cctv".to_string()]);

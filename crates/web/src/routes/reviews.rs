@@ -4,11 +4,11 @@
 use axum::extract::{Form, Multipart, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use bikenest_application::{ContributionError, NewVerification, PhotoTarget};
-use bikenest_domain::{
+use bikesnest_application::{ContributionError, NewVerification, PhotoTarget};
+use bikesnest_domain::{
     ExistenceResult, ReviewBody, SecurityState, StarRating, is_known_attribute_code,
 };
-use bikenest_infrastructure::MapConfig;
+use bikesnest_infrastructure::MapConfig;
 
 use crate::auth::Auth;
 use crate::client_ip::ClientIp;
@@ -321,8 +321,8 @@ pub(crate) async fn parking_verify_post(
     let signal = match form.kind.as_str() {
         "attribute" => {
             let result = match form.result.as_str() {
-                "correct" => bikenest_domain::AttributeResult::Correct,
-                "incorrect" => bikenest_domain::AttributeResult::Incorrect,
+                "correct" => bikesnest_domain::AttributeResult::Correct,
+                "incorrect" => bikesnest_domain::AttributeResult::Incorrect,
                 _ => {
                     return verify_bad_request(&ctx);
                 }
@@ -550,7 +550,7 @@ pub(crate) async fn account_favorites(
         // Read each favorite as a summary card (best-effort; skip missing).
         if let Some(view) = state.details.execute(tid).await.ok().flatten() {
             let loc = &view.location;
-            let summary = bikenest_application::ParkingSummary {
+            let summary = bikesnest_application::ParkingSummary {
                 id: loc.id(),
                 name: loc.name().to_string(),
                 address: loc.address().to_string(),
@@ -568,12 +568,12 @@ pub(crate) async fn account_favorites(
                 last_verified_at: loc.last_verified_at(),
                 timezone: loc.timezone(),
                 is_open_now: loc.hours().status_at(now, loc.timezone())
-                    == bikenest_domain::OpenStatus::Open,
+                    == bikesnest_domain::OpenStatus::Open,
                 photo_key: None,
                 // Favorites are listed whole, not paginated by keyset.
                 sort_key: None,
             };
-            let freshness = bikenest_domain::categorize(
+            let freshness = bikesnest_domain::categorize(
                 loc.last_verified_at(),
                 now,
                 &state.freshness.thresholds,

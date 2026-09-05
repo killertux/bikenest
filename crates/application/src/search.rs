@@ -4,7 +4,7 @@ use crate::ports::{
     BoundsPage, BoundsQuery, FreshnessConfig, GeoHit, GeocodeError, Geocoder, ParkingDetailsReader,
     ParkingSearchReader, ReaderError, SearchInput, SearchPage, SearchRequest,
 };
-use bikenest_domain::{FreshnessCategory, GeoPoint};
+use bikesnest_domain::{FreshnessCategory, GeoPoint};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SearchError {
@@ -67,7 +67,7 @@ impl SearchParking {
 
     /// Executes the search. Returns the result page plus the geocode hit when
     /// the origin came from resolving a query (the web layer shows the
-    /// resolved label; the coordinates are never persisted — §22).
+    /// resolved label; the coordinates are never persisted — ).
     pub async fn execute(
         &self,
         input: SearchInput,
@@ -110,7 +110,7 @@ impl SearchParking {
         Ok((query, page))
     }
 
-    /// Origin resolution (§21/§22): explicit coordinates win over the query;
+    /// Origin resolution: explicit coordinates win over the query;
     /// otherwise geocode the query. Nothing is persisted here.
     async fn resolve(
         &self,
@@ -158,7 +158,7 @@ impl SearchParking {
     /// One page, for every sort: the reader orders and limits, this only turns
     /// the last row's key into the next cursor.
     async fn page(&self, request: &SearchRequest) -> Result<SearchPage, SearchError> {
-        // Fetch one extra row to know whether a next page exists (§32).
+        // Fetch one extra row to know whether a next page exists.
         let mut page = self
             .reader
             .search(request, request.page_size + 1, true)
@@ -188,9 +188,9 @@ impl SearchParking {
 /// Result of the details use case: full aggregate + computed display facts.
 #[derive(Debug, Clone)]
 pub struct ParkingDetailsView {
-    pub location: bikenest_domain::ParkingLocation,
+    pub location: bikesnest_domain::ParkingLocation,
     pub freshness: FreshnessCategory,
-    pub is_open_now: bikenest_domain::OpenStatus,
+    pub is_open_now: bikesnest_domain::OpenStatus,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -199,7 +199,7 @@ pub enum DetailsError {
     Read(#[from] ReaderError),
 }
 
-/// Use case: everything the P3 details page needs (§24).
+/// Use case: everything the P3 details page needs.
 pub struct GetParkingDetails {
     reader: Box<dyn ParkingDetailsReader>,
     freshness: FreshnessConfig,
@@ -215,7 +215,7 @@ impl GetParkingDetails {
             return Ok(None);
         };
         let now = chrono::Utc::now();
-        let freshness = bikenest_domain::categorize(
+        let freshness = bikesnest_domain::categorize(
             location.last_verified_at(),
             now,
             &self.freshness.thresholds,

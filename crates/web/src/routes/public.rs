@@ -5,8 +5,8 @@
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
-use bikenest_application::{Readiness, SearchInput};
-use bikenest_infrastructure::FEATURED_ORIGIN;
+use bikesnest_application::{Readiness, SearchInput};
+use bikesnest_infrastructure::FEATURED_ORIGIN;
 use serde_json::json;
 
 use crate::auth::Auth;
@@ -103,7 +103,7 @@ pub(crate) async fn home(State(state): State<AppState>, locale: Locale, auth: Au
             featured.push(CardVm::from_summary(
                 tr,
                 s,
-                bikenest_domain::categorize(s.last_verified_at, now, &state.freshness.thresholds),
+                bikesnest_domain::categorize(s.last_verified_at, now, &state.freshness.thresholds),
                 photo_url,
             ));
         }

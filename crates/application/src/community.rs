@@ -1,9 +1,9 @@
-//! Community contribution use cases (REQUIREMENTS §35–§42, §45, §100, §106).
+//! Community contribution use cases.
 //!
 //! Ports + read models + [`ContributionService`]. Infrastructure implements the
 //! ports; the web layer calls the service for every contribution action. The
-//! verified-email gate (§16), rate limiting (§45), optimistic concurrency (§100)
-//! and the confidence rule (§106) all live here.
+//! verified-email gate, rate limiting, optimistic concurrency, and the
+//! confidence rule all live here.
 
 use crate::audit::{AuditEvent, AuditLog};
 use crate::auth::Clock;
@@ -11,7 +11,7 @@ use crate::ports::{FreshnessConfig, ReaderError, ReviewPhotosReader, StoredPhoto
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use crate::timezone::{TimezoneError, TimezoneResolver};
 use async_trait::async_trait;
-use bikenest_domain::{
+use bikesnest_domain::{
     AttributeResult, Confidence, Cost, ExistenceResult, ExistenceSignal, GeoPoint, ModerationState,
     OpeningHours, ParkingLocation, ParkingType, ReviewBody, RevisionSummary, SecurityFeature,
     StarRating, UserId,
@@ -25,12 +25,12 @@ use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ContributionError {
-    /// The session principal has not verified their email (the §16 gate).
+    /// The session principal has not verified their email (the  gate).
     #[error("verify your email to contribute")]
     NotVerified,
     #[error("too many attempts, try again later")]
     RateLimited,
-    /// Optimistic concurrency (§100): the expected `version` no longer matches.
+    /// Optimistic concurrency: the expected `version` no longer matches.
     #[error("someone else changed this recently; reload and try again")]
     VersionConflict,
     #[error("not found")]
@@ -69,8 +69,8 @@ impl From<crate::audit::AuditError> for ContributionError {
     }
 }
 
-impl From<bikenest_domain::DomainError> for ContributionError {
-    fn from(e: bikenest_domain::DomainError) -> Self {
+impl From<bikesnest_domain::DomainError> for ContributionError {
+    fn from(e: bikesnest_domain::DomainError) -> Self {
         ContributionError::InvalidField(e.to_string())
     }
 }
@@ -106,7 +106,7 @@ pub struct NewParkingLocation {
     pub security: Vec<SecurityFeature>,
 }
 
-/// A reversible (non-sensitive) edit to a location (§37).
+/// A reversible (non-sensitive) edit to a location.
 #[derive(Debug, Clone)]
 pub struct ParkingEdit {
     pub name: String,
@@ -118,7 +118,7 @@ pub struct ParkingEdit {
     pub security: Vec<SecurityFeature>,
 }
 
-/// A gated, sensitive change proposal (§37/§107). `proposed` is a JSONB payload
+/// A gated, sensitive change proposal. `proposed` is a JSONB payload
 /// shaped by `kind`: move_location → `{point, timezone, reason}`;
 /// change_existence → `{existence, reason}`.
 #[derive(Debug, Clone)]
@@ -126,11 +126,11 @@ pub struct NewProposal {
     pub location_id: i64,
     pub proposer_id: UserId,
     pub base_version: i64,
-    pub kind: bikenest_domain::ProposalKind,
+    pub kind: bikesnest_domain::ProposalKind,
     pub proposed: serde_json::Value,
 }
 
-/// An advisory duplicate candidate (§36). Non-blocking; ranked by
+/// An advisory duplicate candidate. Non-blocking; ranked by
 /// name-similarity + address overlap.
 #[derive(Debug, Clone)]
 pub struct DuplicateCandidate {
@@ -154,7 +154,7 @@ pub struct Review {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Per-attribute verification tallies (§39 / §106 — disputes shown, never averaged).
+/// Per-attribute verification tallies ( /  — disputes shown, never averaged).
 #[derive(Debug, Clone)]
 pub struct AttributeSummary {
     pub code: String,
@@ -244,7 +244,7 @@ pub struct ContributionItem {
 pub struct CommunityParkingDetails {
     pub location: ParkingLocation,
     pub reviews: Vec<Review>,
-    /// Approved review photos (D3 §38), keyed by review id — only APPROVED render.
+    /// Approved review photos, keyed by review id — only APPROVED render.
     pub review_photos: std::collections::HashMap<i64, Vec<StoredPhoto>>,
     pub confidence: Confidence,
     pub disputed: bool,
@@ -256,7 +256,7 @@ pub struct CommunityParkingDetails {
     pub reasons: Vec<Reason>,
 }
 
-/// One reason in the "recommended because…" block (§105). Only positive
+/// One reason in the "recommended because…" block. Only positive
 /// factors are ever surfaced; missing data yields no claim.
 #[derive(Debug, Clone)]
 pub struct Reason {
@@ -407,7 +407,7 @@ pub trait ContributionHistoryReader: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Recommendation explanation (§105)
+// Recommendation explanation
 // ---------------------------------------------------------------------------
 
 /// Build the "recommended because…" reasons for a single summary row. Mirrors
@@ -425,7 +425,7 @@ pub fn recommendation_reasons(
 ) -> Vec<Reason> {
     let mut reasons = Vec::new();
 
-    // Distance — only surfaces when the request carries an origin (§105).
+    // Distance — only surfaces when the request carries an origin.
     if origin.is_some() {
         let d = (item.distance_m / radius_m as f64).clamp(0.0, 1.0);
         let distance_score = 1.0 - d;
@@ -458,10 +458,10 @@ pub fn recommendation_reasons(
         });
     }
 
-    let cat = bikenest_domain::categorize(item.last_verified_at, now, &freshness.thresholds);
+    let cat = bikesnest_domain::categorize(item.last_verified_at, now, &freshness.thresholds);
     match cat {
-        bikenest_domain::FreshnessCategory::Fresh
-        | bikenest_domain::FreshnessCategory::RecentlyVerified => {
+        bikesnest_domain::FreshnessCategory::Fresh
+        | bikesnest_domain::FreshnessCategory::RecentlyVerified => {
             reasons.push(Reason {
                 factor: "freshness",
                 label_key: "reason.freshness",
@@ -491,8 +491,8 @@ fn distance_label(m: f64) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Rate-limit defaults (§45). Keys are `contribution:{kind}:user:{id}` and, for
-// parking-create, `:ip:{ip}`. Documented for M7 tuning (Ledger #6).
+// Rate-limit defaults. Keys are `contribution:{kind}:user:{id}` and, for
+// parking-create, `:ip:{ip}`. Documented for tuning.
 // ---------------------------------------------------------------------------
 
 const PARKING_CREATE_USER_LIMIT: u32 = 5;
@@ -592,7 +592,7 @@ impl ContributionService {
     }
 
     // -----------------------------------------------------------------------
-    // Add / edit / propose (§35–§37)
+    // Add / edit / propose (–)
     // -----------------------------------------------------------------------
 
     pub async fn add_parking_location(
@@ -616,7 +616,7 @@ impl ContributionService {
         .await?;
 
         validate_name_address(&input.name, &input.address)?;
-        // Auto-derive the timezone when the form did not provide one (§29).
+        // Auto-derive the timezone when the form did not provide one.
         if input.timezone.is_none() {
             input.timezone = Some(self.deps.tz.resolve(input.point).await?);
         }
@@ -676,7 +676,7 @@ impl ContributionService {
             .await
     }
 
-    /// Applies a reversible edit with optimistic concurrency (§100). The web
+    /// Applies a reversible edit with optimistic concurrency. The web
     /// layer routes sensitive changes (move / removal) to [`Self::propose_location_change`]
     /// separately, so the typed [`ParkingEdit`] cannot express them.
     pub async fn apply_parking_edit(
@@ -712,12 +712,12 @@ impl ContributionService {
         Ok(new_version)
     }
 
-    /// Creates a `PENDING` sensitive-change proposal. No live change (§37/§107).
+    /// Creates a `PENDING` sensitive-change proposal. No live change.
     pub async fn propose_location_change(
         &self,
         user: &crate::auth::AuthenticatedUser,
         id: i64,
-        kind: bikenest_domain::ProposalKind,
+        kind: bikesnest_domain::ProposalKind,
         proposed: serde_json::Value,
     ) -> Result<i64, ContributionError> {
         self.require_verified(user)?;
@@ -750,7 +750,7 @@ impl ContributionService {
     }
 
     // -----------------------------------------------------------------------
-    // Reviews (§38)
+    // Reviews
     // -----------------------------------------------------------------------
 
     pub async fn upsert_review(
@@ -795,7 +795,7 @@ impl ContributionService {
     }
 
     // -----------------------------------------------------------------------
-    // Verification (§39/§41)
+    // Verification
     // -----------------------------------------------------------------------
 
     pub async fn record_verification(
@@ -821,7 +821,7 @@ impl ContributionService {
         let location_id = signal.location_id();
         self.require_active(location_id).await?;
         self.deps.verifications.record(signal, self.now()).await?;
-        // A positive existence confirmation is the freshness source (§106).
+        // A positive existence confirmation is the freshness source.
         if is_still_exists {
             self.deps
                 .verifications
@@ -840,7 +840,7 @@ impl ContributionService {
     }
 
     // -----------------------------------------------------------------------
-    // Favorites (§42) — authenticated (any logged-in), not necessarily verified.
+    // Favorites — authenticated (any logged-in), not necessarily verified.
     // -----------------------------------------------------------------------
 
     pub async fn toggle_favorite(
@@ -870,7 +870,7 @@ impl ContributionService {
     }
 
     // -----------------------------------------------------------------------
-    // Extended P3 details (§24 + reviews/confidence/favorite/explanation)
+    // Extended P3 details ( + reviews/confidence/favorite/explanation)
     // -----------------------------------------------------------------------
 
     /// Builds the community view over an **already-loaded** location: reviews,
@@ -907,7 +907,7 @@ impl ContributionService {
             .latest_existence_per_user(id)
             .await?;
         let confidence =
-            bikenest_domain::confidence(&signals, now, &self.deps.freshness.thresholds);
+            bikesnest_domain::confidence(&signals, now, &self.deps.freshness.thresholds);
         let (attribute_summary, parked_here_count) = self
             .deps
             .verifications
@@ -1001,7 +1001,7 @@ fn signal_kind_code(signal: &NewVerification) -> &'static str {
 }
 
 fn summary_of(location: &ParkingLocation, reviews: &[Review]) -> crate::ports::ParkingSummary {
-    let rating = bikenest_domain::Rating::new(
+    let rating = bikesnest_domain::Rating::new(
         if reviews.is_empty() {
             None
         } else {
@@ -1015,7 +1015,7 @@ fn summary_of(location: &ParkingLocation, reviews: &[Review]) -> crate::ports::P
         },
         reviews.len() as i64,
     )
-    .unwrap_or_else(|_| bikenest_domain::Rating::new(None, 0).unwrap());
+    .unwrap_or_else(|_| bikesnest_domain::Rating::new(None, 0).unwrap());
     crate::ports::ParkingSummary {
         id: location.id(),
         name: location.name().to_string(),
@@ -1027,7 +1027,7 @@ fn summary_of(location: &ParkingLocation, reviews: &[Review]) -> crate::ports::P
         security_yes: location
             .security()
             .iter()
-            .filter(|f| f.state() == bikenest_domain::SecurityState::Yes)
+            .filter(|f| f.state() == bikesnest_domain::SecurityState::Yes)
             .map(|f| f.code().to_string())
             .collect(),
         rating,

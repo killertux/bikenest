@@ -4,8 +4,8 @@
 use axum::extract::{Form, Multipart, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use bikenest_application::{PhotoError, PhotoKind, PhotoTarget};
-use bikenest_infrastructure::MapConfig;
+use bikesnest_application::{PhotoError, PhotoKind, PhotoTarget};
+use bikesnest_infrastructure::MapConfig;
 
 use crate::auth::Auth;
 use crate::client_ip::ClientIp;

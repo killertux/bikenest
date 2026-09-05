@@ -4,8 +4,8 @@
 use axum::extract::{Form, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use bikenest_application::AuthError;
-use bikenest_domain::{Role, UserEmail};
+use bikesnest_application::AuthError;
+use bikesnest_domain::{Role, UserEmail};
 
 use crate::auth::{
     Auth, anon_csrf_token, clear_session_cookie, random_state_hex, set_session_cookie,

@@ -1,10 +1,10 @@
-//! Privacy & account lifecycle use cases (REQUIREMENTS §66–§82, §98).
+//! Privacy and account lifecycle use cases.
 //!
 //! Ports + read models + [`PrivacyService`] + [`RetentionJob`]. Infrastructure
 //! implements the ports; the web layer calls the service for every export /
 //! deletion / rights-request / retention action.
 //!
-//! Design decisions (plans/m6-privacy.md §2):
+//! Design decisions are documented alongside the privacy policy:
 //! - **Deletion is anonymize-in-place** — the `users` row survives with PII
 //!   scrubbed; community content is retained *unattributed*, never hard-deleted.
 //! - **The export payload is a versioned JSON document** (`schema_version: 1`);
@@ -17,7 +17,7 @@ use crate::auth::{
     TokenGenerator,
 };
 use async_trait::async_trait;
-use bikenest_domain::{
+use bikesnest_domain::{
     AuthenticationProvider, ExportState, Password, PolicyKind, PrivacyRequestKind,
     PrivacyRequestState, Role, UserId,
 };
@@ -74,8 +74,8 @@ impl From<crate::audit::AuditError> for PrivacyError {
     }
 }
 
-impl From<bikenest_domain::DomainError> for PrivacyError {
-    fn from(e: bikenest_domain::DomainError) -> Self {
+impl From<bikesnest_domain::DomainError> for PrivacyError {
+    fn from(e: bikesnest_domain::DomainError) -> Self {
         PrivacyError::InvalidField(e.to_string())
     }
 }
@@ -87,7 +87,7 @@ impl From<crate::ports::ReaderError> for PrivacyError {
 }
 
 // ---------------------------------------------------------------------------
-// Export payload (§73) — a versioned, machine-readable document
+// Export payload — a versioned, machine-readable document
 // ---------------------------------------------------------------------------
 
 /// The versioned personal-data export document. `schema_version: 1`.
@@ -233,7 +233,7 @@ pub struct ExportPhoto {
 }
 
 // ---------------------------------------------------------------------------
-// Ports: export read/write (§73)
+// Ports: export read/write
 // ---------------------------------------------------------------------------
 
 /// A new export to persist. `token` is the raw 32-byte download token; the
@@ -282,7 +282,7 @@ pub trait ExportRepository: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Ports: manual rights workflow (§72)
+// Ports: manual rights workflow
 // ---------------------------------------------------------------------------
 
 pub struct NewPrivacyRequest {
@@ -319,7 +319,7 @@ pub trait PrivacyRequestRepository: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Ports: anonymize-in-place (§74)
+// Ports: anonymize-in-place
 // ---------------------------------------------------------------------------
 
 /// Per-table row counts from one anonymization transaction. The counts let both
@@ -370,7 +370,7 @@ pub trait AnonymizationRepository: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Ports: retention job (§75)
+// Ports: retention job
 // ---------------------------------------------------------------------------
 
 #[async_trait]
@@ -404,7 +404,7 @@ pub trait RetentionRepository: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Ports: versioned legal pages (§70)
+// Ports: versioned legal pages
 // ---------------------------------------------------------------------------
 
 /// Locale code stored in `policy_version.locale` (BCP 47 form, as used for
@@ -422,7 +422,7 @@ pub struct PolicyDocument {
     pub effective_at: DateTime<Utc>,
     pub superseded_at: Option<DateTime<Utc>>,
     /// Markdown content. The web layer renders it through its own markdown
-    /// renderer, which escapes any raw HTML in the source (§103); templates
+    /// renderer, which escapes any raw HTML in the source; templates
     /// never mark the stored text itself as safe.
     pub content: String,
 }
@@ -446,7 +446,7 @@ pub trait PolicyReader: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Manual-rights set (§72): the non-self-serve kinds recorded for operators.
+// Manual-rights set: the non-self-serve kinds recorded for operators.
 // ---------------------------------------------------------------------------
 
 /// Kinds that go through the manual operator-fulfilled queue rather than the
@@ -538,7 +538,7 @@ impl PrivacyService {
     }
 
     // -----------------------------------------------------------------------
-    // Export / access right (§73)
+    // Export / access right
     // -----------------------------------------------------------------------
 
     /// Request a personal-data export: assemble the payload, mint a single-use
@@ -620,7 +620,7 @@ impl PrivacyService {
     }
 
     // -----------------------------------------------------------------------
-    // Deletion / anonymization (§74)
+    // Deletion / anonymization
     // -----------------------------------------------------------------------
 
     /// Request account deletion: re-authenticate, last-admin guard, create the
@@ -637,7 +637,7 @@ impl PrivacyService {
         password: Option<&str>,
         confirm_email: &str,
     ) -> Result<(), PrivacyError> {
-        // 1) Re-authentication (§72).
+        // 1) Re-authentication.
         if confirm_email.trim().to_lowercase() != user.email.as_str() {
             return Err(PrivacyError::ReauthRequired);
         }
@@ -653,7 +653,7 @@ impl PrivacyService {
             }
         }
 
-        // 2) Last-admin guard (§19): the sole ADMIN cannot delete themselves.
+        // 2) Last-admin guard: the sole ADMIN cannot delete themselves.
         if self.deps.anonymization.is_last_admin(user.id).await? {
             return Err(PrivacyError::LastAdmin);
         }
@@ -699,7 +699,7 @@ impl PrivacyService {
     }
 
     // -----------------------------------------------------------------------
-    // Manual rights requests (§72)
+    // Manual rights requests
     // -----------------------------------------------------------------------
 
     /// Submit a manual rights request (rectification/restriction/objection/
@@ -773,7 +773,7 @@ pub struct ExportRequested {
 }
 
 // ---------------------------------------------------------------------------
-// Retention job (§75)
+// Retention job
 // ---------------------------------------------------------------------------
 
 /// Config-gated retention knobs. Zero (the default) disables the corresponding
@@ -909,13 +909,13 @@ impl RetentionJob {
 mod tests {
     use super::*;
     use crate::auth::{AuthenticatedUser, IdentityRecord, Session};
-    use bikenest_domain::{AccountState, CsrfToken, SessionId};
+    use bikesnest_domain::{AccountState, CsrfToken, SessionId};
 
     // Fixed actor for service-level tests.
     fn actor() -> AuthenticatedUser {
         AuthenticatedUser {
             id: UserId(1),
-            email: bikenest_domain::UserEmail::parse("a@example.com").unwrap(),
+            email: bikesnest_domain::UserEmail::parse("a@example.com").unwrap(),
             display_name: None,
             account_state: AccountState::Active,
             is_verified: true,
@@ -1147,11 +1147,14 @@ mod tests {
     impl AccountRepository for FakeAccounts {
         async fn find_by_email(
             &self,
-            _e: &bikenest_domain::UserEmail,
-        ) -> Result<Option<bikenest_domain::User>, AuthError> {
+            _e: &bikesnest_domain::UserEmail,
+        ) -> Result<Option<bikesnest_domain::User>, AuthError> {
             Ok(None)
         }
-        async fn find_by_id(&self, _i: UserId) -> Result<Option<bikenest_domain::User>, AuthError> {
+        async fn find_by_id(
+            &self,
+            _i: UserId,
+        ) -> Result<Option<bikesnest_domain::User>, AuthError> {
             Ok(None)
         }
         async fn create(&self, _n: crate::auth::NewAccount<'_>) -> Result<UserId, AuthError> {
@@ -1170,7 +1173,7 @@ mod tests {
         async fn update_canonical_email(
             &self,
             _i: UserId,
-            _e: &bikenest_domain::UserEmail,
+            _e: &bikesnest_domain::UserEmail,
         ) -> Result<(), AuthError> {
             Ok(())
         }
@@ -1178,7 +1181,7 @@ mod tests {
             &self,
             _i: UserId,
             _a: DateTime<Utc>,
-            _e: &bikenest_domain::UserEmail,
+            _e: &bikesnest_domain::UserEmail,
         ) -> Result<(), AuthError> {
             Ok(())
         }
@@ -1188,7 +1191,7 @@ mod tests {
         async fn set_locale(
             &self,
             _i: UserId,
-            _l: bikenest_domain::LocaleCode,
+            _l: bikesnest_domain::LocaleCode,
         ) -> Result<(), AuthError> {
             Ok(())
         }
@@ -1226,13 +1229,13 @@ mod tests {
         async fn revoke_role_guarded(&self, _i: UserId, _r: Role) -> Result<bool, AuthError> {
             Ok(true)
         }
-        async fn list_users(&self) -> Result<Vec<bikenest_domain::User>, AuthError> {
+        async fn list_users(&self) -> Result<Vec<bikesnest_domain::User>, AuthError> {
             Ok(vec![])
         }
         async fn search_users(
             &self,
             _s: crate::auth::UserSearch<'_>,
-        ) -> Result<Vec<bikenest_domain::User>, AuthError> {
+        ) -> Result<Vec<bikesnest_domain::User>, AuthError> {
             Ok(vec![])
         }
         async fn labels_for(

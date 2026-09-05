@@ -1,5 +1,5 @@
 //! Integration tests for the PostgreSQL background job repository
-//! (plans/m9-background-jobs.md).
+//! PostgreSQL-backed background-job integration tests.
 //!
 //! The repo operates on the shared pool, so each test seeds rows with a unique
 //! `kind` prefix and cleans them up at the end (rows are not rolled back — they
@@ -8,8 +8,8 @@
 //! `claim` calls; the one real `claim` test asserts only the `SKIP LOCKED`
 //! disjointness property, which holds regardless of concurrent claims.
 
-use bikenest_infrastructure::{Db, JobConfig, JobRegistry, SqlxJobRepository, Worker};
-use bikenest_test_support::{db_test, pool};
+use bikesnest_infrastructure::{Db, JobConfig, JobRegistry, SqlxJobRepository, Worker};
+use bikesnest_test_support::{db_test, pool};
 use chrono::{Duration, Utc};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -33,7 +33,7 @@ async fn clear_kind(kind_prefix: &str) {
 }
 
 #[db_test]
-async fn enqueue_is_idempotent_on_key(_tx: &mut bikenest_test_support::TestTx) {
+async fn enqueue_is_idempotent_on_key(_tx: &mut bikesnest_test_support::TestTx) {
     let r = repo().await;
     let now = Utc::now();
     // First insert with a stable key → Ok(Some(id)).
@@ -70,7 +70,7 @@ async fn enqueue_is_idempotent_on_key(_tx: &mut bikenest_test_support::TestTx) {
 }
 
 #[db_test]
-async fn finish_success_completes_oneshot(_tx: &mut bikenest_test_support::TestTx) {
+async fn finish_success_completes_oneshot(_tx: &mut bikesnest_test_support::TestTx) {
     let r = repo().await;
     let now = Utc::now();
     let id = r
@@ -102,7 +102,7 @@ async fn finish_success_completes_oneshot(_tx: &mut bikenest_test_support::TestT
 }
 
 #[db_test]
-async fn finish_success_reschedules_recurring(_tx: &mut bikenest_test_support::TestTx) {
+async fn finish_success_reschedules_recurring(_tx: &mut bikesnest_test_support::TestTx) {
     let r = repo().await;
     let now = Utc::now();
     let id = r
@@ -135,7 +135,7 @@ async fn finish_success_reschedules_recurring(_tx: &mut bikenest_test_support::T
 }
 
 #[db_test]
-async fn retry_then_dead_letter(_tx: &mut bikenest_test_support::TestTx) {
+async fn retry_then_dead_letter(_tx: &mut bikesnest_test_support::TestTx) {
     let r = repo().await;
     let now = Utc::now();
     let id = r
@@ -184,7 +184,7 @@ async fn retry_then_dead_letter(_tx: &mut bikenest_test_support::TestTx) {
 }
 
 #[db_test]
-async fn gc_deletes_only_old_terminal_rows(_tx: &mut bikenest_test_support::TestTx) {
+async fn gc_deletes_only_old_terminal_rows(_tx: &mut bikesnest_test_support::TestTx) {
     let r = repo().await;
     let now = Utc::now();
     let cut_off = now - Duration::days(7);
@@ -243,7 +243,7 @@ async fn gc_deletes_only_old_terminal_rows(_tx: &mut bikenest_test_support::Test
 }
 
 #[db_test]
-async fn concurrent_claims_are_disjoint(_tx: &mut bikenest_test_support::TestTx) {
+async fn concurrent_claims_are_disjoint(_tx: &mut bikesnest_test_support::TestTx) {
     let r = repo().await;
     let now = Utc::now();
     // A kind unique to this test run: `claim_kinds` scopes both workers to it,
@@ -338,7 +338,7 @@ async fn concurrent_claims_are_disjoint(_tx: &mut bikenest_test_support::TestTx)
 }
 
 #[db_test]
-async fn claim_reclaims_a_crashed_workers_running_job(_tx: &mut bikenest_test_support::TestTx) {
+async fn claim_reclaims_a_crashed_workers_running_job(_tx: &mut bikesnest_test_support::TestTx) {
     let r = repo().await;
     let now = Utc::now();
     let kind = format!(
@@ -417,7 +417,7 @@ async fn claim_reclaims_a_crashed_workers_running_job(_tx: &mut bikenest_test_su
 }
 
 #[db_test]
-async fn finish_success_is_a_noop_for_the_wrong_claimant(_tx: &mut bikenest_test_support::TestTx) {
+async fn finish_success_is_a_noop_for_the_wrong_claimant(_tx: &mut bikesnest_test_support::TestTx) {
     let r = repo().await;
     let now = Utc::now();
     let id = r
@@ -458,7 +458,7 @@ async fn finish_success_is_a_noop_for_the_wrong_claimant(_tx: &mut bikenest_test
 /// `batch_size` 0 makes `claim` a `LIMIT 0` query, so the worker only ever
 /// idle-polls and cannot disturb rows other tests own.
 #[db_test]
-async fn cancelling_the_token_stops_an_idle_worker(_tx: &mut bikenest_test_support::TestTx) {
+async fn cancelling_the_token_stops_an_idle_worker(_tx: &mut bikesnest_test_support::TestTx) {
     let config = JobConfig {
         enabled: true,
         // Far longer than the test may take: if cancellation did not interrupt
@@ -506,12 +506,12 @@ async fn cancelling_the_token_stops_an_idle_worker(_tx: &mut bikenest_test_suppo
 // ---------------------------------------------------------------------------
 
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     EmailError, EmailKind, EmailMessage, EmailProvider, EmailQueue, JobError, JobHandler,
 };
-use bikenest_domain::LocaleCode;
-use bikenest_infrastructure::email::idempotency_key;
-use bikenest_infrastructure::{FakeEmailProvider, JobEmailQueue, SendEmailHandler};
+use bikesnest_domain::LocaleCode;
+use bikesnest_infrastructure::email::idempotency_key;
+use bikesnest_infrastructure::{FakeEmailProvider, JobEmailQueue, SendEmailHandler};
 use std::sync::Arc;
 
 /// A token nothing else in the suite (or a previous run) can collide with:
@@ -581,7 +581,7 @@ impl EmailProvider for BrokenProvider {
 /// collapses onto the existing row. A *fresh* token is a different message and
 /// must still get its own job.
 #[db_test]
-async fn queueing_one_message_twice_creates_a_single_job(_tx: &mut bikenest_test_support::TestTx) {
+async fn queueing_one_message_twice_creates_a_single_job(_tx: &mut bikesnest_test_support::TestTx) {
     let queue = JobEmailQueue::new(repo().await, 3);
     let msg = verify_message(&unique_token("dedupe"));
 
@@ -610,7 +610,7 @@ async fn queueing_one_message_twice_creates_a_single_job(_tx: &mut bikenest_test
         .await
         .unwrap();
     assert_eq!(mail.emails().len(), 1);
-    assert_eq!(mail.emails()[0].subject, "Confirme seu e-mail no BikeNest");
+    assert_eq!(mail.emails()[0].subject, "Confirme seu e-mail no BikesNest");
 
     // A re-send issues a new token → a new job, not a swallowed duplicate.
     let resend = verify_message(&unique_token("dedupe-resend"));
@@ -628,7 +628,7 @@ async fn queueing_one_message_twice_creates_a_single_job(_tx: &mut bikenest_test
 /// and the recipient's domain — never the address, never the link.
 #[db_test]
 async fn a_failing_email_send_is_retried_then_dead_lettered(
-    _tx: &mut bikenest_test_support::TestTx,
+    _tx: &mut bikesnest_test_support::TestTx,
 ) {
     // A deliberately small budget (production's default is 5).
     let jobs = repo().await;

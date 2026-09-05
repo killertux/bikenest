@@ -15,7 +15,7 @@
 use crate::auth::hash::sha256_hex;
 use crate::job::repo::SqlxJobRepository;
 use async_trait::async_trait;
-use bikenest_application::{EmailError, EmailMessage, EmailProvider, EmailQueue, JOB_EMAIL_SEND};
+use bikesnest_application::{EmailError, EmailMessage, EmailProvider, EmailQueue, JOB_EMAIL_SEND};
 use std::sync::Arc;
 
 /// Enqueue-time idempotency key for one message: `email:{kind}:{sha256(link)}`.
@@ -109,8 +109,8 @@ impl EmailQueue for InlineEmailQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bikenest_application::EmailKind;
-    use bikenest_domain::LocaleCode;
+    use bikesnest_application::EmailKind;
+    use bikesnest_domain::LocaleCode;
 
     fn msg(kind: EmailKind) -> EmailMessage {
         EmailMessage::new("ada@example.com", LocaleCode::PtBr, kind)

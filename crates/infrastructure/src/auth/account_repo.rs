@@ -2,10 +2,10 @@
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     AccountRepository, AuthError, IdentityRecord, NewAccount, UserActivity, UserSearch,
 };
-use bikenest_domain::{
+use bikesnest_domain::{
     AccountState, AuthenticationProvider, LocaleCode, Role, User, UserEmail, UserId,
 };
 use chrono::{DateTime, Utc};
@@ -199,7 +199,7 @@ impl AccountRepository for SqlxAccountRepository {
             .execute(&mut *tx)
             .await
             .map_err(|e| db_err("account.update_canonical_email", e))?;
-        // Keep the password identity's subject in sync (§2 one login-lookup key).
+        // Keep the password identity's subject in sync ( one login-lookup key).
         sqlx::query(
             "UPDATE authentication_identities SET provider_subject = $2
              WHERE user_id = $1 AND provider = 'password'",
@@ -228,7 +228,7 @@ impl AccountRepository for SqlxAccountRepository {
             .await
             .map_err(|e| db_err("account.confirm_email", e))?;
         // email_verified_at + advance to Active + (if different) switch the
-        // canonical email, all in one transaction (§2/§20).
+        // canonical email, all in one transaction.
         sqlx::query(
             "UPDATE users SET email = $2, email_verified_at = $3, account_state = 'ACTIVE',
              updated_at = now() WHERE id = $1",

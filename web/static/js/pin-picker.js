@@ -6,8 +6,8 @@
  * post fine with this file absent); this file only offers a nicer way to fill
  * them. Communication with the Alpine controls is element-scoped, on #pin-map:
  *
- *   bikenest:pin-set (in)  — move the pin here (geolocation / geocode result)
- *   bikenest:pin     (out) — the pin moved (drag or map click)
+ *   bikesnest:pin-set (in)  — move the pin here (geolocation / geocode result)
+ *   bikesnest:pin     (out) — the pin moved (drag or map click)
  *
  * Scoping the listener to the element rather than window means a boosted
  * navigation that swaps in a fresh #pin-map leaves no stale handler holding a
@@ -73,7 +73,7 @@
       if (latInput) latInput.value = lat.toFixed(6);
       if (lonInput) lonInput.value = lon.toFixed(6);
       el.dispatchEvent(
-        new CustomEvent("bikenest:pin", {
+        new CustomEvent("bikesnest:pin", {
           bubbles: true,
           detail: { lat: lat, lon: lon },
         })
@@ -89,7 +89,7 @@
       publish(e.lngLat.lat, e.lngLat.lng);
     });
 
-    el.addEventListener("bikenest:pin-set", function (e) {
+    el.addEventListener("bikesnest:pin-set", function (e) {
       var detail = (e && e.detail) || {};
       var toLat = num(detail.lat);
       var toLon = num(detail.lon);

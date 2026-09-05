@@ -1,6 +1,6 @@
-//! Real clock implementation for the [`Clock`](bikenest_application::Clock) port.
+//! Real clock implementation for the [`Clock`](bikesnest_application::Clock) port.
 
-use bikenest_application::Clock;
+use bikesnest_application::Clock;
 use chrono::{DateTime, Utc};
 
 /// The production clock: `chrono::Utc::now`.

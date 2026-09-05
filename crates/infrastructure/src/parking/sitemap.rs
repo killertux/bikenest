@@ -2,7 +2,7 @@
 //! location.
 
 use async_trait::async_trait;
-use bikenest_application::{ReaderError, SitemapReader};
+use bikesnest_application::{ReaderError, SitemapReader};
 
 use crate::Db;
 use crate::parking::search::reader_err;

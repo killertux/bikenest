@@ -1,9 +1,9 @@
-//! SQL-backed report repository (plans/m5-moderation.md §6). Compile-time `query_as!`.
+//! SQL-backed report repository. Compile-time `query_as!`.
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{ModerationError, NewReport, Report, ReportRepository};
-use bikenest_domain::{ReportOutcome, ReportState, ReportTargetType, UserId};
+use bikesnest_application::{ModerationError, NewReport, Report, ReportRepository};
+use bikesnest_domain::{ReportOutcome, ReportState, ReportTargetType, UserId};
 use chrono::{DateTime, Utc};
 
 pub struct SqlxReportRepository {

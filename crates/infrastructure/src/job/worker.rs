@@ -4,7 +4,7 @@ use crate::config::JobConfig;
 use crate::job::registry::JobRegistry;
 use crate::job::repo::{ClaimedJob, SqlxJobRepository};
 use crate::job::schedule::{backoff_ms, next_run_at};
-use bikenest_application::JobError;
+use bikesnest_application::JobError;
 use chrono::Utc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

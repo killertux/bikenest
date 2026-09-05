@@ -1,14 +1,14 @@
 //! SQL-backed photo repository (M4 → generalized in M5): the queue insert,
 //! moderation flips and the pending-photo read model — now dispatching across
-//! both `parking_photo` and `review_photo` through [`bikenest_application::PhotoKind`].
+//! both `parking_photo` and `review_photo` through [`bikesnest_application::PhotoKind`].
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     NewPendingPhoto, PendingPhoto, PhotoError, PhotoForModeration, PhotoKind, PhotoRepository,
     PhotoTarget, RejectedPhoto,
 };
-use bikenest_domain::{PhotoModerationState, UserId};
+use bikesnest_domain::{PhotoModerationState, UserId};
 use sqlx::FromRow;
 
 pub struct SqlxPhotoRepository {

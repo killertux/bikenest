@@ -5,14 +5,14 @@
 //! and the confidence/dispute aggregation.
 
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     AddParkingLocationOutcome, AttributeSummary, AuthenticatedUser, Clock, ContributionDeps,
     ContributionError, ContributionHistoryReader, ContributionItem, ContributionService,
     DuplicateCandidate, FavoriteRepository, NewParkingLocation, NewVerification,
     ParkingContributionRepository, ParkingEdit, Review, ReviewRepository, TimezoneError,
     TimezoneResolver, VerificationRepository,
 };
-use bikenest_domain::{
+use bikesnest_domain::{
     AccountState, Confidence, Cost, ExistenceResult, ExistenceSignal, GeoPoint, ModerationState,
     OpeningHours, ParkingLocation, ParkingType, ReviewBody, SecurityFeature, SecurityState,
     StarRating, UserId,
@@ -28,11 +28,11 @@ fn tz() -> chrono_tz::Tz {
 fn verified_user(uid: i64) -> AuthenticatedUser {
     AuthenticatedUser {
         id: UserId(uid),
-        email: bikenest_domain::UserEmail::parse("ok@example.com").unwrap(),
+        email: bikesnest_domain::UserEmail::parse("ok@example.com").unwrap(),
         display_name: None,
         account_state: AccountState::Active,
         is_verified: true,
-        roles: vec![bikenest_domain::Role::User],
+        roles: vec![bikesnest_domain::Role::User],
     }
 }
 
@@ -79,26 +79,26 @@ impl Clock for FakeClock {
 
 struct AllowRateLimiter;
 #[async_trait]
-impl bikenest_application::RateLimiter for AllowRateLimiter {
+impl bikesnest_application::RateLimiter for AllowRateLimiter {
     async fn check(
         &self,
         _k: &str,
         _l: u32,
         _w: Duration,
-    ) -> Result<bool, bikenest_application::RateLimitError> {
+    ) -> Result<bool, bikesnest_application::RateLimitError> {
         Ok(true)
     }
 }
 
 struct DenyRateLimiter;
 #[async_trait]
-impl bikenest_application::RateLimiter for DenyRateLimiter {
+impl bikesnest_application::RateLimiter for DenyRateLimiter {
     async fn check(
         &self,
         _k: &str,
         _l: u32,
         _w: Duration,
-    ) -> Result<bool, bikenest_application::RateLimitError> {
+    ) -> Result<bool, bikesnest_application::RateLimitError> {
         Ok(false)
     }
 }
@@ -107,11 +107,11 @@ struct RecordingAudit {
     events: Mutex<Vec<String>>,
 }
 #[async_trait]
-impl bikenest_application::AuditLog for RecordingAudit {
+impl bikesnest_application::AuditLog for RecordingAudit {
     async fn record(
         &self,
-        e: bikenest_application::AuditEvent,
-    ) -> Result<(), bikenest_application::AuditError> {
+        e: bikesnest_application::AuditEvent,
+    ) -> Result<(), bikesnest_application::AuditError> {
         self.events.lock().unwrap().push(e.action.clone());
         Ok(())
     }
@@ -185,7 +185,7 @@ impl ParkingContributionRepository for FakeContributionRepo {
     }
     async fn create_proposal(
         &self,
-        _p: &bikenest_application::NewProposal,
+        _p: &bikesnest_application::NewProposal,
     ) -> Result<i64, ContributionError> {
         Ok(7)
     }
@@ -193,7 +193,7 @@ impl ParkingContributionRepository for FakeContributionRepo {
         &self,
         _id: i64,
         _limit: i64,
-    ) -> Result<Vec<bikenest_domain::RevisionSummary>, ContributionError> {
+    ) -> Result<Vec<bikesnest_domain::RevisionSummary>, ContributionError> {
         Ok(vec![])
     }
     async fn duplicate_candidates(
@@ -226,7 +226,7 @@ fn location_at_state(
         OpeningHours::Unknown,
         vec![SecurityFeature::new("well_lit", SecurityState::Yes)],
         state,
-        bikenest_domain::Rating::new(None, 0).unwrap(),
+        bikesnest_domain::Rating::new(None, 0).unwrap(),
         chrono::Utc::now(),
         chrono::Utc::now(),
         None,
@@ -353,7 +353,7 @@ impl FavoriteRepository for FakeFavoriteRepo {
         _u: UserId,
         _after: Option<(chrono::DateTime<chrono::Utc>, i64)>,
         _limit: i64,
-    ) -> Result<Vec<bikenest_application::FavoriteItem>, ContributionError> {
+    ) -> Result<Vec<bikesnest_application::FavoriteItem>, ContributionError> {
         Ok(vec![])
     }
 }
@@ -391,13 +391,13 @@ impl FakeReviewPhotos {
     }
 }
 #[async_trait]
-impl bikenest_application::ReviewPhotosReader for FakeReviewPhotos {
+impl bikesnest_application::ReviewPhotosReader for FakeReviewPhotos {
     async fn for_reviews(
         &self,
         _ids: &[i64],
     ) -> Result<
-        std::collections::HashMap<i64, Vec<bikenest_application::StoredPhoto>>,
-        bikenest_application::ReaderError,
+        std::collections::HashMap<i64, Vec<bikesnest_application::StoredPhoto>>,
+        bikesnest_application::ReaderError,
     > {
         *self.calls.0.lock().unwrap() += 1;
         Ok(std::collections::HashMap::new())
@@ -583,7 +583,7 @@ async fn writes_are_refused_for_a_location_that_is_not_active() {
                 svc.propose_location_change(
                     &user,
                     42,
-                    bikenest_domain::ProposalKind::MoveLocation,
+                    bikesnest_domain::ProposalKind::MoveLocation,
                     serde_json::json!({}),
                 )
                 .await,
@@ -761,8 +761,8 @@ async fn community_details_batches_review_photos_in_one_call() {
 
 #[tokio::test]
 async fn recommendation_reasons_only_surface_positive_factors() {
-    use bikenest_application::recommendation_reasons;
-    let summary = bikenest_application::ParkingSummary {
+    use bikesnest_application::recommendation_reasons;
+    let summary = bikesnest_application::ParkingSummary {
         id: 1,
         name: "x".to_string(),
         address: "a".to_string(),
@@ -771,7 +771,7 @@ async fn recommendation_reasons_only_surface_positive_factors() {
         point: GeoPoint::new(0.0, 0.0).unwrap(),
         distance_m: 100.0,
         security_yes: vec!["cctv".to_string(), "indoor".to_string()],
-        rating: bikenest_domain::Rating::new(Some(4.5), 2).unwrap(),
+        rating: bikesnest_domain::Rating::new(Some(4.5), 2).unwrap(),
         last_verified_at: Some(chrono::Utc::now()),
         timezone: tz(),
         is_open_now: false,

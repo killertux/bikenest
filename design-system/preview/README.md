@@ -1,6 +1,6 @@
 # Preview cards
 
-Focused review surfaces for the BikeNest design system. Open each in a browser.
+Focused review surfaces for the BikesNest design system. Open each in a browser.
 
 | Card | Shows | Loads |
 | --- | --- | --- |

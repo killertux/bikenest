@@ -6,10 +6,10 @@
 use crate::Db;
 use crate::auth::{Argon2PasswordHasher, SqlxAccountRepository, SqlxAuditLog, SystemClock};
 use crate::config::AdminSeedConfig;
-use bikenest_application::{
+use bikesnest_application::{
     AccountRepository, AuditEvent, AuditLog, AuthError, Clock, PasswordHasher,
 };
-use bikenest_domain::{AccountState, AuthenticationProvider, Password, Role, UserEmail};
+use bikesnest_domain::{AccountState, AuthenticationProvider, Password, Role, UserEmail};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeedOutcome {
@@ -26,7 +26,7 @@ pub enum SeedAdminError {
     #[error(transparent)]
     Auth(#[from] AuthError),
     #[error("failed to write audit record")]
-    Audit(#[from] bikenest_application::AuditError),
+    Audit(#[from] bikesnest_application::AuditError),
 }
 
 /// Ensure the configured admin exists. Returns whether it was created or
@@ -39,7 +39,7 @@ pub async fn seed_admin(db: &Db, seed: &AdminSeedConfig) -> Result<SeedOutcome, 
         .password
         .as_deref()
         .ok_or(SeedAdminError::MissingPassword)?;
-    bikenest_domain::PasswordPolicy::default()
+    bikesnest_domain::PasswordPolicy::default()
         .validate(password_raw)
         .map_err(|_| SeedAdminError::MissingPassword)?;
 
@@ -77,14 +77,14 @@ pub async fn seed_admin(db: &Db, seed: &AdminSeedConfig) -> Result<SeedOutcome, 
         SeedOutcome::Updated
     } else {
         let id = repo
-            .create(bikenest_application::NewAccount {
+            .create(bikesnest_application::NewAccount {
                 email: &email,
                 display_name: Some("Administrator"),
                 password_hash: &hash,
                 state: AccountState::Active,
                 // Seeded from the CLI, with no page and no request behind it:
                 // the product default, changeable from the language toggle.
-                locale: bikenest_domain::LocaleCode::default(),
+                locale: bikesnest_domain::LocaleCode::default(),
             })
             .await?;
         repo.mark_email_verified(id, now).await?;

@@ -4,8 +4,8 @@
 use axum::extract::{Form, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
-use bikenest_application::PrivacyError;
-use bikenest_domain::PrivacyRequestKind;
+use bikesnest_application::PrivacyError;
+use bikesnest_domain::PrivacyRequestKind;
 use serde_json::json;
 
 use crate::auth::{
@@ -195,7 +195,7 @@ pub(crate) async fn account_export_download(
             );
             resp.headers_mut().insert(
                 header::CONTENT_DISPOSITION,
-                "attachment; filename=\"bikenest-export.json\""
+                "attachment; filename=\"bikesnest-export.json\""
                     .parse()
                     .unwrap(),
             );

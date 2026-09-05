@@ -1,4 +1,4 @@
-//! Internationalization (REQUIREMENTS §12: pt-BR + en; strings not hard-coded
+//! Internationalization: pt-BR + en; strings not hard-coded
 //! in domain/application logic).
 //!
 //! The catalog lives in its own crate because two layers render localized
@@ -183,7 +183,7 @@ impl Translator {
 pub fn msg(locale: Locale, key: &str) -> &'static str {
     let (en, pt): (&str, &str) = match key {
         // --- nav / brand / footer -----------------------------------------
-        "brand.home_aria" => ("BikeNest — home", "BikeNest — início"),
+        "brand.home_aria" => ("BikesNest — home", "BikesNest — início"),
         "a11y.skip" => ("Skip to content", "Pular para o conteúdo"),
         "a11y.primary_nav" => ("Primary", "Navegação principal"),
         "a11y.mobile_nav" => ("Mobile", "Navegação móvel"),
@@ -238,8 +238,8 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
 
         // --- home (P1) -----------------------------------------------------
         "home.title" => (
-            "BikeNest — find bicycle parking you can trust",
-            "BikeNest — encontre bicicletários confiáveis",
+            "BikesNest — find bicycle parking you can trust",
+            "BikesNest — encontre bicicletários confiáveis",
         ),
         "home.eyebrow" => (
             "Community-powered bike parking",
@@ -298,8 +298,8 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Toda boa vaga é conhecida por alguém que passa por ela",
         ),
         "home.community.body" => (
-            "BikeNest grows from real riders adding spots, confirming they still exist, and flagging what changed. No single source — just the people who park there.",
-            "O BikeNest cresce com ciclistas reais adicionando vagas, confirmando que ainda existem e sinalizando o que mudou. Sem fonte única — só quem estaciona ali.",
+            "BikesNest grows from real riders adding spots, confirming they still exist, and flagging what changed. No single source — just the people who park there.",
+            "O BikesNest cresce com ciclistas reais adicionando vagas, confirmando que ainda existem e sinalizando o que mudou. Sem fonte única — só quem estaciona ali.",
         ),
         "home.community.p1" => (
             "Anyone can add a spot",
@@ -322,7 +322,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "home.cta.button" => ("Search parking", "Buscar vagas"),
 
         // --- search (P2) ---------------------------------------------------
-        "search.title" => ("Search — BikeNest", "Busca — BikeNest"),
+        "search.title" => ("Search — BikesNest", "Busca — BikesNest"),
         "search.heading.near" => ("Parking near", "Vagas perto de"),
         "search.heading.generic" => ("Nearby parking", "Vagas por perto"),
         "search.count.one" => ("1 parking spot", "1 vaga"),
@@ -519,15 +519,15 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         ),
 
         // --- about (P7) ----------------------------------------------------
-        "about.title" => ("About — BikeNest", "Sobre — BikeNest"),
+        "about.title" => ("About — BikesNest", "Sobre — BikesNest"),
         "about.hero.eyebrow" => ("The community model", "O modelo da comunidade"),
         "about.hero.title" => (
             "Every good parking spot, known by someone who already rides past it",
             "Toda boa vaga, conhecida por alguém que já passa por ela",
         ),
         "about.hero.body" => (
-            "BikeNest is a community-maintained map of bicycle parking. There is no official dataset — the map is only as good, and as current, as the riders who build it.",
-            "O BikeNest é um mapa de bicicletários mantido pela comunidade. Não há base oficial — o mapa é tão bom, e tão atual, quanto quem pedala e o constrói.",
+            "BikesNest is a community-maintained map of bicycle parking. There is no official dataset — the map is only as good, and as current, as the riders who build it.",
+            "O BikesNest é um mapa de bicicletários mantido pela comunidade. Não há base oficial — o mapa é tão bom, e tão atual, quanto quem pedala e o constrói.",
         ),
         "about.hero.cta_search" => ("Search parking", "Buscar vagas"),
         "about.how.title" => (
@@ -666,7 +666,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Uma conta da comunidade mantém suas contribuições e o mapa honestos.",
         ),
         "auth.login_title" => ("Log in", "Entrar"),
-        // Registration legal notice (§71): "… agree to the <Terms> and acknowledge the <Privacy policy>."
+        // Registration legal notice: "… agree to the <Terms> and acknowledge the <Privacy policy>."
         "auth.legal_prefix" => (
             "By creating an account you confirm that you are 18 or older and agree to the",
             "Ao criar uma conta, você confirma ter 18 anos ou mais e concorda com os",
@@ -995,7 +995,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "contrib.state.history" => ("History", "História"),
         "contrib.state.other" => ("—", "—"),
 
-        // --- Confidence (M3 §106) ---------------------------------------
+        // --- Confidence ---------------------------------------------
         "confidence.title" => ("Confidence", "Confiança"),
         "confidence.reported" => ("Reported", "Reportado"),
         "confidence.verified" => ("Verified", "Verificado"),
@@ -1012,7 +1012,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Ciclistas que estacionaram aqui:",
         ),
 
-        // --- Verification (M3 §39) ---------------------------------------
+        // --- Verification --------------------------------------------
         "verification.title" => ("Verify this spot", "Verificar esta vaga"),
         "verification.anonymous" => (
             "Log in and verify your email to confirm this spot.",
@@ -1044,7 +1044,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Sua vaga está no ar. A comunidade vai conferi-la com o tempo; você pode editá-la quando quiser.",
         ),
 
-        // --- P3 recommended because (§105) -------------------------------
+        // --- P3 recommended because -----------------------------------
         "details.recommend.title" => ("Recommended because", "Recomendado porque"),
         "reason.distance" => ("Close to your destination", "Perto do seu destino"),
         "reason.security" => ("Security attributes", "Itens de segurança"),
@@ -1111,7 +1111,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
         "attr.location" => ("Location", "Localização"),
         "attr.unknown" => ("Details", "Detalhes"),
 
-        // --- photos (M4, §30/§80) -----------------------------------------
+        // --- photos (M4, /) -----------------------------------------
         "photo.upload.title" => ("Add a photo", "Adicionar foto"),
         "photo.upload.hint" => (
             "A photo helps riders recognize a spot. Upload only photos you took of the parking itself and avoid people's faces and licence plates. You are responsible for what you upload; photos are reviewed by moderators and automated tools before they appear.",
@@ -1157,7 +1157,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
             "Falha no envio. Tente outra foto.",
         ),
 
-        // --- photo moderation queue (M2 screen, §44) ----------------------
+        // --- photo moderation queue -----------------------------------
         "moderation.title" => ("Photo moderation", "Moderação de fotos"),
         "moderation.empty" => (
             "No photos awaiting review.",
@@ -1646,7 +1646,7 @@ pub fn msg(locale: Locale, key: &str) -> &'static str {
     }
 }
 /// The keys the transactional email renderer looks up. Listed here so the
-/// tests below (and `bikenest_infrastructure::email::templates`) fail loudly
+/// tests below (and `bikesnest_infrastructure::email::templates`) fail loudly
 /// when one is renamed away.
 #[cfg(test)]
 const EMAIL_KEYS: [&str; 6] = [

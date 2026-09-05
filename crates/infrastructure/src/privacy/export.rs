@@ -1,20 +1,20 @@
-//! SQL-backed personal-data export repository (plans/m6-privacy.md §6).
+//! SQL-backed personal-data export repository.
 //!
 //! `assemble_payload` runs one read per section and builds the versioned
 //! `ExportPayload`. By construction it never selects credential/session/token
 //! hashes, CSRF tokens or audit rows — the export is the *data subject's* data
-//! only (§67/§73). The download token is stored only as its SHA-256 hex hash
+//! only. The download token is stored only as its SHA-256 hex hash
 //! and compared in constant time.
 
 use crate::Db;
 use crate::auth::hash::sha256_hex;
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     Export, ExportAccount, ExportDownload, ExportFavorite, ExportPayload, ExportPhoto,
     ExportProposal, ExportProvider, ExportReport, ExportRepository, ExportReview,
     ExportReviewRevision, ExportSession, ExportVerification, NewExport, PrivacyError,
 };
-use bikenest_domain::{ExportState, UserId};
+use bikesnest_domain::{ExportState, UserId};
 use chrono::{DateTime, Utc};
 
 pub struct SqlxExportRepository {

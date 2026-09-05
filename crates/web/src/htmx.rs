@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn login_next_for_a_post_prefers_the_page_it_came_from() {
         let uri: Uri = "/parking/7/favorite".parse().unwrap();
-        let headers = hx(&[("hx-current-url", "https://bikenest.test/parking/7?x=1")]);
+        let headers = hx(&[("hx-current-url", "https://bikesnest.test/parking/7?x=1")]);
         assert_eq!(login_next(&Method::POST, &uri, &headers), "/parking/7?x=1");
     }
 

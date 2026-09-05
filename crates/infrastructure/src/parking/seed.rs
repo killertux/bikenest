@@ -1,6 +1,6 @@
 //! Mock parking seeder.
 //!
-//! Dev/demo affordance only: production starts with an empty dataset (§116.1).
+//! Dev/demo affordance only: production starts with an empty dataset (.1).
 //! `parking_location`/`parking_photo` rows are tagged with `seed_key` so
 //! re-runs are idempotent (delete + insert in one transaction) and easy to
 //! identify for cleanup. `users` has no `seed_key` column, so the community
@@ -9,7 +9,7 @@
 
 use crate::Db;
 use crate::devdata::{REVIEW_AUTHORS, mock_parkings, review_body_for, star_ratings_for};
-use bikenest_application::{ImageProcessor, ObjectStorage, PhotoError, PutObject, StorageError};
+use bikesnest_application::{ImageProcessor, ObjectStorage, PhotoError, PutObject, StorageError};
 use std::collections::HashSet;
 
 const SEED_KEY: &str = "mock-cwb-2026-01";
@@ -88,15 +88,15 @@ pub async fn seed_mock(
 
     for (loc_idx, mock) in mock_parkings().into_iter().enumerate() {
         let (cost_kind, price_cents, price_currency, price_unit) = match &mock.cost {
-            bikenest_domain::Cost::Free => ("free", None, None, None),
-            bikenest_domain::Cost::Unknown => ("unknown", None, None, None),
-            bikenest_domain::Cost::Paid { price: Some(p) } => (
+            bikesnest_domain::Cost::Free => ("free", None, None, None),
+            bikesnest_domain::Cost::Unknown => ("unknown", None, None, None),
+            bikesnest_domain::Cost::Paid { price: Some(p) } => (
                 "paid",
                 Some(p.cents()),
                 Some(p.currency().as_str().to_string()),
                 Some(p.unit().as_code().to_string()),
             ),
-            bikenest_domain::Cost::Paid { price: None } => ("paid", None, None, None),
+            bikesnest_domain::Cost::Paid { price: None } => ("paid", None, None, None),
         };
         let last_verified_at = mock
             .verified_days_ago
@@ -166,9 +166,9 @@ pub async fn seed_mock(
             .await?;
         }
 
-        // Recorded-but-unknown security attributes (§28: unknown is explicit).
+        // Recorded-but-unknown security attributes (: unknown is explicit).
         let recorded: Vec<&str> = mock.security.iter().map(|(c, _)| *c).collect();
-        for feature in bikenest_domain::SECURITY_FEATURE_CODES.iter().copied() {
+        for feature in bikesnest_domain::SECURITY_FEATURE_CODES.iter().copied() {
             if !recorded.contains(&feature) {
                 sqlx::query(
                     "INSERT INTO parking_security (location_id, feature_code, state) VALUES ($1, $2, 0)",

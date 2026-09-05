@@ -1,12 +1,12 @@
-//! SQL-backed audit-log reader (§47) — the admin audit viewer (M6 screen).
+//! SQL-backed audit-log reader — the admin audit viewer.
 //! Filters by actor / action / target / time range; keyset pagination on `id DESC`.
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     AuditError, AuditEvent, AuditFilter, AuditLogReader, AuditPage, AuditStoredEvent,
 };
-use bikenest_domain::UserId;
+use bikesnest_domain::UserId;
 use chrono::{DateTime, Utc};
 
 pub struct SqlxAuditLogReader {

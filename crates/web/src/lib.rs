@@ -1,4 +1,4 @@
-//! BikeNest web crate: axum routing, handlers, Askama templates.
+//! BikesNest web crate: axum routing, handlers, Askama templates.
 
 pub mod assets;
 pub mod auth;
@@ -15,8 +15,8 @@ pub mod wiring;
 
 use askama::Template;
 use auth::Auth;
-use bikenest_application::ParkingDetailsView;
-use bikenest_infrastructure::MapConfig;
+use bikesnest_application::ParkingDetailsView;
+use bikesnest_infrastructure::MapConfig;
 use i18n::Translator;
 // The add/edit form's editors are view models like any other, but they live
 // next to the grammar that parses them back (routes::contribution_form).
@@ -32,7 +32,7 @@ pub struct PageLayout {
     pub title: String,
     pub current: String,
     pub csrf: String,
-    /// Canonical URL (§111) — rendered as `<link rel="canonical">` + `og:url`.
+    /// Canonical URL — rendered as `<link rel="canonical">` + `og:url`.
     pub canonical: String,
     /// Meta description + `og:description` (short, localised).
     pub description: String,
@@ -94,12 +94,13 @@ impl PageLayout {
     /// `is_authenticated = false` even while carrying a double-submit token.
     pub fn for_request(title: String, current: &str, auth: &Auth, map: &MapConfig) -> Self {
         let is_moderator = auth.user.as_ref().is_some_and(|u| {
-            u.has_role(bikenest_domain::Role::Moderator) || u.has_role(bikenest_domain::Role::Admin)
+            u.has_role(bikesnest_domain::Role::Moderator)
+                || u.has_role(bikesnest_domain::Role::Admin)
         });
         let is_admin = auth
             .user
             .as_ref()
-            .is_some_and(|u| u.has_role(bikenest_domain::Role::Admin));
+            .is_some_and(|u| u.has_role(bikesnest_domain::Role::Admin));
         let can_contribute = auth.user.as_ref().is_some_and(|u| u.is_verified);
         Self {
             is_authenticated: auth.authenticated(),
@@ -110,13 +111,13 @@ impl PageLayout {
         }
     }
 
-    /// Set (or overwrite) the canonical URL (SEO §109).
+    /// Set (or overwrite) the canonical URL.
     pub fn canonical(mut self, url: impl Into<String>) -> Self {
         self.canonical = url.into();
         self
     }
 
-    /// Set (or overwrite) the meta description (SEO §109).
+    /// Set (or overwrite) the meta description.
     pub fn description(mut self, desc: impl Into<String>) -> Self {
         self.description = desc.into();
         self
@@ -220,7 +221,7 @@ pub fn error_response(
         };
         ErrorPage {
             layout: PageLayout::for_request(
-                format!("{} — BikeNest", tr.t(title_key)),
+                format!("{} — BikesNest", tr.t(title_key)),
                 "",
                 auth,
                 map,
@@ -377,12 +378,12 @@ pub struct DetailsPage {
     pub reasons: Vec<view::ReasonVm>,
     /// A one-time notice banner (post-action confirmation, e.g. "will be reviewed").
     pub notice: Option<String>,
-    /// The location's §25 moderation state code (ACTIVE/PENDING_REVIEW/…). Public
+    /// The location's  moderation state code (ACTIVE/PENDING_REVIEW/…). Public
     /// viewers only ever reach ACTIVE; moderators see a banner for the rest.
     pub moderation_state: &'static str,
     /// Whether the viewer is a moderator/admin (sees the hidden/invalid banner).
     pub is_moderator: bool,
-    /// The report-reason options for the P3 report modal (§43).
+    /// The report-reason options for the P3 report modal.
     pub reason_options: Vec<view::OptionVm>,
 }
 
@@ -403,7 +404,7 @@ impl DetailsPage {
         gallery: Vec<PhotoVm>,
         auth: &Auth,
     ) -> Self {
-        use bikenest_domain::OpenStatus;
+        use bikesnest_domain::OpenStatus;
         let now = chrono::Utc::now();
         let loc = &v.location;
         let (lat, lon) = (loc.point().lat(), loc.point().lon());
@@ -414,7 +415,7 @@ impl DetailsPage {
         };
         let open_label = view::open_label(tr, v.is_open_now);
         Self {
-            layout: PageLayout::for_request(format!("{} — BikeNest", loc.name()), "", auth, map),
+            layout: PageLayout::for_request(format!("{} — BikesNest", loc.name()), "", auth, map),
             tr,
             id: loc.id(),
             name: loc.name().to_string(),
@@ -436,9 +437,9 @@ impl DetailsPage {
                 .map(|f| SecVm {
                     label: tr.security(f.code()).to_string(),
                     state: match f.state() {
-                        bikenest_domain::SecurityState::Yes => "yes",
-                        bikenest_domain::SecurityState::No => "no",
-                        bikenest_domain::SecurityState::Unknown => "unknown",
+                        bikesnest_domain::SecurityState::Yes => "yes",
+                        bikesnest_domain::SecurityState::No => "no",
+                        bikesnest_domain::SecurityState::Unknown => "unknown",
                     },
                 })
                 .collect(),
@@ -455,7 +456,7 @@ impl DetailsPage {
                 }
                 None => tr.t("verified.never").to_string(),
             },
-            // §104: external navigation only — links to providers, coordinates
+            // : external navigation only — links to providers, coordinates
             // only (no user data is sent; the user leaves the app to navigate).
             osm_url: format!(
                 "https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=18/{lat}/{lon}"
@@ -466,7 +467,7 @@ impl DetailsPage {
             gallery,
             reviews: Vec::new(),
             confidence_code: "reported",
-            confidence_label: view::confidence_label(tr, bikenest_domain::Confidence::Reported)
+            confidence_label: view::confidence_label(tr, bikesnest_domain::Confidence::Reported)
                 .to_string(),
             disputed: false,
             dispute_items: Vec::new(),
@@ -491,11 +492,11 @@ impl DetailsPage {
     pub async fn build_community(
         map: &MapConfig,
         tr: Translator,
-        v: bikenest_application::ParkingDetailsView,
+        v: bikesnest_application::ParkingDetailsView,
         gallery: Vec<PhotoVm>,
         auth: &Auth,
-        community: Option<bikenest_application::CommunityParkingDetails>,
-        storage: &dyn bikenest_application::ObjectStorage,
+        community: Option<bikesnest_application::CommunityParkingDetails>,
+        storage: &dyn bikesnest_application::ObjectStorage,
     ) -> Self {
         let mut page = Self::build(map, tr, v, gallery, auth);
         let Some(c) = community else { return page };
@@ -540,7 +541,8 @@ impl DetailsPage {
         page.own_rating = c.own_review.map(|r| r.rating.value()).unwrap_or(0);
         page.reasons = c.reasons.iter().map(|r| view::reason_vm(tr, r)).collect();
         page.is_moderator = auth.user.as_ref().is_some_and(|u| {
-            u.has_role(bikenest_domain::Role::Moderator) || u.has_role(bikenest_domain::Role::Admin)
+            u.has_role(bikesnest_domain::Role::Moderator)
+                || u.has_role(bikesnest_domain::Role::Admin)
         });
         page
     }
@@ -704,7 +706,7 @@ pub struct PolicyPage {
     pub content: String,
 }
 
-/// M6 — the version history for a legal page (§70 determinability).
+/// M6 — the version history for a legal page ( determinability).
 #[derive(Template)]
 #[template(path = "pages/policy_versions.html")]
 pub struct PolicyVersionsPage {
@@ -1011,7 +1013,7 @@ pub use wiring::{RouterDeps, app_router, app_router_with};
 mod tests {
     use super::*;
     use axum::http::{HeaderMap, HeaderValue, StatusCode};
-    use bikenest_infrastructure::MapConfig;
+    use bikesnest_infrastructure::MapConfig;
     use i18n::Locale;
 
     fn map() -> MapConfig {

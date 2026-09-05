@@ -1,10 +1,10 @@
-Esta Política de Privacidade explica como o BikeNest trata dados pessoais, em conformidade com a Lei Geral de Proteção de Dados Pessoais (Lei nº 13.709/2018, "LGPD") e, quando aplicável a pessoas localizadas no Espaço Econômico Europeu ou no Reino Unido, com o Regulamento Geral de Proteção de Dados (Regulamento (UE) 2016/679, "GDPR").
+Esta Política de Privacidade explica como o BikesNest trata dados pessoais, em conformidade com a Lei Geral de Proteção de Dados Pessoais (Lei nº 13.709/2018, "LGPD") e, quando aplicável a pessoas localizadas no Espaço Econômico Europeu ou no Reino Unido, com o Regulamento Geral de Proteção de Dados (Regulamento (UE) 2016/679, "GDPR").
 
-O BikeNest é um mapa colaborativo de estacionamentos para bicicletas. Qualquer pessoa pode buscar vagas sem criar conta. Uma conta é necessária apenas para contribuir (adicionar locais, fotos, avaliações e verificações).
+O BikesNest é um mapa colaborativo de estacionamentos para bicicletas. Qualquer pessoa pode buscar vagas sem criar conta. Uma conta é necessária apenas para contribuir (adicionar locais, fotos, avaliações e verificações).
 
 ## 1. Quem é o controlador
 
-**{{OPERATOR_NAME}}**, inscrita no CNPJ sob o nº {{OPERATOR_CNPJ}}, com sede em {{OPERATOR_ADDRESS}} ("nós"), é a controladora dos dados pessoais tratados no BikeNest.
+**{{OPERATOR_NAME}}**, inscrita no CNPJ sob o nº {{OPERATOR_CNPJ}}, com sede em {{OPERATOR_ADDRESS}} ("nós"), é a controladora dos dados pessoais tratados no BikesNest.
 
 Canal de contato para assuntos de privacidade e encarregado(a) pelo tratamento de dados pessoais (art. 41 da LGPD): **{{CONTACT_EMAIL}}**.
 
@@ -105,7 +105,7 @@ Você pode, a qualquer momento (art. 18 da LGPD; arts. 15 a 22 do GDPR):
 
 ## 10. Idade mínima
 
-O BikeNest é destinado a pessoas com **18 anos ou mais**. Não criamos contas intencionalmente para menores de 18 anos; se tomarmos conhecimento de uma conta assim, ela será excluída.
+O BikesNest é destinado a pessoas com **18 anos ou mais**. Não criamos contas intencionalmente para menores de 18 anos; se tomarmos conhecimento de uma conta assim, ela será excluída.
 
 ## 11. Cookies
 

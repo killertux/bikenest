@@ -14,7 +14,7 @@
 //! the better failure.
 
 use async_trait::async_trait;
-use bikenest_application::{
+use bikesnest_application::{
     EmailMessage, EmailProvider, JOB_EMAIL_SEND, JobError, JobHandler, JobPayload,
 };
 use std::sync::Arc;
@@ -75,15 +75,15 @@ fn decode(payload: &JobPayload) -> Result<EmailMessage, JobError> {
 mod tests {
     use super::*;
     use crate::email::FakeEmailProvider;
-    use bikenest_application::{EmailError, EmailKind};
-    use bikenest_domain::LocaleCode;
+    use bikesnest_application::{EmailError, EmailKind};
+    use bikesnest_domain::LocaleCode;
 
     fn payload(locale: LocaleCode) -> JobPayload {
         serde_json::to_value(EmailMessage::new(
             "ada@example.com",
             locale,
             EmailKind::VerifyEmail {
-                link: "https://bikenest.test/verify-email?token=t".into(),
+                link: "https://bikesnest.test/verify-email?token=t".into(),
             },
         ))
         .unwrap()
@@ -107,7 +107,7 @@ mod tests {
         let sent = fake.emails();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].locale, "pt-BR");
-        assert_eq!(sent[0].subject, "Confirme seu e-mail no BikeNest");
+        assert_eq!(sent[0].subject, "Confirme seu e-mail no BikesNest");
     }
 
     #[tokio::test]

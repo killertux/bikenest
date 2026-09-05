@@ -7,9 +7,9 @@ use axum::extract::{FromRequestParts, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
-use bikenest_application::{AuthenticatedUser, TokenGenerator};
-use bikenest_domain::{CsrfToken, SessionId};
-use bikenest_infrastructure::MapConfig;
+use bikesnest_application::{AuthenticatedUser, TokenGenerator};
+use bikesnest_domain::{CsrfToken, SessionId};
+use bikesnest_infrastructure::MapConfig;
 
 use crate::htmx;
 use crate::i18n::{Locale, Translator};
@@ -23,7 +23,7 @@ pub const CSRF_HEADER: &str = "x-csrf-token";
 /// because the middleware cannot parse a multipart body without consuming the
 /// stream the handler's `Multipart` extractor needs.
 pub const CSRF_QUERY: &str = "csrf";
-/// Name of the anonymous double-submit CSRF cookie (§108 — protects pre-session
+/// Name of the anonymous double-submit CSRF cookie ( — protects pre-session
 /// requests like login/register/reset, which have no session row yet).
 pub const ANON_CSRF_COOKIE: &str = "csrf";
 
@@ -139,7 +139,7 @@ impl Auth {
     #[allow(clippy::result_large_err)]
     pub fn require_role(
         &self,
-        role: bikenest_domain::Role,
+        role: bikesnest_domain::Role,
     ) -> Result<&AuthenticatedUser, Response> {
         let user = self.require_user()?;
         if user.has_role(role) {
@@ -154,8 +154,8 @@ impl Auth {
     #[allow(clippy::result_large_err)]
     pub fn require_moderator(&self) -> Result<&AuthenticatedUser, Response> {
         let user = self.require_user()?;
-        if user.has_role(bikenest_domain::Role::Moderator)
-            || user.has_role(bikenest_domain::Role::Admin)
+        if user.has_role(bikesnest_domain::Role::Moderator)
+            || user.has_role(bikesnest_domain::Role::Admin)
         {
             Ok(user)
         } else {
@@ -216,7 +216,7 @@ fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
 }
 
 /// `Set-Cookie` header that persists the raw session id (HttpOnly, Secure,
-/// SameSite=Lax, Path=/; §18).
+/// SameSite=Lax, Path=/; ).
 pub fn set_session_cookie(id: &SessionId) -> String {
     format!(
         "{SESSION_COOKIE}={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000",
@@ -229,7 +229,7 @@ pub fn clear_session_cookie() -> String {
     format!("{SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0")
 }
 
-/// `Set-Cookie` for the anonymous double-submit CSRF cookie (§108). `SameSite=Lax`
+/// `Set-Cookie` for the anonymous double-submit CSRF cookie. `SameSite=Lax`
 /// means a cross-site POST won't carry it, so it can't be validated — the CSRF
 /// defense for pre-session requests (login/register/reset).
 pub fn set_anon_csrf_cookie(token: &str) -> String {
@@ -266,15 +266,15 @@ pub fn set_export_cookie(id: i64, token: &str) -> String {
 const EXPORT_TOKEN_MAX_AGE_SECONDS: u32 = 24 * 60 * 60;
 
 /// A fresh random token for an anonymous page, set both as the `csrf` cookie
-/// and in the form's hidden field / `<meta name="csrf">` (§108).
+/// and in the form's hidden field / `<meta name="csrf">`.
 pub fn anon_csrf_token() -> String {
-    CsrfToken::new(bikenest_infrastructure::RealTokenGenerator.generate()).to_base64url()
+    CsrfToken::new(bikesnest_infrastructure::RealTokenGenerator.generate()).to_base64url()
 }
 
 /// A fresh random hex nonce, for the OAuth `state` parameter. Minted here,
 /// beside the CSRF token, so the CSPRNG has a single caller in the web layer.
 pub fn random_state_hex() -> String {
-    bikenest_infrastructure::RealTokenGenerator
+    bikesnest_infrastructure::RealTokenGenerator
         .generate()
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -418,10 +418,10 @@ pub async fn auth_middleware(
         }
 
         let ok = match (&auth.csrf, submitted.as_deref()) {
-            // Authenticated: the per-session synchronizer token (§18).
+            // Authenticated: the per-session synchronizer token.
             (Some(session_csrf), Some(sub)) => session_csrf.verify(sub),
             (Some(_), None) => false,
-            // Anonymous: double-submit cookie (§108). A cross-site POST won't
+            // Anonymous: double-submit cookie. A cross-site POST won't
             // carry the `csrf` cookie (SameSite=Lax), so it cannot be validated → 403.
             (None, Some(got)) => match csrf_cookie_value(req.headers()) {
                 Some(expected) => constant_time_eq(&expected, got),

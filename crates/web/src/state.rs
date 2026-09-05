@@ -7,13 +7,13 @@
 
 use std::sync::Arc;
 
-use bikenest_application::{
+use bikesnest_application::{
     AuthService, CheckReadiness, ContributionService, FreshnessConfig, GetParkingDetails,
     ModerationService, ObjectStorage, ParkingPhotoReader, PhotoService, PrivacyService,
     RateLimiter, SearchParking, SitemapReader,
 };
-use bikenest_infrastructure::probe::SqlxDatabaseProbe;
-use bikenest_infrastructure::{CachingGeocoder, Config, GeocodeLimits, MapConfig};
+use bikesnest_infrastructure::probe::SqlxDatabaseProbe;
+use bikesnest_infrastructure::{CachingGeocoder, Config, GeocodeLimits, MapConfig};
 
 use crate::security::SecurityHeaders;
 
@@ -46,7 +46,7 @@ pub struct AppState {
     pub photo: Arc<PhotoService>,
     pub moderation: Arc<ModerationService>,
     pub privacy: Arc<PrivacyService>,
-    pub policy: Arc<dyn bikenest_application::PolicyReader>,
+    pub policy: Arc<dyn bikesnest_application::PolicyReader>,
     /// Security/CSP header policy, built once from the configured origins.
     pub security: SecurityHeaders,
     /// Client-side map style/token rendered into every page layout.

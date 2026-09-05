@@ -3,7 +3,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use bikenest_domain::{ModerationState, Role};
+use bikesnest_domain::{ModerationState, Role};
 
 use crate::auth::Auth;
 use crate::i18n::{Locale, Translator};

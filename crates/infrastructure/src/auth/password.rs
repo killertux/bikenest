@@ -14,8 +14,8 @@ use argon2::{
     password_hash::{PasswordVerifier, SaltString, rand_core::OsRng},
 };
 use async_trait::async_trait;
-use bikenest_application::{AuthError, PasswordHasher};
-use bikenest_domain::Password;
+use bikesnest_application::{AuthError, PasswordHasher};
+use bikesnest_domain::Password;
 
 /// Implements [`PasswordHasher`] with argon2id default params
 /// (m=19456 KiB, t=2, p=1 — OWASP interactive login baseline).

@@ -10,8 +10,8 @@
 use crate::Db;
 use crate::auth::hash::sha256_hex;
 use async_trait::async_trait;
-use bikenest_application::{AuthError, Session, SessionStore};
-use bikenest_domain::{CsrfToken, SessionId, UserId};
+use bikesnest_application::{AuthError, Session, SessionStore};
+use bikesnest_domain::{CsrfToken, SessionId, UserId};
 use chrono::{DateTime, Duration, Utc};
 
 const INACTIVE_IDLE: Duration = Duration::days(30);

@@ -1,10 +1,10 @@
-//! Audit-log port (§47). Security, account and role actions are recorded here.
+//! Audit-log port. Security, account and role actions are recorded here.
 //! The M2 implementation writes rows to `audit_events`; the admin *viewer* is a
 //! later milestone (M5/M6). No tokens, passwords, or PII beyond actor/target
 //! ids reach the audit trail.
 
 use async_trait::async_trait;
-use bikenest_domain::UserId;
+use bikesnest_domain::UserId;
 
 /// One audit record. `metadata` carries per-action context (never secrets).
 #[derive(Debug, Clone)]
@@ -84,13 +84,13 @@ pub trait AuditLog: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Audit reader (§47) — the admin audit-log viewer (M6 screen).
+// Audit reader — the admin audit-log viewer.
 // ---------------------------------------------------------------------------
 
 /// Filter for the audit viewer. All fields optional; each present field is ANDed.
 #[derive(Debug, Clone, Default)]
 pub struct AuditFilter {
-    pub actor_id: Option<bikenest_domain::UserId>,
+    pub actor_id: Option<bikesnest_domain::UserId>,
     pub action: Option<String>,
     pub target_type: Option<String>,
     pub from: Option<chrono::DateTime<chrono::Utc>>,
@@ -117,7 +117,7 @@ pub struct AuditStoredEvent {
 }
 
 /// Port: read the audit trail. The viewer is ADMIN-only; metadata is rendered
-/// as an escaped JSON blob and by construction carries no secrets/PII (§47).
+/// as an escaped JSON blob and by construction carries no secrets/PII.
 #[async_trait]
 pub trait AuditLogReader: Send + Sync {
     async fn list(&self, filter: AuditFilter) -> Result<AuditPage, AuditError>;

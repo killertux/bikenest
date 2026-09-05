@@ -1,10 +1,10 @@
 //! Deterministic development dataset shared by the mock seeder and the
-//! `FakeGeocoder` (Ledger #1/#2). Never used outside dev/demo workflows.
+//! `FakeGeocoder`. Never used outside dev/demo workflows.
 //!
 //! Geography: Curitiba, Paraná. Timezone is still `America/Sao_Paulo` (Curitiba
 //! keeps BRT, no DST) — the seeder tags every row with it.
 
-use bikenest_domain::{Cost, CurrencyCode, Money, ParkingType, PricingUnit};
+use bikesnest_domain::{Cost, CurrencyCode, Money, ParkingType, PricingUnit};
 
 /// One weekly hours row: (iso_day, opens(h,m), closes(h,m), all_day).
 pub type HoursRow = (u8, (u32, u32), (u32, u32), bool);
@@ -85,31 +85,34 @@ fn paid(cents: i64, currency: &str, unit: PricingUnit) -> Cost {
 /// `rating_count` (21) with room to spare; `users` has no `seed_key` column,
 /// so re-seeding finds them by email instead of deleting/reinserting.
 pub const REVIEW_AUTHORS: &[(&str, &str)] = &[
-    ("mariana.silva@seed.bikenest.dev", "Mariana Silva"),
-    ("joao.pereira@seed.bikenest.dev", "João Pereira"),
-    ("ana.souza@seed.bikenest.dev", "Ana Souza"),
-    ("carlos.oliveira@seed.bikenest.dev", "Carlos Oliveira"),
-    ("beatriz.santos@seed.bikenest.dev", "Beatriz Santos"),
-    ("lucas.almeida@seed.bikenest.dev", "Lucas Almeida"),
-    ("fernanda.costa@seed.bikenest.dev", "Fernanda Costa"),
-    ("rafael.gomes@seed.bikenest.dev", "Rafael Gomes"),
-    ("juliana.ribeiro@seed.bikenest.dev", "Juliana Ribeiro"),
-    ("marcos.carvalho@seed.bikenest.dev", "Marcos Carvalho"),
-    ("patricia.martins@seed.bikenest.dev", "Patrícia Martins"),
-    ("diego.rocha@seed.bikenest.dev", "Diego Rocha"),
-    ("camila.barbosa@seed.bikenest.dev", "Camila Barbosa"),
-    ("bruno.teixeira@seed.bikenest.dev", "Bruno Teixeira"),
-    ("larissa.pinto@seed.bikenest.dev", "Larissa Pinto"),
-    ("thiago.cardoso@seed.bikenest.dev", "Thiago Cardoso"),
-    ("amanda.moreira@seed.bikenest.dev", "Amanda Moreira"),
-    ("felipe.araujo@seed.bikenest.dev", "Felipe Araújo"),
-    ("gabriela.correia@seed.bikenest.dev", "Gabriela Correia"),
-    ("vinicius.melo@seed.bikenest.dev", "Vinícius Melo"),
-    ("bianca.dias@seed.bikenest.dev", "Bianca Dias"),
-    ("gustavo.nascimento@seed.bikenest.dev", "Gustavo Nascimento"),
-    ("isabela.freitas@seed.bikenest.dev", "Isabela Freitas"),
-    ("rodrigo.lima@seed.bikenest.dev", "Rodrigo Lima"),
-    ("carolina.azevedo@seed.bikenest.dev", "Carolina Azevedo"),
+    ("mariana.silva@seed.bikesnest.dev", "Mariana Silva"),
+    ("joao.pereira@seed.bikesnest.dev", "João Pereira"),
+    ("ana.souza@seed.bikesnest.dev", "Ana Souza"),
+    ("carlos.oliveira@seed.bikesnest.dev", "Carlos Oliveira"),
+    ("beatriz.santos@seed.bikesnest.dev", "Beatriz Santos"),
+    ("lucas.almeida@seed.bikesnest.dev", "Lucas Almeida"),
+    ("fernanda.costa@seed.bikesnest.dev", "Fernanda Costa"),
+    ("rafael.gomes@seed.bikesnest.dev", "Rafael Gomes"),
+    ("juliana.ribeiro@seed.bikesnest.dev", "Juliana Ribeiro"),
+    ("marcos.carvalho@seed.bikesnest.dev", "Marcos Carvalho"),
+    ("patricia.martins@seed.bikesnest.dev", "Patrícia Martins"),
+    ("diego.rocha@seed.bikesnest.dev", "Diego Rocha"),
+    ("camila.barbosa@seed.bikesnest.dev", "Camila Barbosa"),
+    ("bruno.teixeira@seed.bikesnest.dev", "Bruno Teixeira"),
+    ("larissa.pinto@seed.bikesnest.dev", "Larissa Pinto"),
+    ("thiago.cardoso@seed.bikesnest.dev", "Thiago Cardoso"),
+    ("amanda.moreira@seed.bikesnest.dev", "Amanda Moreira"),
+    ("felipe.araujo@seed.bikesnest.dev", "Felipe Araújo"),
+    ("gabriela.correia@seed.bikesnest.dev", "Gabriela Correia"),
+    ("vinicius.melo@seed.bikesnest.dev", "Vinícius Melo"),
+    ("bianca.dias@seed.bikesnest.dev", "Bianca Dias"),
+    (
+        "gustavo.nascimento@seed.bikesnest.dev",
+        "Gustavo Nascimento",
+    ),
+    ("isabela.freitas@seed.bikesnest.dev", "Isabela Freitas"),
+    ("rodrigo.lima@seed.bikesnest.dev", "Rodrigo Lima"),
+    ("carolina.azevedo@seed.bikesnest.dev", "Carolina Azevedo"),
 ];
 
 /// Distribute `count` integer star ratings (1..=5) whose sum rounds to
@@ -180,7 +183,7 @@ const PHOTOS: &[&str] = &[
 ];
 
 /// ~24 locations around Curitiba landmarks, spanning every freshness bucket,
-/// cost kind, type, hours shape and security mix (plans/m1-search-map.md §8).
+/// cost kind, type, hours shape and security mix.
 pub fn mock_parkings() -> Vec<MockParking> {
     let full_week = |open: (u32, u32), close: (u32, u32)| {
         (1..=7).map(|d| (d, open, close, false)).collect::<Vec<_>>()

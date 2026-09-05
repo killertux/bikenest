@@ -5,8 +5,8 @@
 use askama::Template;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
-use bikenest_domain::LocaleCode;
-use bikenest_infrastructure::MapConfig;
+use bikesnest_domain::LocaleCode;
+use bikesnest_infrastructure::MapConfig;
 
 use crate::auth::{Auth, set_anon_csrf_cookie};
 use crate::htmx::{fragment_or_redirect, is_fragment_request};

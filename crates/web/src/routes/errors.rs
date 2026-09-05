@@ -5,7 +5,7 @@
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use axum::{extract::State, middleware};
-use bikenest_infrastructure::MapConfig;
+use bikesnest_infrastructure::MapConfig;
 
 use crate::auth::Auth;
 use crate::i18n::{Locale, Translator};

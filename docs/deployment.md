@@ -1,7 +1,7 @@
 # Deployment
 
-> **What this covers:** getting the `bikenest-web` server into production. The
-> runtime queries are **not** compile-time checked (M8), so the Docker image
+> **What this covers:** getting the `bikesnest-web` server into production. The
+> runtime queries are **not** compile-time checked, so the Docker image
 > builds with **no database** — `cargo build` is self-contained. Everything else
 > (secrets, providers, TLS, migration, health) is env-driven and documented here.
 
@@ -10,7 +10,7 @@
 ## 1. Build the image
 
 ```bash
-docker build -t bikenest:$(git rev-parse --short HEAD) .
+docker build -t bikesnest:$(git rev-parse --short HEAD) .
 ```
 
 The multi-stage `Dockerfile` (`rust:1.95` builder → `debian:bookworm-slim`) bakes
@@ -31,38 +31,38 @@ All knobs are documented in `.env.example`; production sets them as real secrets
 
 | Variable | Notes |
 |---|---|
-| `DATABASE_URL` | Postgres DSN. Example `postgres://user:pass@db:5432/bikenest` |
+| `DATABASE_URL` | Postgres DSN. Example `postgres://user:pass@db:5432/bikesnest` |
 | `DB_MAX_CONNECTIONS` | pool ceiling per instance (default `10`). Size it as the database's `max_connections` divided by the replica count, minus headroom for migrations/psql |
-| `DB_STATEMENT_TIMEOUT_MS` | `statement_timeout` on every pooled connection (default `5000`). Migrations are exempt (§4); a long maintenance run through the app — e.g. `retention` on a large database — may need a higher value |
+| `DB_STATEMENT_TIMEOUT_MS` | `statement_timeout` on every pooled connection (default `5000`). Migrations are exempt; a long maintenance run through the app — e.g. `retention` on a large database — may need a higher value |
 | `DB_IDLE_IN_TX_TIMEOUT_MS` | `idle_in_transaction_session_timeout` (default `10000`), so a transaction abandoned by a crashed client releases its connection |
 | `BIND_ADDR` | default `0.0.0.0:8080` |
-| `TRUSTED_PROXY_HOPS` | how many reverse proxies in front of the app may be trusted to have appended to `X-Forwarded-For`; `0` (default) uses the TCP peer address only. See §3 |
-| `BASE_URL` | the public origin, e.g. `https://bikenest.example.com` — builds links + canonical URLs. **Must be reachable** |
-| `MEDIA_ROOT` | directory the **development e-mail outbox** writes to (`EMAIL_PROVIDER=fake` only; default `media`). No longer a media directory: media lives in the S3 bucket, and the retention orphan sweep lists the bucket (WP16) |
-| `S3_ENDPOINT` | **Object storage** (Ledger #7): the S3-compatible endpoint. Unset defaults to `http://localhost:9000` (MinIO) in development only; set it empty for the standard AWS endpoint. **Required in production** |
-| `S3_REGION` / `S3_BUCKET` | region (default `us-east-1`) + bucket name (development default `bikenest`; **required in production**) |
+| `TRUSTED_PROXY_HOPS` | how many reverse proxies in front of the app may be trusted to have appended to `X-Forwarded-For`; `0` (default) uses the TCP peer address only. See the reverse-proxy guidance below |
+| `BASE_URL` | the public origin, e.g. `https://bikesnest.com` — builds links + canonical URLs. **Must be reachable** |
+| `MEDIA_ROOT` | directory the **development e-mail outbox** writes to (`EMAIL_PROVIDER=fake` only; default `media`). No longer a media directory: media lives in the S3 bucket, and the retention orphan sweep lists the bucket |
+| `S3_ENDPOINT` | **Object storage:** the S3-compatible endpoint. Unset defaults to `http://localhost:9000` (MinIO) in development only; set it empty for the standard AWS endpoint. **Required in production** |
+| `S3_REGION` / `S3_BUCKET` | region (default `us-east-1`) + bucket name (development default `bikesnest`; **required in production**) |
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | S3 credentials (development default MinIO `minioadmin`, which production rejects outright) |
 | `TLS_ON` | set `true` to emit HSTS behind a real TLS terminator |
-| `VALKEY_URL` | **Rate limiter** (Ledger #6) single node, e.g. `valkey://valkey:6379`. Shared across auth/photo/contribution/moderation, survives restarts, aggregates across instances |
+| `VALKEY_URL` | **Rate limiter:** single node, e.g. `valkey://valkey:6379`. Shared across auth/photo/contribution/moderation, survives restarts, aggregates across instances |
 | `VALKEY_CLUSTER_URLS` | comma-separated node URLs → **cluster** mode (wins over `VALKEY_URL`) |
 | `RATE_LIMIT_FAIL_OPEN` | `true` (default) → a ValKey outage **allows** requests (goes fail-open); `false` → **denies** (429s the rate-limited endpoints) |
-| `JOBS_ENABLED` | **Background job queue** (M9): `true` (default) spawns an in-process worker that claims/run/retries `background_job` rows; `false` for web-only instances — transactional email then sends inline on the request path instead of being queued (§5d) |
+| `JOBS_ENABLED` | **Background job queue:** `true` (default) spawns an in-process worker that claims, runs, and retries `background_job` rows; `false` for web-only instances — transactional email then sends inline on the request path instead of being queued |
 | `JOBS_POLL_INTERVAL_MS` / `JOBS_BATCH_SIZE` / `JOBS_LEASE_TTL_MS` | queue poll cadence, batch size, and lease length (defaults 5000 / 4 / 600000) |
 | `JOBS_MAX_ATTEMPTS` / `JOBS_BACKOFF_BASE_MS` | retry budget (default 5) and exponential-backoff base (default 2000) before dead-letter |
 | `JOBS_HISTORY_RETENTION_DAYS` | `jobs.gc` deletes `succeeded`/`failed` rows older than this (default 7) |
 | `CSP_TILE_HOSTS` / `CSP_GEOCODE_HOSTS` | origins allowed by the strict CSP for map tiles / geocoding |
 | `CSP_MEDIA_HOSTS` | object-storage origin(s) allowed in the CSP `img-src` that parking photos are served from as direct pre-signed URLs (dev: `http://localhost:9000`; AWS: `https://<bucket>.s3.<region>.amazonaws.com`) |
-| `APP_ENV` | `production` → JSON structured logs (machine-parseable, forward to a log aggregator) **and the startup validation in §2a** |
+| `APP_ENV` | `production` → JSON structured logs (machine-parseable, forward to a log aggregator) **and the startup validation described below** |
 | `STATIC_ROOT` | directory `/static` is served from; the image sets `/app/web/static`. Unset falls back to `web/static` beside the working directory, then to the compile-time path |
-| `GEOCODER` | **Geocoder** (Ledger #2): `mapbox` \| `fake` (default `fake`). `mapbox` sends the query to Mapbox server-side (§77/§83) |
+| `GEOCODER` | **Geocoder:** `mapbox` \| `fake` (default `fake`). `mapbox` sends the query to Mapbox server-side |
 | `MAPBOX_ACCESS_TOKEN` | Mapbox token; required when `GEOCODER=mapbox` (a missing token is a startup error, never a fallback to `fake`) |
 | `RATE_GEOCODE_PER_IP` / `RATE_GEOCODE_WINDOW_SECS` | per-IP budget for **billable** geocodes on `/search` (default 60 per 15 min). Only cache **misses** count; over the budget `/search` answers 429 with a notice instead of calling the provider |
-| `MAP_STYLE_URL` | **Basemap** (Ledger #3): style URL; default MapLibre demo tiles |
+| `MAP_STYLE_URL` | **Basemap:** style URL; default MapLibre demo tiles |
 | `MAPBOX_MAP_ACCESS_TOKEN` | **Basemap** public Mapbox token (client-side); falls back to `MAPBOX_ACCESS_TOKEN` if unset; only loaded when the style is Mapbox-based |
 | `EMAIL_PROVIDER` | `smtp` or `resend` in production (not `fake`) |
 | `SMTP_*` / `RESEND_API_KEY` / `RESEND_FROM` | the chosen email backend |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | `seed-admin` bootstrap (run once) |
-| `POLICY_OPERATOR_NAME` / `POLICY_OPERATOR_CNPJ` / `POLICY_OPERATOR_ADDRESS` / `POLICY_CONTACT_EMAIL` | **Legal pages** (Ledger #21, §70): the controller's legal name, CNPJ, registered address and privacy contact e-mail, substituted into `policies/*.md` by `seed-policies`. The seeder refuses to run with any of them unset |
+| `POLICY_OPERATOR_NAME` / `POLICY_OPERATOR_CNPJ` / `POLICY_OPERATOR_ADDRESS` / `POLICY_CONTACT_EMAIL` | **Legal pages**: the controller's legal name, CNPJ, registered address and privacy contact e-mail, substituted into `policies/*.md` by `seed-policies`. The seeder refuses to run with any of them unset |
 | `POLICY_VERSION` / `POLICY_EFFECTIVE_AT` | version label + effective date of the policy text being seeded; bump the version whenever `policies/*.md` change |
 | `DELETED_ACCOUNT_PURGE_AFTER_DAYS` | `30` in production (decision, `docs/retention-policy.md`); `INACTIVE_ACCOUNT_ANONYMIZE_AFTER_DAYS` stays `0` |
 | `REC_*`, `FRESHNESS_*`, `PHOTO_*`, `MOD_*`, `RETENTION_*` | tuning constants (see `.env.example`) |
@@ -145,7 +145,7 @@ process exits. Killing the process mid-job would leave a `background_job` row in
 `state='running'` until its lease expired.
 
 The container image runs the server under [tini] as PID 1
-(`ENTRYPOINT ["/usr/bin/tini", "--", "bikenest-web"]`) so signals are forwarded
+(`ENTRYPOINT ["/usr/bin/tini", "--", "bikesnest-web"]`) so signals are forwarded
 and zombies reaped. If you run the binary some other way, make sure it receives
 `SIGTERM` directly (`docker run --init`, or `init: true` in compose, gives the
 same guarantee) and allow at least 35 s of termination grace
@@ -170,7 +170,7 @@ Migrations are **forward-only** (`sqlx` records applied versions). This means:
 > pre-release data backup and re-run the old image — see `docs/backups.md`.
 
 Migrations run on a dedicated connection with `statement_timeout` disabled and
-closed afterwards, so `DB_STATEMENT_TIMEOUT_MS` (§2) never aborts an index build
+closed afterwards, so `DB_STATEMENT_TIMEOUT_MS` never aborts an index build
 on a cold database, and the relaxed setting never leaks back into request
 handling.
 
@@ -202,15 +202,15 @@ The map/tile, geocoder, email, OAuth and object-storage integrations
 are selected at wiring time from environment variables; the dev fakes that
 remain (Google OAuth) are documented below and must be replaced before launch.
 
-**Geocoder (Ledger #2).** Selectable at wiring time with `GEOCODER`
+**Geocoder.** Selectable at wiring time with `GEOCODER`
 (`mapbox` | `fake`, default `fake`):
 
 - `fake` — deterministic dev geocoder (landmark table + hashed jitter).
 - `mapbox` — real `MapboxGeocoder` calling the Mapbox Geocoding API
-  (hosted, OSM-derived; §83). Requires `MAPBOX_ACCESS_TOKEN`; without it the
+  (hosted, OSM-derived). Requires `MAPBOX_ACCESS_TOKEN`; without it the
   process refuses to start rather than falling back to `fake`.
 
-  **§77 boundary:** the query is sent **server-side** with only the free-text
+  **Privacy boundary:** the query is sent **server-side** with only the free-text
   destination — no account identity, cookie, or client IP crosses to Mapbox
   (see `docs/provider-transfer-inventory.md`). A Mapbox error is **graceful**: the
   search page shows a "location service unavailable" message rather than a 500.
@@ -233,12 +233,12 @@ remain (Google OAuth) are documented below and must be replaced before launch.
   Mapbox is a paid hosted SaaS (free tier ≈100k geocode/mo); self-hosted Photon
   (OSM) is the no-cost, no-external-transfer alternative if preferred.
 
-**Object storage (Ledger #7).** Media is stored in an S3-compatible bucket
+**Object storage.** Media is stored in an S3-compatible bucket
 (MinIO in dev, AWS/S3/R2/B2 in prod; `S3_*` env) and served via **direct S3
 presigned GET URLs** — the browser hits the bucket and S3's SigV4 signature
 authorizes the read (no app-side proxy, no app signing secret). Selectable by
 `S3_ENDPOINT`/`S3_BUCKET`; the compose MinIO is the DEVELOPMENT default only —
-production must set every `S3_*` value (see §2a).
+production must set every `S3_*` value (see “Required environment” above).
 
 **Email — done in code.** Provider is selected by `EMAIL_PROVIDER`
 (`fake` | `smtp` | `resend`, default `fake`; dev uses `smtp` → Mailpit). Asking
@@ -246,10 +246,10 @@ for `smtp`/`resend` without its credentials is a startup error, never a silent
 fallback to the fake. For
 production set `EMAIL_PROVIDER=resend` + `RESEND_API_KEY`/`RESEND_FROM`, or
 `smtp` + `SMTP_*`. Only the production relay/ESP credentials remain (ops).
-Delivery itself goes through the job queue — see §5d.
+Delivery itself goes through the background job queue described below.
 
 **Other providers (tiles, Google OAuth) still use dev impls —**
-**tiles are now configurable** (Ledger #3):
+**tiles are now configurable**:
 
 - **Tiles / basemap.** `MAP_STYLE_URL` (default MapLibre demo tiles) reaches the
   browser via `<body data-*>` (CSP-safe — no inline script) and is read by
@@ -258,7 +258,7 @@ Delivery itself goes through the job queue — see §5d.
   or the HTTPS styles URL), or a self-hosted vector style (Protomaps PMTiles /
   OpenFreeMap — free, no per-request cost, no external transfer). Attribution is
   rendered by MapLibre's attribution control; a hosted provider's ToS /
-  attribution / usage limits + DPA (§C) still apply.
+  attribution, usage limits, and DPA requirements still apply.
 
 
 ## 5b. Rate limiter (ValKey)
@@ -356,7 +356,7 @@ request open, and cannot fail a registration *after* the account already exists.
 3. Wait for `readyz` to go green on that instance (migrations applied).
 4. Drain the old instance; promote the new one.
 5. On failure: stop the rollout, redeploy the **previous** image tag, and if the
-   schema is incompatible restore the pre-release backup (see §4/`docs/backups.md`).
+   schema is incompatible restore the pre-release backup (see /`docs/backups.md`).
 
 ## 6a. Legal pages (privacy / terms / cookies)
 
@@ -366,8 +366,8 @@ The versioned legal pages are stored in `policy_version` and seeded from
 1. Set `POLICY_OPERATOR_NAME`, `POLICY_OPERATOR_CNPJ`, `POLICY_OPERATOR_ADDRESS`
    and `POLICY_CONTACT_EMAIL` (the privacy inbox must be monitored — rights
    requests and takedown notices arrive there).
-2. Set `POLICY_VERSION` (e.g. `2026-09-03.1`) and `POLICY_EFFECTIVE_AT`.
-3. Run `bikenest-web seed-policies` once per release that changes the text. It is
+2. Set `POLICY_VERSION` (e.g. `2026-09-05.1`) and `POLICY_EFFECTIVE_AT`.
+3. Run `bikesnest-web seed-policies` once per release that changes the text. It is
    idempotent per `(kind, locale, version)`; a new version supersedes the current
    one and the old text stays reachable at `/{privacy,terms,cookies}/versions`.
 4. Material changes must be announced to users (e-mail or in-app notice) before

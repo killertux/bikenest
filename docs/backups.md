@@ -1,7 +1,7 @@
 # Backups & disaster recovery
 
 > **Goal:** survive a database/media failure or a bad deployment, and restore
-> without resurrecting data the user legally asked to delete (§98).
+> without resurrecting data the user legally asked to delete.
 >
 > **Targets (defaults, tune with real capacity/risk):** RPO ≤ 15 min (WAL
 > archiving), RTO ≤ 60 min. Backup retention **30 days** (daily logical + WAL).
@@ -28,7 +28,7 @@ archiving gives a low RPO and point-in-time-recovery.
 
 ```bash
 # Daily logical backup (cron / systemd timer)
-pg_dump -Fc "$DATABASE_URL" > /backups/bikenest-$(date +%F).dump
+pg_dump -Fc "$DATABASE_URL" > /backups/bikesnest-$(date +%F).dump
 # Keep 30 days (see retention below), then delete older.
 
 # Enable continuous WAL archiving (postgresql.conf):
@@ -55,7 +55,7 @@ cross-region replication; a 30-day version retention covers accidental deletion.
 - Encrypt transport (TLS to the backup target).
 - **Least privilege:** only the backup/restore service and the on-call DBA can
   read backups; access is logged. Backups contain **personal data** (art. 5/32),
-  so treat them like production data (this is also an access control for §98).
+  so treat them like production data (this is also an access control for deleted-data guarantees).
 
 ## 5. Retention & lifecycle
 
@@ -70,21 +70,21 @@ cross-region replication; a 30-day version retention covers accidental deletion.
 ```bash
 # 1. Stop the app (prevent writes during restore / during the retention sweep).
 # 2. Restore the logical dump (or PITR to the target point):
-createdb bikenest_restored
-pg_restore -d "$DATABASE_URL" /backups/bikenest-<date>.dump
+createdb bikesnest_restored
+pg_restore -d "$DATABASE_URL" /backups/bikesnest-<date>.dump
 
 # 3. Restore the media volume from the matching snapshot.
-# 4. Re-run the retention job — CRITICAL (§98):
-bikenest-web retention   # runs inside the app container
+# 4. Re-run the retention job — CRITICAL:
+bikesnest-web retention   # runs inside the app container
 ```
 
 **Step 4 is mandatory.** The `retention` command purges expired
 sessions/tokens/parked-here/exports and (config-gated) anonymizes inactive
 accounts / purges deleted account shells. Because a backup can pre-date a `DELETE`
-(request §67, account deletion §98), a naive restore would **resurrect** data the
+(request handling, account deletion), a naive restore would **resurrect** data the
 user already had removed. Re-running retention at the restored truth re-applies the
 deletion/anonymization invariants so removed data does not come back into active
-production state (§98). Until this runs, the restored instance may briefly show
+production state. Until this runs, the restored instance may briefly show
 data a user asked to delete — that is acceptable only if it is immediately
 swept and never served to the user.
 
@@ -95,7 +95,7 @@ swept and never served to the user.
 
 ## 7. Disaster recovery
 
-- **Backups alone are not DR** (§58). DR = the documented restore procedure
+- **Backups alone are not DR.** DR = the documented restore procedure
   (this doc) + a reproducible image build (`Dockerfile`) + a written RTO/RPO +
   the sandbox restore exercise. Keep a copy of the image and the backup in a
   **different region/account** than production.

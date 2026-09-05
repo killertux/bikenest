@@ -1,8 +1,8 @@
-Estes Termos de Serviço ("Termos") regulam o uso do BikeNest, um mapa colaborativo de estacionamentos para bicicletas operado por **{{OPERATOR_NAME}}**, CNPJ nº {{OPERATOR_CNPJ}}, com sede em {{OPERATOR_ADDRESS}} ("BikeNest", "nós"). Ao usar o serviço ou criar uma conta, você concorda com estes Termos e declara ter lido a [Política de Privacidade](/privacy). Se não concordar, não use o serviço.
+Estes Termos de Serviço ("Termos") regulam o uso do BikesNest, um mapa colaborativo de estacionamentos para bicicletas operado por **{{OPERATOR_NAME}}**, CNPJ nº {{OPERATOR_CNPJ}}, com sede em {{OPERATOR_ADDRESS}} ("BikesNest", "nós"). Ao usar o serviço ou criar uma conta, você concorda com estes Termos e declara ter lido a [Política de Privacidade](/privacy). Se não concordar, não use o serviço.
 
 ## 1. O serviço
 
-O BikeNest reúne informações sobre locais para estacionar bicicletas — localização, tipo de suporte, segurança, horários, fotos e avaliações — **fornecidas pelos próprios usuários**. Nós organizamos, exibimos e moderamos essas informações, mas não as produzimos nem as verificamos em campo. O serviço é gratuito e pode ser alterado, suspenso ou descontinuado a qualquer momento.
+O BikesNest reúne informações sobre locais para estacionar bicicletas — localização, tipo de suporte, segurança, horários, fotos e avaliações — **fornecidas pelos próprios usuários**. Nós organizamos, exibimos e moderamos essas informações, mas não as produzimos nem as verificamos em campo. O serviço é gratuito e pode ser alterado, suspenso ou descontinuado a qualquer momento.
 
 ## 2. Conta e elegibilidade
 
@@ -29,7 +29,7 @@ Ao enviar Conteúdo, você declara e garante que:
 
 ### 3.3 Licença que você nos concede
 
-Você mantém a titularidade do seu Conteúdo. Para que o serviço funcione, você nos concede uma licença **mundial, não exclusiva, gratuita, irrevogável e por prazo indeterminado** para hospedar, armazenar, reproduzir, adaptar (redimensionar, recortar, gerar miniaturas e remover metadados), publicar, exibir e distribuir o Conteúdo como parte do BikeNest e de seu acervo colaborativo, inclusive após a exclusão da sua conta. Você concorda que suas contribuições sejam exibidas **sem indicação de autoria** (de forma anônima), e que permaneçam no acervo, anonimizadas, depois que sua conta for excluída.
+Você mantém a titularidade do seu Conteúdo. Para que o serviço funcione, você nos concede uma licença **mundial, não exclusiva, gratuita, irrevogável e por prazo indeterminado** para hospedar, armazenar, reproduzir, adaptar (redimensionar, recortar, gerar miniaturas e remover metadados), publicar, exibir e distribuir o Conteúdo como parte do BikesNest e de seu acervo colaborativo, inclusive após a exclusão da sua conta. Você concorda que suas contribuições sejam exibidas **sem indicação de autoria** (de forma anônima), e que permaneçam no acervo, anonimizadas, depois que sua conta for excluída.
 
 ### 3.4 Indenização
 
@@ -55,7 +55,7 @@ Você não pode:
 
 ## 6. Propriedade intelectual
 
-O software, a marca, o nome e o desenho do BikeNest pertencem a nós ou a nossos licenciantes. O mapa-base e a geocodificação são fornecidos por terceiros sob suas próprias licenças e exigências de atribuição, exibidas no próprio mapa. O Conteúdo dos usuários é regido pela seção 3.
+O software, a marca, o nome e o desenho do BikesNest pertencem a nós ou a nossos licenciantes. O mapa-base e a geocodificação são fornecidos por terceiros sob suas próprias licenças e exigências de atribuição, exibidas no próprio mapa. O Conteúdo dos usuários é regido pela seção 3.
 
 ## 7. Isenção de garantias
 

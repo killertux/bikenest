@@ -4,8 +4,8 @@
 use axum::extract::{Form, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
-use bikenest_application::AuditFilter;
-use bikenest_domain::{Role, UserId};
+use bikesnest_application::AuditFilter;
+use bikesnest_domain::{Role, UserId};
 
 use crate::auth::Auth;
 use crate::i18n::{Locale, Translator};

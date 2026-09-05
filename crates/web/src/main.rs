@@ -1,5 +1,5 @@
-use bikenest_infrastructure::{Config, Db, S3ObjectStorage};
-use bikenest_web::{RouterDeps, app_router_with};
+use bikesnest_infrastructure::{Config, Db, S3ObjectStorage};
+use bikesnest_web::{RouterDeps, app_router_with};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -7,7 +7,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    // Load .env from the workspace root if present (dev convenience; §10).
+    // Load .env from the workspace root if present (development convenience).
     dotenvy::dotenv().ok();
 
     // The single configuration read of the whole process: every knob below,
@@ -18,7 +18,7 @@ async fn main() {
         std::process::exit(1);
     });
 
-    // Logging (§86): JSON structured in production (machine-parseable, forwarded to
+    // JSON structured logging in production is machine-parseable and forwarded to
     // a log driver/aggregator), human-readable in dev. `RUST_LOG` overrides the level.
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     if config.app_env.is_production() {
@@ -57,14 +57,14 @@ async fn main() {
     // Subcommand dispatch: default = serve the app.
     match subcommand.as_deref() {
         Some("seed-mock") => {
-            // Explicit, reproducible migrations first (§10).
+            // Run migrations explicitly before seeding.
             db.migrate().await.unwrap_or_else(|err| {
                 eprintln!("migration error: {err}");
                 std::process::exit(1);
             });
             let storage = S3ObjectStorage::from_config(&config.storage);
-            let processor = bikenest_infrastructure::LocalImageProcessor::new(config.photo);
-            match bikenest_infrastructure::parking::seed_mock(&db, &storage, &processor).await {
+            let processor = bikesnest_infrastructure::LocalImageProcessor::new(config.photo);
+            match bikesnest_infrastructure::parking::seed_mock(&db, &storage, &processor).await {
                 Ok(n) => {
                     println!(
                         "seeded {n} mock parking locations + photos + reviews (dev only); every photo verified retrievable"
@@ -82,16 +82,32 @@ async fn main() {
                 eprintln!("migration error: {err}");
                 std::process::exit(1);
             });
-            match bikenest_infrastructure::seed_admin(&db, &config.admin_seed).await {
-                Ok(bikenest_infrastructure::auth::seed::SeedOutcome::Created) => {
+            match bikesnest_infrastructure::seed_admin(&db, &config.admin_seed).await {
+                Ok(bikesnest_infrastructure::auth::seed::SeedOutcome::Created) => {
                     println!("admin account created");
                 }
-                Ok(bikenest_infrastructure::auth::seed::SeedOutcome::Updated) => {
+                Ok(bikesnest_infrastructure::auth::seed::SeedOutcome::Updated) => {
                     println!("admin account updated");
                 }
                 Err(err) => {
                     eprintln!("seed-admin error: {err}");
                     eprintln!("hint: set ADMIN_EMAIL and ADMIN_PASSWORD in .env and retry");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some("seed-full-fresh") => {
+            db.migrate().await.unwrap_or_else(|err| {
+                eprintln!("migration error: {err}");
+                std::process::exit(1);
+            });
+            match seed_full_fresh(&config, &db).await {
+                Ok(summary) => println!(
+                    "fresh seed complete: {} old objects removed; {} parking locations + photos + reviews, admin, and policies seeded",
+                    summary.deleted_objects, summary.parking_locations
+                ),
+                Err(err) => {
+                    eprintln!("seed-full-fresh error: {err}");
                     std::process::exit(1);
                 }
             }
@@ -102,16 +118,16 @@ async fn main() {
                 std::process::exit(1);
             });
             let storage = S3ObjectStorage::from_config(&config.storage);
-            let retention = bikenest_infrastructure::SqlxRetentionRepository::new(
+            let retention = bikesnest_infrastructure::SqlxRetentionRepository::new(
                 db.clone(),
                 config.retention,
                 Arc::new(storage),
             );
-            let job = bikenest_application::RetentionJob::new(
+            let job = bikesnest_application::RetentionJob::new(
                 Box::new(retention),
-                Box::new(bikenest_infrastructure::SqlxAuditLog::new(db.clone())),
-                Box::new(bikenest_infrastructure::SystemClock),
-                bikenest_application::RetentionConfig {
+                Box::new(bikesnest_infrastructure::SqlxAuditLog::new(db.clone())),
+                Box::new(bikesnest_infrastructure::SystemClock),
+                bikesnest_application::RetentionConfig {
                     inactive_account_anonymize_after_days: config
                         .inactive_account_anonymize_after_days,
                     deleted_account_purge_after_days: config.deleted_account_purge_after_days,
@@ -136,70 +152,136 @@ async fn main() {
                 eprintln!("migration error: {err}");
                 std::process::exit(1);
             });
-            let version = config.policy.version.clone();
-            let effective_at = config.policy.effective_at;
-            // §70: controller identity + contact come from the environment
-            // (POLICY_OPERATOR_*, POLICY_CONTACT_EMAIL) and are substituted
-            // into the {{TOKEN}}s of policies/*.md. Never seed with a hole.
-            let lookup = |token: &str| -> Option<String> { config.policy.placeholder(token) };
-            let mut ok = true;
-            for locale in bikenest_infrastructure::POLICY_LOCALES {
-                for kind_code in ["privacy", "terms", "cookies"] {
-                    let file = format!("policies/{kind_code}.{locale}.md");
-                    let raw = match std::fs::read_to_string(&file) {
-                        Ok(c) => c,
-                        Err(err) => {
-                            eprintln!("seed-policies: cannot read {file}: {err}");
-                            ok = false;
-                            continue;
-                        }
-                    };
-                    let content = match bikenest_infrastructure::fill_policy_placeholders(
-                        &raw, lookup,
-                    ) {
-                        Ok(c) => c,
-                        Err(missing) => {
-                            let vars: Vec<&str> = bikenest_infrastructure::POLICY_PLACEHOLDERS
-                                .iter()
-                                .filter(|(t, _)| missing.iter().any(|m| m == t))
-                                .map(|(_, var)| *var)
-                                .collect();
-                            eprintln!(
-                                "seed-policies: {file}: unresolved placeholders {missing:?} — set {} (see .env.example)",
-                                vars.join(", ")
-                            );
-                            ok = false;
-                            continue;
-                        }
-                    };
-                    let kind = bikenest_domain::PolicyKind::from_code(kind_code)
-                        .expect("valid policy kind");
-                    if let Err(err) = bikenest_infrastructure::seed_policy(
-                        &db,
-                        kind,
-                        locale,
-                        &version,
-                        effective_at,
-                        &content,
-                    )
-                    .await
-                    {
-                        eprintln!("seed-policies: {kind_code} ({locale}): {err}");
-                        ok = false;
-                    }
+            let result = match prepare_policies(&config) {
+                Ok(policies) => seed_prepared_policies(&db, &config, &policies).await,
+                Err(err) => Err(err),
+            };
+            match result {
+                Ok(()) => {
+                    println!(
+                        "seeded policies version {} for locales {:?} (legal text drafted by product; counsel review tracked in docs/legal-review.md)",
+                        config.policy.version,
+                        bikesnest_infrastructure::POLICY_LOCALES
+                    );
                 }
-            }
-            if ok {
-                println!(
-                    "seeded policies version {version} for locales {:?} (legal text drafted by product; counsel review tracked in docs/legal-review.md)",
-                    bikenest_infrastructure::POLICY_LOCALES
-                );
-            } else {
-                std::process::exit(1);
+                Err(err) => {
+                    eprintln!("seed-policies error: {err}");
+                    std::process::exit(1);
+                }
             }
         }
         _ => serve(config, db).await,
     }
+}
+
+struct PreparedPolicy {
+    kind: bikesnest_domain::PolicyKind,
+    kind_code: &'static str,
+    locale: &'static str,
+    content: String,
+}
+
+struct FullFreshSummary {
+    deleted_objects: usize,
+    parking_locations: usize,
+}
+
+fn prepare_policies(config: &Config) -> Result<Vec<PreparedPolicy>, String> {
+    let mut policies = Vec::new();
+    for &locale in bikesnest_infrastructure::POLICY_LOCALES {
+        for kind_code in ["privacy", "terms", "cookies"] {
+            let file = format!("policies/{kind_code}.{locale}.md");
+            let raw = std::fs::read_to_string(&file)
+                .map_err(|err| format!("cannot read {file}: {err}"))?;
+            let content = bikesnest_infrastructure::fill_policy_placeholders(&raw, |token| {
+                config.policy.placeholder(token)
+            })
+            .map_err(|missing| {
+                let vars: Vec<&str> = bikesnest_infrastructure::POLICY_PLACEHOLDERS
+                    .iter()
+                    .filter(|(token, _)| missing.iter().any(|value| value == token))
+                    .map(|(_, variable)| *variable)
+                    .collect();
+                format!(
+                    "{file}: unresolved placeholders {missing:?} — set {} (see .env.example)",
+                    vars.join(", ")
+                )
+            })?;
+            policies.push(PreparedPolicy {
+                kind: bikesnest_domain::PolicyKind::from_code(kind_code)
+                    .expect("valid policy kind"),
+                kind_code,
+                locale,
+                content,
+            });
+        }
+    }
+    Ok(policies)
+}
+
+async fn seed_prepared_policies(
+    db: &Db,
+    config: &Config,
+    policies: &[PreparedPolicy],
+) -> Result<(), String> {
+    for policy in policies {
+        bikesnest_infrastructure::seed_policy(
+            db,
+            policy.kind,
+            policy.locale,
+            &config.policy.version,
+            config.policy.effective_at,
+            &policy.content,
+        )
+        .await
+        .map_err(|err| format!("{} ({}): {err}", policy.kind_code, policy.locale))?;
+    }
+    Ok(())
+}
+
+fn validate_admin_seed(config: &Config) -> Result<(), String> {
+    let email = config
+        .admin_seed
+        .email
+        .as_deref()
+        .ok_or_else(|| "ADMIN_EMAIL must be set".to_string())?;
+    bikesnest_domain::UserEmail::parse(email)
+        .map_err(|_| "ADMIN_EMAIL must be a valid email".to_string())?;
+    let password = config
+        .admin_seed
+        .password
+        .as_deref()
+        .ok_or_else(|| "ADMIN_PASSWORD must be set".to_string())?;
+    bikesnest_domain::PasswordPolicy::default()
+        .validate(password)
+        .map_err(|_| "ADMIN_PASSWORD must meet the password policy".to_string())
+}
+
+async fn seed_full_fresh(config: &Config, db: &Db) -> Result<FullFreshSummary, String> {
+    if config.app_env.is_production() {
+        return Err("refusing to erase data when APP_ENV=production".to_string());
+    }
+    // Validate every file and required credential before deleting anything.
+    validate_admin_seed(config)?;
+    let policies = prepare_policies(config)?;
+
+    let storage = S3ObjectStorage::from_config(&config.storage);
+    let deleted_objects = bikesnest_infrastructure::reset_all_data(db, &storage)
+        .await
+        .map_err(|err| err.to_string())?;
+    let processor = bikesnest_infrastructure::LocalImageProcessor::new(config.photo);
+    let parking_locations = bikesnest_infrastructure::parking::seed_mock(db, &storage, &processor)
+        .await
+        .map_err(|err| err.to_string())?;
+    bikesnest_infrastructure::seed_admin(db, &config.admin_seed)
+        .await
+        .map_err(|err| err.to_string())?;
+    seed_prepared_policies(db, config, &policies).await?;
+
+    Ok(FullFreshSummary {
+        deleted_objects,
+        parking_locations,
+    })
 }
 
 async fn serve(config: Config, db: Db) {
@@ -211,7 +293,7 @@ async fn serve(config: Config, db: Db) {
 
     let config = Arc::new(config);
 
-    // Explicit, reproducible migrations on startup (dev workflow; §10).
+    // Run migrations explicitly on startup.
     if let Err(err) = db.migrate().await {
         eprintln!("migration error: {err}");
         std::process::exit(1);
@@ -232,15 +314,19 @@ async fn serve(config: Config, db: Db) {
     // and runs durable one-shot + recurring jobs. Disable with `JOBS_ENABLED=false`
     // for web-only instances (or to run jobs elsewhere).
     let worker_task = if config.jobs.enabled {
-        let storage: Arc<dyn bikenest_application::ObjectStorage> =
+        let storage: Arc<dyn bikesnest_application::ObjectStorage> =
             Arc::new(S3ObjectStorage::from_config(&config.storage));
         // The worker gets the same provider instance the router holds, so the
         // `email.send` handler mails through the configured relay/ESP rather
         // than a second copy of it.
-        let services =
-            bikenest_infrastructure::job_services(db.clone(), &config, storage, deps.email.clone());
+        let services = bikesnest_infrastructure::job_services(
+            db.clone(),
+            &config,
+            storage,
+            deps.email.clone(),
+        );
         let worker =
-            bikenest_infrastructure::Worker::new(services.repo, services.registry, config.jobs);
+            bikesnest_infrastructure::Worker::new(services.repo, services.registry, config.jobs);
         tracing::info!(jobs = "enabled", "background worker started");
         Some(tokio::spawn(worker.run(shutdown.child_token())))
     } else {
@@ -256,7 +342,7 @@ async fn serve(config: Config, db: Db) {
             eprintln!("failed to bind {bind_addr}: {err}");
             std::process::exit(1);
         });
-    tracing::info!(addr = %bind_addr, "bikenest listening");
+    tracing::info!(addr = %bind_addr, "bikesnest listening");
 
     // `into_make_service_with_connect_info` is what puts the TCP peer address in
     // the request extensions; without it `ClientIp` has no address to trust and
@@ -284,7 +370,7 @@ async fn serve(config: Config, db: Db) {
             ),
         }
     }
-    tracing::info!("bikenest stopped cleanly");
+    tracing::info!("bikesnest stopped cleanly");
 }
 
 /// How long an in-flight background job may take to finish once shutdown has

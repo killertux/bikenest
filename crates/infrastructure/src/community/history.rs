@@ -34,8 +34,8 @@
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{ContributionError, ContributionHistoryReader, ContributionItem};
-use bikenest_domain::UserId;
+use bikesnest_application::{ContributionError, ContributionHistoryReader, ContributionItem};
+use bikesnest_domain::UserId;
 use chrono::{DateTime, Utc};
 
 pub struct SqlxContributionHistoryReader {

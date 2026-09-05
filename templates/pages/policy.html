@@ -1,7 +1,7 @@
 {% extends "layouts/base.html" %}
 {% block content %}
 <section class="mx-auto max-w-3xl px-4 py-12 lg:px-8">
-  <p class="font-mono text-xs uppercase tracking-[0.14em] text-muted">BikeNest</p>
+  <p class="font-mono text-xs uppercase tracking-[0.14em] text-muted">BikesNest</p>
   <h1 class="mt-1 font-display text-3xl font-bold tracking-tight">{{ kind_label }}</h1>
   <p class="mt-2 text-sm text-muted">{{ tr.t("policy.effective") }} <span class="font-mono">{{ effective_label }}</span> · {{ tr.t("policy.version") }} <span class="font-mono">{{ version }}</span></p>
   <a href="/{{ kind_code }}/versions" class="mt-2 inline-block text-sm font-medium text-accent-strong hover:underline">{{ tr.t("policy.view_versions") }}</a>

@@ -3,25 +3,25 @@
 //! and the audit-log reader filter/pagination. Uses the committed-fixture
 //! pattern (the repos read/write through the pool, on other connections).
 
-use bikenest_application::{
+use bikesnest_application::{
     AuditFilter, AuditLogReader, ModerationError, ModerationRepository, NewReport,
     ProposalApplication, ReportRepository,
 };
-use bikenest_domain::{
+use bikesnest_domain::{
     ModerationState, ProposedChange, ReportDescription, ReportOutcome, ReportState,
     ReportTargetType, UserId,
 };
-use bikenest_infrastructure::{
+use bikesnest_infrastructure::{
     Db, SqlxAuditLogReader, SqlxModerationRepository, SqlxReportRepository,
 };
-use bikenest_test_support::{ParkingBuilder, UserBuilder, db_test, pool};
+use bikesnest_test_support::{ParkingBuilder, UserBuilder, db_test, pool};
 
 async fn db() -> Db {
     Db::from_pool(pool().await)
 }
 
 /// Commit a user (with the given role) so repo writes see it on other connections.
-async fn committed_user(tx: &mut bikenest_test_support::TestTx, email: &str, role: &str) -> i64 {
+async fn committed_user(tx: &mut bikesnest_test_support::TestTx, email: &str, role: &str) -> i64 {
     let user = UserBuilder::new()
         .with_email(email)
         .create(tx.executor())
@@ -40,7 +40,7 @@ async fn committed_user(tx: &mut bikenest_test_support::TestTx, email: &str, rol
 }
 
 #[db_test]
-async fn report_repo_state_machine(tx: &mut bikenest_test_support::TestTx) {
+async fn report_repo_state_machine(tx: &mut bikesnest_test_support::TestTx) {
     let reporter = committed_user(tx, "m5-infra-rep@example.com", "USER").await;
     let moderator = committed_user(tx, "m5-infra-mod@example.com", "MODERATOR").await;
     let repo = SqlxReportRepository::new(db().await);
@@ -103,7 +103,7 @@ async fn report_repo_state_machine(tx: &mut bikenest_test_support::TestTx) {
 }
 
 #[db_test]
-async fn parking_invalidate_writes_moderation_revision(tx: &mut bikenest_test_support::TestTx) {
+async fn parking_invalidate_writes_moderation_revision(tx: &mut bikesnest_test_support::TestTx) {
     let moderator = committed_user(tx, "m5-infra-mod2@example.com", "MODERATOR").await;
     const MARK: &str = "m5-infra-inv";
     sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
@@ -161,7 +161,7 @@ async fn parking_invalidate_writes_moderation_revision(tx: &mut bikenest_test_su
 
 #[db_test]
 async fn proposal_approve_applies_change_supersedes_and_writes_revision(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let moderator = committed_user(tx, "m5-infra-prop-mod@example.com", "MODERATOR").await;
     const MARK: &str = "m5-infra-prop";
@@ -243,7 +243,7 @@ async fn proposal_approve_applies_change_supersedes_and_writes_revision(
 }
 
 #[db_test]
-async fn proposal_approve_refuses_a_stale_base_version(tx: &mut bikenest_test_support::TestTx) {
+async fn proposal_approve_refuses_a_stale_base_version(tx: &mut bikesnest_test_support::TestTx) {
     let moderator = committed_user(tx, "m5-infra-stale-mod@example.com", "MODERATOR").await;
     const MARK: &str = "m5-infra-stale";
     sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
@@ -346,7 +346,7 @@ async fn proposal_approve_refuses_a_stale_base_version(tx: &mut bikenest_test_su
 }
 
 #[db_test]
-async fn report_dedupe_index_rejects_a_second_open_report(tx: &mut bikenest_test_support::TestTx) {
+async fn report_dedupe_index_rejects_a_second_open_report(tx: &mut bikesnest_test_support::TestTx) {
     let reporter = committed_user(tx, "m5-infra-dupe-a@example.com", "USER").await;
     let other = committed_user(tx, "m5-infra-dupe-b@example.com", "USER").await;
     let moderator = committed_user(tx, "m5-infra-dupe-mod@example.com", "MODERATOR").await;
@@ -396,7 +396,7 @@ async fn report_dedupe_index_rejects_a_second_open_report(tx: &mut bikenest_test
 }
 
 #[db_test]
-async fn audit_reader_filters_and_paginates(tx: &mut bikenest_test_support::TestTx) {
+async fn audit_reader_filters_and_paginates(tx: &mut bikesnest_test_support::TestTx) {
     let actor = committed_user(tx, "m5-infra-audit@example.com", "USER").await;
     let reader = SqlxAuditLogReader::new(db().await);
     // Insert a batch of audit events, then filter by action + keyset paginate.
@@ -449,7 +449,7 @@ async fn audit_reader_filters_and_paginates(tx: &mut bikenest_test_support::Test
     );
 
     let _ = tx;
-    let mut audit_tx = bikenest_test_support::audit_mutation_tx(&pool().await).await;
+    let mut audit_tx = bikesnest_test_support::audit_mutation_tx(&pool().await).await;
     sqlx::query("DELETE FROM audit_events WHERE actor_user_id = $1")
         .bind(actor)
         .execute(&mut *audit_tx)
@@ -468,7 +468,7 @@ async fn audit_reader_filters_and_paginates(tx: &mut bikenest_test_support::Test
 
 #[db_test]
 async fn report_list_keyset_pagination_is_disjoint_and_stable(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let reporter = committed_user(tx, "m5-infra-report-keyset@example.com", "USER").await;
     let repo = SqlxReportRepository::new(db().await);
@@ -535,7 +535,7 @@ async fn report_list_keyset_pagination_is_disjoint_and_stable(
 
 #[db_test]
 async fn proposal_list_keyset_pagination_is_disjoint_and_stable(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let proposer = committed_user(tx, "m5-infra-prop-keyset@example.com", "USER").await;
     const MARK: &str = "m5-infra-prop-keyset";
@@ -614,7 +614,9 @@ async fn proposal_list_keyset_pagination_is_disjoint_and_stable(
 /// `ModerationRepository::queue_counts` runs against the pool, just pointed
 /// at this connection instead.
 #[db_test]
-async fn queue_counts_on_reflects_an_exact_delta_race_free(tx: &mut bikenest_test_support::TestTx) {
+async fn queue_counts_on_reflects_an_exact_delta_race_free(
+    tx: &mut bikesnest_test_support::TestTx,
+) {
     let moderator = committed_user(tx, "m5-infra-queue-counts@example.com", "MODERATOR").await;
     const MARK: &str = "m5-infra-queue-counts";
     sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
@@ -715,7 +717,7 @@ async fn queue_counts_on_reflects_an_exact_delta_race_free(tx: &mut bikenest_tes
 
 #[db_test]
 async fn proposal_rows_parse_the_stored_payload_and_carry_current_values(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let author = committed_user(tx, "wp13-infra-payload@example.com", "USER").await;
     const MARK: &str = "wp13-infra-payload";
@@ -847,7 +849,7 @@ async fn proposal_rows_parse_the_stored_payload_and_carry_current_values(
 
 #[db_test]
 async fn report_previews_resolve_every_target_kind_to_its_location(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let author = committed_user(tx, "wp13-infra-preview@example.com", "USER").await;
     const MARK: &str = "wp13-infra-preview";
@@ -930,7 +932,7 @@ async fn report_previews_resolve_every_target_kind_to_its_location(
     let excerpt = review_preview.review_excerpt.as_deref().expect("excerpt");
     assert!(excerpt.starts_with("review review"));
     assert!(
-        excerpt.chars().count() <= bikenest_application::REVIEW_EXCERPT_CHARS + 1,
+        excerpt.chars().count() <= bikesnest_application::REVIEW_EXCERPT_CHARS + 1,
         "the excerpt is bounded: {} chars",
         excerpt.chars().count()
     );

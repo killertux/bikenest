@@ -1,10 +1,10 @@
 ---
-name: bikenest-design-system
-description: BikeNest design system — a human-approachable civic web UI with OKLch tokens, a green-teal accent, and a semantic freshness scale, extracted from the source BikeNest prototype. Use when generating any new BikeNest screen or component.
+name: bikesnest-design-system
+description: BikesNest design system — a human-approachable civic web UI with OKLch tokens, a green-teal accent, and a semantic freshness scale, extracted from the source BikesNest prototype. Use when generating any new BikesNest screen or component.
 user-invocable: true
 ---
 
-# SKILL — Generating BikeNest screens with this design system
+# SKILL — Generating BikesNest screens with this design system
 
 ## What is inside
 
@@ -16,11 +16,11 @@ user-invocable: true
 
 ## Source context
 
-Every token, pattern, and image in this package traces to the source project "Check Ui Design Md File There" (BikeNest prototype, `e98bd5dc-ce25-43fb-ac40-079fb0c84b43`). The token block was extracted verbatim from `scripts/gen_d.py` and the generated screens; provenance for imagery and icons is documented in `context/provenance.md`. Direction: **human-approachable**.
+Every token, pattern, and image in this package traces to the source project "Check Ui Design Md File There" (BikesNest prototype, `e98bd5dc-ce25-43fb-ac40-079fb0c84b43`). The token block was extracted verbatim from `scripts/gen_d.py` and the generated screens; provenance for imagery and icons is documented in `context/provenance.md`. Direction: **human-approachable**.
 
 ## When to use
 
-Use this skill whenever a task requires generating a new BikeNest screen, flow, email template, or component — public discovery pages, auth flows, account settings, contribution forms, moderation queues, or error states. Do not use it for unrelated products.
+Use this skill whenever a task requires generating a new BikesNest screen, flow, email template, or component — public discovery pages, auth flows, account settings, contribution forms, moderation queues, or error states. Do not use it for unrelated products.
 
 ## How to use
 

@@ -1,12 +1,12 @@
 //! Accounts & authentication: ports, read models and the use-case service
-//! (§16–§20, §45, §47). Infrastructure implements the ports; the web layer
+//! Infrastructure implements the ports; the web layer
 //! calls [`AuthService`] for every auth/account/role action.
 
 use crate::audit::{AuditEvent, AuditLog};
 use crate::email::{EmailKind, EmailMessage, EmailQueue};
 use crate::rate_limit::{RateLimitError, RateLimiter};
 use async_trait::async_trait;
-use bikenest_domain::{
+use bikesnest_domain::{
     AccountState, AuthenticationProvider, CsrfToken, LocaleCode, Password, PasswordPolicy,
     ProviderIdentity, Role, SessionId, User, UserEmail, UserId, VerificationToken,
 };
@@ -76,15 +76,15 @@ impl From<crate::audit::AuditError> for AuthError {
     }
 }
 
-impl From<bikenest_domain::DomainError> for AuthError {
-    fn from(e: bikenest_domain::DomainError) -> Self {
+impl From<bikesnest_domain::DomainError> for AuthError {
+    fn from(e: bikesnest_domain::DomainError) -> Self {
         match e {
-            bikenest_domain::DomainError::WeakPassword => AuthError::WeakPassword,
-            bikenest_domain::DomainError::EmptyEmail
-            | bikenest_domain::DomainError::InvalidEmail(_) => AuthError::InvalidEmail,
-            bikenest_domain::DomainError::InvalidRole(_)
-            | bikenest_domain::DomainError::InvalidState(_)
-            | bikenest_domain::DomainError::Invalid(_) => AuthError::Internal,
+            bikesnest_domain::DomainError::WeakPassword => AuthError::WeakPassword,
+            bikesnest_domain::DomainError::EmptyEmail
+            | bikesnest_domain::DomainError::InvalidEmail(_) => AuthError::InvalidEmail,
+            bikesnest_domain::DomainError::InvalidRole(_)
+            | bikesnest_domain::DomainError::InvalidState(_)
+            | bikesnest_domain::DomainError::Invalid(_) => AuthError::Internal,
         }
     }
 }
@@ -100,7 +100,7 @@ pub trait PasswordHasher: Send + Sync {
     async fn verify(&self, pw: &Password, hash: &str) -> Result<bool, AuthError>;
 }
 
-/// Port: cryptographically secure random bytes for tokens/sessions (§16/§18).
+/// Port: cryptographically secure random bytes for tokens/sessions.
 pub trait TokenGenerator: Send + Sync {
     fn generate(&self) -> [u8; 32];
 }
@@ -173,7 +173,7 @@ pub trait AccountRepository: Send + Sync {
     async fn update_canonical_email(&self, id: UserId, email: &UserEmail) -> Result<(), AuthError>;
     /// Atomic confirm: set `email_verified_at`, advance to `Active`, and (when
     /// the address differs) switch `users.email` + the password identity subject
-    /// in a single transaction (§2, §20).
+    /// in a single transaction.
     async fn confirm_email(
         &self,
         id: UserId,
@@ -233,7 +233,7 @@ pub struct Session {
     pub revoked_at: Option<DateTime<Utc>>,
 }
 
-/// Port: server-side session store (§18). The cookie carries the raw id; the
+/// Port: server-side session store. The cookie carries the raw id; the
 /// store persists its SHA-256 hash. `resolve` applies idle + absolute expiry
 /// and refreshes `last_seen_at`.
 #[async_trait]
@@ -261,7 +261,7 @@ pub trait SessionStore: Send + Sync {
     async fn revoke_all_for_user(&self, user_id: UserId) -> Result<(), AuthError>;
 }
 
-/// Port: single-use verification / reset token store (§16).
+/// Port: single-use verification / reset token store.
 #[async_trait]
 pub trait TokenStore: Send + Sync {
     async fn issue_verification(
@@ -289,7 +289,7 @@ pub trait TokenStore: Send + Sync {
     ) -> Result<Option<UserId>, AuthError>;
 }
 
-/// Port: OAuth provider (§17). The M2 impl is a dev stub (**Ledger #5**).
+/// Port: OAuth provider. The implementation is a dev stub.
 #[async_trait]
 pub trait OAuthProvider: Send + Sync {
     fn authorize_url(&self, state: &str) -> String;
@@ -323,7 +323,7 @@ impl AuthenticatedUser {
         }
     }
 
-    /// The single authorization check used by handlers (§19).
+    /// The single authorization check used by handlers.
     pub fn has_role(&self, role: Role) -> bool {
         self.roles.contains(&role)
     }
@@ -345,7 +345,7 @@ pub struct LoginOutcome {
 }
 
 // ---------------------------------------------------------------------------
-// Rate-limit defaults (§45)
+// Rate-limit defaults
 // ---------------------------------------------------------------------------
 
 /// A dummy argon2id PHC string used to equalize login timing when an identity
@@ -487,11 +487,11 @@ impl AuthService {
     }
 
     // -----------------------------------------------------------------------
-    // Register → verify → resend (§16)
+    // Register → verify → resend
     // -----------------------------------------------------------------------
 
     /// Register an account. Returning `Ok` whether the email is taken or not
-    /// (no-existence-leak §45): the email is only sent for a *fresh* signup,
+    /// (no-existence-leak): the email is only sent for a *fresh* signup,
     /// but the caller renders the same "check your inbox" either way.
     pub async fn register(
         &self,
@@ -513,7 +513,7 @@ impl AuthService {
         let password = Password::new(raw_password);
 
         let now = self.now();
-        // Identical path whether or not the email is taken (§45). If taken, we
+        // Identical path whether or not the email is taken. If taken, we
         // send no email but still return success — and still burn the same
         // argon2 time, so a timing oracle cannot distinguish an existing
         // account (mirrors the login DUMMY_HASH).
@@ -579,7 +579,7 @@ impl AuthService {
         // One atomic operation (per the plan): set `email_verified_at`, advance
         // to `Active`, and (when changing) switch `users.email` + the password
         // identity subject in a single transaction — one login-lookup key, never
-        // divergent (§2, §20).
+        // divergent.
         // Someone may have claimed the address between the request and the
         // click: that is "email taken", not an internal failure.
         self.accounts
@@ -641,11 +641,11 @@ impl AuthService {
     }
 
     // -----------------------------------------------------------------------
-    // Login / logout (§18)
+    // Login / logout
     // -----------------------------------------------------------------------
 
     /// Sign in by email + password. Returns the same error for bad credentials,
-    /// suspended and deleted accounts (no-existence / account-state leak §45).
+    /// suspended and deleted accounts (no-existence / account-state leak).
     /// Always audits the attempt.
     pub async fn login(
         &self,
@@ -676,7 +676,7 @@ impl AuthService {
             .find_identity(AuthenticationProvider::Password, identity_key)
             .await?
         else {
-            // Not found: still run a dummy verify to equalise timing (§45).
+            // Not found: still run a dummy verify to equalise timing.
             let _ = self.hasher.verify(&password, DUMMY_HASH).await;
             self.audit
                 .record(AuditEvent::failure(
@@ -763,7 +763,7 @@ impl AuthService {
     }
 
     // -----------------------------------------------------------------------
-    // Password reset (§16)
+    // Password reset
     // -----------------------------------------------------------------------
 
     /// Request a password reset. Neutral (no email) when no such account exists.
@@ -797,7 +797,7 @@ impl AuthService {
     }
 
     /// Reset the password via a single-use, expiring token; revokes *all*
-    /// sessions (§16/§18).
+    /// sessions.
     pub async fn reset_password(
         &self,
         raw_token: &str,
@@ -931,7 +931,7 @@ impl AuthService {
     }
 
     // -----------------------------------------------------------------------
-    // OAuth (§17)
+    // OAuth
     // -----------------------------------------------------------------------
 
     pub fn oauth_authorize_url(&self, state: &str) -> String {
@@ -1033,7 +1033,7 @@ impl AuthService {
     }
 
     // -----------------------------------------------------------------------
-    // Role management (§19)
+    // Role management
     // -----------------------------------------------------------------------
 
     /// Grant a role. Requires an ADMIN actor; refuses to revoke the actor's own
@@ -1098,7 +1098,7 @@ impl AuthService {
     }
 
     // -----------------------------------------------------------------------
-    // Suspend / restore (§20/§44) — ADMIN-only. Suspension revokes every active
+    // Suspend / restore — ADMIN-only. Suspension revokes every active
     // session so it takes effect immediately, not just at the next login.
     // -----------------------------------------------------------------------
 
@@ -1158,7 +1158,7 @@ impl AuthService {
 
     /// Resolve a raw session id (from the cookie) to an authenticated principal
     /// and the CSRF token. `None` for a missing / invalid / expired / revoked session
-    /// (deny-by-default §19).
+    /// (deny-by-default).
     /// All accounts with roles (admin user list, M5).
     pub async fn list_users(&self) -> Result<Vec<AuthenticatedUser>, AuthError> {
         let users = self.accounts.list_users().await?;

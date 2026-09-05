@@ -12,13 +12,13 @@
 use std::sync::Arc;
 
 use axum::{Router, middleware};
-use bikenest_application::{
+use bikesnest_application::{
     AuthService, CheckReadiness, ContributionDeps, ContributionService, EmailProvider, EmailQueue,
     GetParkingDetails, ModerationDeps, ModerationService, ObjectStorage, PasswordHasher, PhotoDeps,
     PhotoService, PrivacyDeps, PrivacyService, RateLimiter, SearchParking,
 };
-use bikenest_infrastructure::probe::SqlxDatabaseProbe;
-use bikenest_infrastructure::{
+use bikesnest_infrastructure::probe::SqlxDatabaseProbe;
+use bikesnest_infrastructure::{
     Argon2PasswordHasher, CachingGeocoder, Config, ConfigError, Db, FakeOAuthProvider,
     InlineEmailQueue, JobEmailQueue, LocalImageProcessor, OfflineTimezoneResolver,
     RealTokenGenerator, S3ObjectStorage, SharedGeocoder, SharedObjectStorage, SharedRateLimiter,
@@ -120,7 +120,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
     // indistinguishable from dropping the mail.
     let email_queue: Box<dyn EmailQueue> = if config.jobs.enabled {
         Box::new(JobEmailQueue::new(
-            bikenest_infrastructure::SqlxJobRepository::new(db.clone()),
+            bikesnest_infrastructure::SqlxJobRepository::new(db.clone()),
             config.jobs.max_attempts,
         ))
     } else {
@@ -182,7 +182,7 @@ pub fn app_router_with<H: PasswordHasher + Clone + 'static>(
         tokens_gen: Box::new(RealTokenGenerator),
         clock: Box::new(SystemClock),
     });
-    let policy_reader: Arc<dyn bikenest_application::PolicyReader> =
+    let policy_reader: Arc<dyn bikesnest_application::PolicyReader> =
         Arc::new(SqlxPolicyReader::new(db.clone()));
     let state = AppState {
         readiness: Arc::new(CheckReadiness::new(probe)),

@@ -1,8 +1,8 @@
-//! SQL-backed audit log (§47). Writes rows to `audit_events`.
+//! SQL-backed audit log. Writes rows to `audit_events`.
 
 use crate::Db;
 use async_trait::async_trait;
-use bikenest_application::{AuditError, AuditEvent, AuditLog};
+use bikesnest_application::{AuditError, AuditEvent, AuditLog};
 
 pub struct SqlxAuditLog {
     db: Db,

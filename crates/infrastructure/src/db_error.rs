@@ -14,7 +14,7 @@
 //! PostgreSQL keeps the offending values in the separate `DETAIL` field, which
 //! sqlx does not surface here. That makes `%e` safe to log.
 
-use bikenest_application::{
+use bikesnest_application::{
     AuditError, AuthError, ContributionError, ModerationError, PhotoError, PrivacyError,
     ReaderError,
 };

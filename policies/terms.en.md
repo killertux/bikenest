@@ -1,8 +1,8 @@
-These Terms of Service ("Terms") govern the use of BikeNest, a community map of bicycle parking operated by **{{OPERATOR_NAME}}**, Brazilian company registration (CNPJ) No. {{OPERATOR_CNPJ}}, with registered office at {{OPERATOR_ADDRESS}} ("BikeNest", "we"). By using the service or creating an account you agree to these Terms and acknowledge the [Privacy Policy](/privacy). If you do not agree, do not use the service.
+These Terms of Service ("Terms") govern the use of BikesNest, a community map of bicycle parking operated by **{{OPERATOR_NAME}}**, Brazilian company registration (CNPJ) No. {{OPERATOR_CNPJ}}, with registered office at {{OPERATOR_ADDRESS}} ("BikesNest", "we"). By using the service or creating an account you agree to these Terms and acknowledge the [Privacy Policy](/privacy). If you do not agree, do not use the service.
 
 ## 1. The service
 
-BikeNest gathers information about places to park bicycles — location, type of rack, security, opening hours, photos and reviews — **provided by its users**. We organise, display and moderate that information, but we do not produce it or check it on site. The service is free of charge and may be changed, suspended or discontinued at any time.
+BikesNest gathers information about places to park bicycles — location, type of rack, security, opening hours, photos and reviews — **provided by its users**. We organise, display and moderate that information, but we do not produce it or check it on site. The service is free of charge and may be changed, suspended or discontinued at any time.
 
 ## 2. Account and eligibility
 
@@ -29,7 +29,7 @@ By submitting Content you represent and warrant that:
 
 ### 3.3 Licence you grant us
 
-You keep ownership of your Content. So that the service can operate, you grant us a **worldwide, non-exclusive, royalty-free, irrevocable licence of indefinite duration** to host, store, reproduce, adapt (resize, crop, generate thumbnails and strip metadata), publish, display and distribute the Content as part of BikeNest and its community dataset, including after your account is deleted. You agree that your contributions are displayed **without attribution** (anonymously) and that they remain in the dataset, anonymised, after your account is deleted.
+You keep ownership of your Content. So that the service can operate, you grant us a **worldwide, non-exclusive, royalty-free, irrevocable licence of indefinite duration** to host, store, reproduce, adapt (resize, crop, generate thumbnails and strip metadata), publish, display and distribute the Content as part of BikesNest and its community dataset, including after your account is deleted. You agree that your contributions are displayed **without attribution** (anonymously) and that they remain in the dataset, anonymised, after your account is deleted.
 
 ### 3.4 Indemnity
 
@@ -55,7 +55,7 @@ You may not:
 
 ## 6. Intellectual property
 
-The BikeNest software, brand, name and design belong to us or our licensors. The base map and geocoding are provided by third parties under their own licences and attribution requirements, shown on the map itself. User Content is governed by section 3.
+The BikesNest software, brand, name and design belong to us or our licensors. The base map and geocoding are provided by third parties under their own licences and attribution requirements, shown on the map itself. User Content is governed by section 3.
 
 ## 7. Disclaimer of warranties
 

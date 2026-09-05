@@ -18,7 +18,7 @@ use axum::extract::State;
 use axum::http::{HeaderValue, Request, header};
 use axum::middleware::Next;
 use axum::response::Response;
-use bikenest_infrastructure::SecurityConfig;
+use bikesnest_infrastructure::SecurityConfig;
 
 use crate::htmx;
 
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn dev_defaults_to_demo_tiles() {
-        let cfg = bikenest_infrastructure::Config::for_tests("postgres://localhost/x");
+        let cfg = bikesnest_infrastructure::Config::for_tests("postgres://localhost/x");
         let h = SecurityHeaders::new(&cfg.security, cfg.tls_on);
         assert!(
             h.tile_hosts

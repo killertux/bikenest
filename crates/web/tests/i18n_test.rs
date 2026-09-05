@@ -1,7 +1,7 @@
 //! i18n formatting unit tests (M8): locale-aware money + date formatting.
 
-use bikenest_web::i18n::{Locale, Translator};
-use bikenest_web::view::{format_money, iso_datetime_label};
+use bikesnest_web::i18n::{Locale, Translator};
+use bikesnest_web::view::{format_money, iso_datetime_label};
 
 fn en() -> Translator {
     Translator::new(Locale::En)

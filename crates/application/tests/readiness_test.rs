@@ -1,6 +1,6 @@
-//! Application-layer tests for the readiness use case (fake probes — §55/§56).
+//! Application-layer tests for the readiness use case (fake probes — /).
 use async_trait::async_trait;
-use bikenest_application::{CheckReadiness, DatabaseProbe, ProbeError, Readiness};
+use bikesnest_application::{CheckReadiness, DatabaseProbe, ProbeError, Readiness};
 
 struct FakeProbe(ProbeError);
 struct OkProbe;

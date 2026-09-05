@@ -1,4 +1,4 @@
-//! Policy seeding for the versioned legal pages (plans/m6-privacy.md §8, §70/§71).
+//! Policy seeding for the versioned legal pages.
 //!
 //! `seed-policies` reads `policies/{kind}.{locale}.md` and upserts one
 //! `policy_version` row per `(kind, locale)`, **keyed on `(kind, locale,
@@ -12,15 +12,15 @@
 //! to publish a document with an unresolved placeholder.
 
 use crate::Db;
-use bikenest_application::PrivacyError;
-use bikenest_domain::PolicyKind;
+use bikesnest_application::PrivacyError;
+use bikesnest_domain::PolicyKind;
 use chrono::{DateTime, Utc};
 
 /// Locales a policy document is published in (`policy_version.locale`).
 /// pt-BR is the fallback the web layer uses when a locale has no document.
 pub const POLICY_LOCALES: &[&str] = &["pt-BR", "en"];
 
-/// `{{TOKEN}}` → environment variable that supplies it at seed time (§70:
+/// `{{TOKEN}}` → environment variable that supplies it at seed time (:
 /// controller identity + contact information).
 pub const POLICY_PLACEHOLDERS: &[(&str, &str)] = &[
     ("OPERATOR_NAME", "POLICY_OPERATOR_NAME"),

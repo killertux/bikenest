@@ -3,7 +3,7 @@
 use crate::Db;
 use crate::parking::search::reader_err;
 use async_trait::async_trait;
-use bikenest_application::{ParkingPhotoReader, ReaderError, StoredPhoto};
+use bikesnest_application::{ParkingPhotoReader, ReaderError, StoredPhoto};
 
 pub struct SqlxParkingPhotoReader {
     db: Db,

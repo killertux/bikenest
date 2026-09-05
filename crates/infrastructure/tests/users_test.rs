@@ -1,13 +1,13 @@
-//! Database-backed integration tests against real PostgreSQL (§49).
+//! Database-backed integration tests against real PostgreSQL.
 //!
 //! Each test runs on the shared multi-threaded runtime via `#[db_test]`,
-//! receives an open transaction, and rolls back on completion (§50).
+//! receives an open transaction, and rolls back on completion.
 
-use bikenest_test_support::{UserBuilder, db_test};
+use bikesnest_test_support::{UserBuilder, db_test};
 
 #[db_test]
 async fn user_builder_inserts_and_reads_back_within_test_transaction(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let user = UserBuilder::new()
         .with_email("Ada@Example.com")
@@ -28,12 +28,12 @@ async fn user_builder_inserts_and_reads_back_within_test_transaction(
 
     assert_eq!(stored.0, "ada@example.com");
     assert_eq!(stored.1.as_deref(), Some("Ada"));
-    // No cleanup needed: the transaction rolls back after the test (§50).
+    // No cleanup needed: the transaction rolls back after the test.
 }
 
 #[db_test]
 async fn duplicate_email_across_case_is_rejected_by_unique_index(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     UserBuilder::new()
         .with_email("duplicate@example.com")
@@ -57,7 +57,7 @@ async fn duplicate_email_across_case_is_rejected_by_unique_index(
 
 #[db_test]
 async fn savepoint_allows_nested_transaction_with_inner_rollback(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     // Outer insert survives.
     UserBuilder::new()
@@ -67,14 +67,14 @@ async fn savepoint_allows_nested_transaction_with_inner_rollback(
         .expect("outer insert");
 
     {
-        // Inner savepoint: insert then roll back to the savepoint (§51).
+        // Inner savepoint: insert then roll back to the savepoint.
         let mut sp = tx.savepoint().await;
         UserBuilder::new()
             .with_email("inner@example.com")
             .create(sp.executor())
             .await
             .expect("inner insert");
-        sp.rollback().await; // undo inner insert (§51)
+        sp.rollback().await; // undo inner insert
     }
 
     let (inner_gone,): (i64,) = sqlx::query_as("SELECT count(*) FROM users WHERE email = $1")
@@ -93,7 +93,7 @@ async fn savepoint_allows_nested_transaction_with_inner_rollback(
 }
 
 #[db_test]
-async fn savepoint_inner_commit_releases_savepoint(tx: &mut bikenest_test_support::TestTx) {
+async fn savepoint_inner_commit_releases_savepoint(tx: &mut bikesnest_test_support::TestTx) {
     {
         let mut sp = tx.savepoint().await;
         UserBuilder::new()

@@ -6,20 +6,20 @@
 //! the repos (which read committed rows), then clean up both. Each test gets a
 //! unique user email so parallel tests never collide.
 
-use bikenest_application::{
+use bikesnest_application::{
     ContributionError, ContributionHistoryReader, FavoriteRepository, NewParkingLocation,
     NewProposal, NewVerification, ParkingContributionRepository, ParkingEdit, ReviewPhotosReader,
     ReviewRepository, VerificationRepository,
 };
-use bikenest_domain::{
+use bikesnest_domain::{
     AttributeResult, Cost, CurrencyCode, ExistenceResult, GeoPoint, Money, OpeningHours,
     ParkingType, PricingUnit, ReviewBody, SecurityFeature, SecurityState, StarRating, UserId,
 };
-use bikenest_infrastructure::{
+use bikesnest_infrastructure::{
     Db, SqlxContributionHistoryReader, SqlxFavoriteRepository, SqlxParkingContributionRepository,
     SqlxReviewPhotosReader, SqlxReviewRepository, SqlxVerificationRepository,
 };
-use bikenest_test_support::{UserBuilder, db_test, pool};
+use bikesnest_test_support::{UserBuilder, db_test, pool};
 
 async fn db() -> Db {
     Db::from_pool(pool().await)
@@ -27,7 +27,7 @@ async fn db() -> Db {
 
 /// A unique, clean user per test. Uses the commit-fixture + explicit cleanup so
 /// the write repos (running on pool connections) can honor the FK.
-async fn fresh_user(tx: &mut bikenest_test_support::TestTx, email: &str) -> UserId {
+async fn fresh_user(tx: &mut bikesnest_test_support::TestTx, email: &str) -> UserId {
     // Clean any leftover from a prior run of the same name.
     sqlx::query(
         "DELETE FROM parking_location WHERE creator_id = (SELECT id FROM users WHERE email = $1)",
@@ -80,7 +80,7 @@ fn new_location() -> NewParkingLocation {
 }
 
 #[db_test]
-async fn create_writes_location_revision_and_reads_back(tx: &mut bikenest_test_support::TestTx) {
+async fn create_writes_location_revision_and_reads_back(tx: &mut bikesnest_test_support::TestTx) {
     let email = "c-create@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -98,14 +98,14 @@ async fn create_writes_location_revision_and_reads_back(tx: &mut bikenest_test_s
     let history = repo.revision_history(id, 50).await.unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].version, 1);
-    use bikenest_domain::ChangeKind;
+    use bikesnest_domain::ChangeKind;
     assert_eq!(history[0].change_kind, ChangeKind::Create);
 
     cleanup_user(email).await;
 }
 
 #[db_test]
-async fn optimistic_edit_wins_only_on_expected_version(tx: &mut bikenest_test_support::TestTx) {
+async fn optimistic_edit_wins_only_on_expected_version(tx: &mut bikesnest_test_support::TestTx) {
     let email = "c-edit@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -159,7 +159,7 @@ async fn optimistic_edit_wins_only_on_expected_version(tx: &mut bikenest_test_su
 
 #[db_test]
 async fn write_security_upserts_all_features_and_updates_states_in_place(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let email = "c-write-security@test.dev";
     let user = fresh_user(tx, email).await;
@@ -225,8 +225,8 @@ async fn write_security_upserts_all_features_and_updates_states_in_place(
 }
 
 #[db_test]
-async fn write_hours_replaces_ranges_on_edit(tx: &mut bikenest_test_support::TestTx) {
-    use bikenest_domain::TimeRange;
+async fn write_hours_replaces_ranges_on_edit(tx: &mut bikesnest_test_support::TestTx) {
+    use bikesnest_domain::TimeRange;
     let email = "c-write-hours@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -299,7 +299,9 @@ async fn write_hours_replaces_ranges_on_edit(tx: &mut bikenest_test_support::Tes
 }
 
 #[db_test]
-async fn edit_is_refused_for_a_location_that_is_not_active(tx: &mut bikenest_test_support::TestTx) {
+async fn edit_is_refused_for_a_location_that_is_not_active(
+    tx: &mut bikesnest_test_support::TestTx,
+) {
     let email = "c-edit-inactive@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -363,7 +365,7 @@ async fn edit_is_refused_for_a_location_that_is_not_active(tx: &mut bikenest_tes
 }
 
 #[db_test]
-async fn edit_revision_snapshot_holds_the_row_after_state(tx: &mut bikenest_test_support::TestTx) {
+async fn edit_revision_snapshot_holds_the_row_after_state(tx: &mut bikesnest_test_support::TestTx) {
     let email = "c-edit-snapshot@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -421,7 +423,7 @@ async fn edit_revision_snapshot_holds_the_row_after_state(tx: &mut bikenest_test
 }
 
 #[db_test]
-async fn proposal_is_pending_with_no_live_change(tx: &mut bikenest_test_support::TestTx) {
+async fn proposal_is_pending_with_no_live_change(tx: &mut bikesnest_test_support::TestTx) {
     let email = "c-proposal@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -434,7 +436,7 @@ async fn proposal_is_pending_with_no_live_change(tx: &mut bikenest_test_support:
         location_id: id,
         proposer_id: user,
         base_version: 1,
-        kind: bikenest_domain::ProposalKind::MoveLocation,
+        kind: bikesnest_domain::ProposalKind::MoveLocation,
         proposed: serde_json::json!({"lat": -25.0, "lon": -49.0, "reason": "moved"}),
     };
     let pid = repo.create_proposal(&p).await.unwrap();
@@ -456,7 +458,7 @@ async fn proposal_is_pending_with_no_live_change(tx: &mut bikenest_test_support:
 
 #[db_test]
 async fn review_upsert_recomputes_rating_and_appends_history(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let email = "c-review@test.dev";
     let user = fresh_user(tx, email).await;
@@ -521,7 +523,7 @@ async fn review_upsert_recomputes_rating_and_appends_history(
 }
 
 #[db_test]
-async fn verification_still_exists_sets_last_verified_at(tx: &mut bikenest_test_support::TestTx) {
+async fn verification_still_exists_sets_last_verified_at(tx: &mut bikesnest_test_support::TestTx) {
     let email = "c-verify@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -611,7 +613,7 @@ async fn verification_still_exists_sets_last_verified_at(tx: &mut bikenest_test_
 }
 
 #[db_test]
-async fn review_upsert_survives_a_repeated_first_review(tx: &mut bikenest_test_support::TestTx) {
+async fn review_upsert_survives_a_repeated_first_review(tx: &mut bikesnest_test_support::TestTx) {
     let email = "c-review-upsert@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -686,7 +688,7 @@ async fn review_upsert_survives_a_repeated_first_review(tx: &mut bikenest_test_s
 }
 
 #[db_test]
-async fn review_edit_does_not_unhide_a_hidden_review(tx: &mut bikenest_test_support::TestTx) {
+async fn review_edit_does_not_unhide_a_hidden_review(tx: &mut bikesnest_test_support::TestTx) {
     let email = "c-review-hidden@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -736,7 +738,7 @@ async fn review_edit_does_not_unhide_a_hidden_review(tx: &mut bikenest_test_supp
 
 #[db_test]
 async fn for_reviews_groups_by_review_and_orders_by_position(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let email = "c-review-photos@test.dev";
     let user = fresh_user(tx, email).await;
@@ -819,7 +821,7 @@ async fn for_reviews_groups_by_review_and_orders_by_position(
 }
 
 #[db_test]
-async fn favorite_toggle_reports_the_state_it_wrote(tx: &mut bikenest_test_support::TestTx) {
+async fn favorite_toggle_reports_the_state_it_wrote(tx: &mut bikesnest_test_support::TestTx) {
     let email = "c-fav-toggle@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -859,7 +861,7 @@ async fn favorite_toggle_reports_the_state_it_wrote(tx: &mut bikenest_test_suppo
 }
 
 #[db_test]
-async fn favorite_toggle_is_idempotent(tx: &mut bikenest_test_support::TestTx) {
+async fn favorite_toggle_is_idempotent(tx: &mut bikesnest_test_support::TestTx) {
     let email = "c-fav@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);
@@ -887,7 +889,7 @@ async fn favorite_toggle_is_idempotent(tx: &mut bikenest_test_support::TestTx) {
 
 #[db_test]
 async fn favorite_list_orders_by_recency_and_pages_are_disjoint(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let email = "c-fav-recency@test.dev";
     let user = fresh_user(tx, email).await;
@@ -955,7 +957,7 @@ async fn favorite_list_orders_by_recency_and_pages_are_disjoint(
 }
 
 #[db_test]
-async fn history_reads_contributions_across_sources(tx: &mut bikenest_test_support::TestTx) {
+async fn history_reads_contributions_across_sources(tx: &mut bikesnest_test_support::TestTx) {
     let email = "c-history@test.dev";
     let user = fresh_user(tx, email).await;
     let repo = SqlxParkingContributionRepository::new(db().await);

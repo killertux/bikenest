@@ -1,4 +1,4 @@
-//! BikeNest infrastructure crate: persistence, config, ports impls.
+//! BikesNest infrastructure crate: persistence, config, ports impls.
 
 pub mod auth;
 pub mod community;
@@ -7,6 +7,7 @@ pub mod db;
 pub mod db_error;
 pub mod devdata;
 pub mod email;
+pub mod fresh_seed;
 pub mod geocoding;
 pub mod job;
 pub mod moderation;
@@ -39,6 +40,7 @@ pub use email::{
     ResendEmailProvider, SmtpEmailProvider, from_config as email_from_config,
     render as render_email,
 };
+pub use fresh_seed::{FreshSeedResetError, reset_all_data};
 pub use geocoding::{
     CachingGeocoder, FEATURED_BBOX_HALF_DEG, FEATURED_ORIGIN, FakeGeocoder, MapboxGeocoder,
     SharedGeocoder, geocoder_from_config,

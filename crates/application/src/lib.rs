@@ -1,10 +1,10 @@
-//! BikeNest application crate: use cases and ports.
+//! BikesNest application crate: use cases and ports.
 //!
 //! Depends only on the domain. Infrastructure implements the ports defined
-//! here (dependency points inward, REQUIREMENTS §3/§5).
+//! here (dependency points inward).
 
 use async_trait::async_trait;
-use bikenest_domain::DomainError;
+use bikesnest_domain::DomainError;
 
 pub mod audit;
 pub mod auth;
@@ -80,7 +80,7 @@ pub trait DatabaseProbe: Send + Sync {
 #[derive(Debug, thiserror::Error)]
 pub enum ProbeError {
     /// The dependency is unreachable / timed out (readiness must report
-    /// "dependency down", distinct from an application bug — §87).
+    /// "dependency down", distinct from an application bug — ).
     #[error("dependency unavailable")]
     Unavailable,
     /// An unexpected error on our side (maps to 5xx app error).

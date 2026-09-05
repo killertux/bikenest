@@ -6,8 +6,8 @@
 
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
-use bikenest_infrastructure::Db;
-use bikenest_test_support::{ParkingBuilder, db_test, pool, test_config};
+use bikesnest_infrastructure::Db;
+use bikesnest_test_support::{ParkingBuilder, db_test, pool, test_config};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -15,7 +15,7 @@ use tower::ServiceExt;
 /// email/geocoder, in-memory limiter, the compose MinIO for media).
 async fn test_app() -> axum::Router {
     let db = Db::from_pool(pool().await);
-    bikenest_web::app_router(std::sync::Arc::new(test_config()), db)
+    bikesnest_web::app_router(std::sync::Arc::new(test_config()), db)
         .expect("test config builds every provider")
 }
 
@@ -32,7 +32,7 @@ async fn get_headers(uri: &str) -> HeaderMap {
 async fn get(uri: &str) -> (StatusCode, String) {
     let app = test_app().await;
     // Pin the locale to English so assertions on English copy are deterministic
-    // (default resolution falls back to pt-BR — §12).
+    // (default resolution falls back to pt-BR — ).
     let res = app
         .oneshot(
             Request::builder()
@@ -68,7 +68,7 @@ async fn readyz_returns_ready_with_real_database(_tx: &mut TestTx) {
 }
 
 // ---------------------------------------------------------------------------
-// Security headers (§64/§65)
+// Security headers
 // ---------------------------------------------------------------------------
 
 #[db_test]
@@ -96,7 +96,7 @@ async fn security_headers_present_on_private_page(_tx: &mut TestTx) {
 async fn security_headers_present_when_auth_short_circuits(_tx: &mut TestTx) {
     // A state-changing request without a CSRF cookie → the auth middleware returns
     // 403 *without* running the inner handler. The security-header middleware is
-    // outermost and must still apply CSP/nosniff to that response (§64/§65).
+    // outermost and must still apply CSP/nosniff to that response.
     let app = test_app().await;
     let res = app
         .oneshot(
@@ -145,7 +145,7 @@ async fn hsts_absent_in_dev_without_tls(_tx: &mut TestTx) {
 }
 
 // ---------------------------------------------------------------------------
-// SEO / indexing (§109/§110/§111)
+// SEO / indexing (//)
 // ---------------------------------------------------------------------------
 
 #[db_test]
@@ -359,7 +359,7 @@ async fn search_renders_committed_fixture_rows_with_filters(tx: &mut TestTx) {
     ParkingBuilder::new()
         .with_fixture_tag(MARK)
         .with_name("HTTP Fixture Paid")
-        .with_cost(bikenest_domain::Cost::Paid { price: None })
+        .with_cost(bikesnest_domain::Cost::Paid { price: None })
         .at(-33.900_600, -70.600_000)
         .create(&mut *conn)
         .await
@@ -388,7 +388,7 @@ async fn search_renders_committed_fixture_rows_with_filters(tx: &mut TestTx) {
         .unwrap();
 }
 
-/// Stored-XSS regression (§103): a user-controlled `name`/`address` containing
+/// Stored-XSS regression: a user-controlled `name`/`address` containing
 /// `</script>` must not break out of the `<script type="application/json"
 /// id="search-data">` embed. The map payload escapes `<`/`>`/`&`/U+2028/U+2029
 /// so `JSON.parse` round-trips the original value but no literal `</script>`
@@ -643,7 +643,7 @@ async fn parking_details_renders_full_page_and_404_for_unknown(tx: &mut TestTx) 
     assert!(body.contains("Opening hours"));
     assert!(
         body.contains("Open in Google Maps"),
-        "external navigation (§104)"
+        "external navigation link"
     );
     assert!(body.contains("Security attributes"));
 
@@ -699,9 +699,9 @@ async fn never_verified_location_shows_the_freshness_label_once(tx: &mut TestTx)
 // M2: accounts & authentication
 // ---------------------------------------------------------------------------
 
-use bikenest_infrastructure::{FakeEmailProvider, FakeOAuthProvider};
-use bikenest_test_support::TestPasswordHasher;
-use bikenest_web::{RouterDeps, app_router_with};
+use bikesnest_infrastructure::{FakeEmailProvider, FakeOAuthProvider};
+use bikesnest_test_support::TestPasswordHasher;
+use bikesnest_web::{RouterDeps, app_router_with};
 
 fn urlencode(s: &str) -> String {
     let mut out = String::new();
@@ -729,7 +729,7 @@ async fn auth_app() -> (axum::Router, FakeEmailProvider) {
 async fn auth_app_opts(google_oauth_enabled: bool) -> (axum::Router, FakeEmailProvider) {
     let email = FakeEmailProvider::with_root(None);
     let db = Db::from_pool(pool().await);
-    let config = bikenest_infrastructure::Config {
+    let config = bikesnest_infrastructure::Config {
         google_oauth_enabled,
         ..test_config()
     };
@@ -740,8 +740,8 @@ async fn auth_app_opts(google_oauth_enabled: bool) -> (axum::Router, FakeEmailPr
             "sub-oauth-1",
         )),
         hasher: TestPasswordHasher,
-        rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
-        storage: std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
+        rate_limiter: Box::new(bikesnest_infrastructure::InMemoryRateLimiter::new()),
+        storage: std::sync::Arc::new(bikesnest_test_support::TestObjectStorage::new()),
     };
     let app = app_router_with(std::sync::Arc::new(config), db, deps);
     (app, email)
@@ -754,12 +754,12 @@ async fn auth_app_opts(google_oauth_enabled: bool) -> (axum::Router, FakeEmailPr
 async fn auth_app_with_storage() -> (
     axum::Router,
     FakeEmailProvider,
-    std::sync::Arc<bikenest_test_support::TestObjectStorage>,
+    std::sync::Arc<bikesnest_test_support::TestObjectStorage>,
 ) {
     let email = FakeEmailProvider::with_root(None);
     let db = Db::from_pool(pool().await);
     let config = test_config();
-    let storage = std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new());
+    let storage = std::sync::Arc::new(bikesnest_test_support::TestObjectStorage::new());
     let deps = RouterDeps {
         email: std::sync::Arc::new(email.clone()),
         oauth: Some(FakeOAuthProvider::new(
@@ -767,7 +767,7 @@ async fn auth_app_with_storage() -> (
             "sub-oauth-1",
         )),
         hasher: TestPasswordHasher,
-        rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
+        rate_limiter: Box::new(bikesnest_infrastructure::InMemoryRateLimiter::new()),
         storage: storage.clone(),
     };
     let app = app_router_with(std::sync::Arc::new(config), db, deps);
@@ -918,7 +918,7 @@ async fn post_form_h(
 }
 
 #[db_test]
-async fn register_verify_login_account_logout(tx: &mut bikenest_test_support::TestTx) {
+async fn register_verify_login_account_logout(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "flow@example.com";
     cleanup_user(EMAIL).await;
@@ -998,7 +998,7 @@ async fn register_verify_login_account_logout(tx: &mut bikenest_test_support::Te
 }
 
 #[db_test]
-async fn resend_verification_from_account_page_succeeds(tx: &mut bikenest_test_support::TestTx) {
+async fn resend_verification_from_account_page_succeeds(tx: &mut bikesnest_test_support::TestTx) {
     let (app, _email) = auth_app().await;
     const EMAIL: &str = "resend-account@example.com";
     let cookie = unverified_cookie(&app, EMAIL).await;
@@ -1032,7 +1032,7 @@ async fn resend_verification_from_account_page_succeeds(tx: &mut bikenest_test_s
 }
 
 #[db_test]
-async fn privacy_public_pages_gating_and_export_flow(tx: &mut bikenest_test_support::TestTx) {
+async fn privacy_public_pages_gating_and_export_flow(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "privacy-web@example.com";
     cleanup_user(EMAIL).await;
@@ -1046,7 +1046,7 @@ async fn privacy_public_pages_gating_and_export_flow(tx: &mut bikenest_test_supp
     let (s, _) = get_c(&app, "/cookies", None).await;
     assert_eq!(s, StatusCode::OK);
 
-    // §71: the sign-up form links the terms + privacy policy next to the button.
+    // : the sign-up form links the terms + privacy policy next to the button.
     let (s, body) = get_c(&app, "/register", None).await;
     assert_eq!(s, StatusCode::OK);
     assert!(
@@ -1228,7 +1228,7 @@ async fn cleanup_user(email: &str) {
 
 #[db_test]
 async fn login_failure_body_is_identical_for_unknown_and_existing(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let (app, _) = auth_app().await;
     cleanup_user("known@example.com").await;
@@ -1260,7 +1260,7 @@ async fn login_failure_body_is_identical_for_unknown_and_existing(
         "generic message"
     );
     assert!(b_unknown.contains("Email or password is incorrect"));
-    // No-account-existence leakage (§45): neither response echoes the submitted
+    // No-account-existence leakage: neither response echoes the submitted
     // email, so an attacker learns nothing from the body. (The pages differ only
     // by the per-request CSRF token, which is unrelated to account existence.)
     assert!(!b_known.contains("known@example.com"));
@@ -1270,7 +1270,7 @@ async fn login_failure_body_is_identical_for_unknown_and_existing(
 }
 
 #[db_test]
-async fn admin_users_denied_for_anonymous_and_non_admin(tx: &mut bikenest_test_support::TestTx) {
+async fn admin_users_denied_for_anonymous_and_non_admin(tx: &mut bikesnest_test_support::TestTx) {
     let (app, _) = auth_app().await;
     cleanup_user("admin-user@example.com").await;
 
@@ -1309,7 +1309,7 @@ async fn admin_users_denied_for_anonymous_and_non_admin(tx: &mut bikenest_test_s
 }
 
 #[db_test]
-async fn admin_can_grant_role_and_audit_is_written(tx: &mut bikenest_test_support::TestTx) {
+async fn admin_can_grant_role_and_audit_is_written(tx: &mut bikesnest_test_support::TestTx) {
     let (app, _) = auth_app().await;
     cleanup_user("root@example.com").await;
     cleanup_user("target@example.com").await;
@@ -1350,7 +1350,7 @@ async fn admin_can_grant_role_and_audit_is_written(tx: &mut bikenest_test_suppor
             .unwrap();
     // Granting ADMIN changes a system-wide set that the last-admin guard reads,
     // and other test binaries assert on it. Claim the shared lock first.
-    bikenest_test_support::hold_admin_set_lock_for_process(&pool().await).await;
+    bikesnest_test_support::hold_admin_set_lock_for_process(&pool().await).await;
     sqlx::query("INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, 'ADMIN', NULL)")
         .bind(root_id)
         .execute(&pool().await)
@@ -1402,7 +1402,7 @@ fn extract_csrf(html: &str) -> String {
 }
 
 #[db_test]
-async fn csrf_required_on_authenticated_post(tx: &mut bikenest_test_support::TestTx) {
+async fn csrf_required_on_authenticated_post(tx: &mut bikesnest_test_support::TestTx) {
     let (app, _) = auth_app().await;
     cleanup_user("csrf@example.com").await;
     post_form(
@@ -1443,7 +1443,7 @@ async fn csrf_required_on_authenticated_post(tx: &mut bikenest_test_support::Tes
 
 #[db_test]
 async fn suspended_account_is_blocked_at_login_with_generic_error(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let (app, _) = auth_app().await;
     cleanup_user("suspend@example.com").await;
@@ -1482,10 +1482,10 @@ async fn suspended_account_is_blocked_at_login_with_generic_error(
 }
 
 #[db_test]
-async fn anonymous_post_without_csrf_cookie_is_forbidden(tx: &mut bikenest_test_support::TestTx) {
+async fn anonymous_post_without_csrf_cookie_is_forbidden(tx: &mut bikesnest_test_support::TestTx) {
     let (app, _) = auth_app().await;
     // A POST with no `csrf` cookie (here the session cookie alone) is rejected on
-    // the anonymous path (§108) — SameSite=Lax alone is not treated as CSRF-safe.
+    // the anonymous path — SameSite=Lax alone is not treated as CSRF-safe.
     let (s, _, _) = post_form(
         &app,
         "/login",
@@ -1502,7 +1502,7 @@ async fn anonymous_post_without_csrf_cookie_is_forbidden(tx: &mut bikenest_test_
 }
 
 #[db_test]
-async fn csrf_header_path_is_accepted(tx: &mut bikenest_test_support::TestTx) {
+async fn csrf_header_path_is_accepted(tx: &mut bikesnest_test_support::TestTx) {
     let (app, _) = auth_app().await;
     cleanup_user("hdr@example.com").await;
     post_form(
@@ -1648,7 +1648,7 @@ async fn unverified_cookie(app: &axum::Router, addr: &str) -> String {
 
 async fn verified_cookie(
     app: &axum::Router,
-    email: &bikenest_infrastructure::FakeEmailProvider,
+    email: &bikesnest_infrastructure::FakeEmailProvider,
     addr: &str,
 ) -> String {
     cleanup_user_contributions(addr).await;
@@ -1674,7 +1674,7 @@ async fn verified_cookie(
 }
 
 #[db_test]
-async fn community_routes_redirect_anonymous(tx: &mut bikenest_test_support::TestTx) {
+async fn community_routes_redirect_anonymous(tx: &mut bikesnest_test_support::TestTx) {
     let (app, _) = auth_app().await;
     for uri in [
         "/parking/new",
@@ -1693,7 +1693,7 @@ async fn community_routes_redirect_anonymous(tx: &mut bikenest_test_support::Tes
 }
 
 #[db_test]
-async fn add_location_requires_verified(tx: &mut bikenest_test_support::TestTx) {
+async fn add_location_requires_verified(tx: &mut bikesnest_test_support::TestTx) {
     let (app, _) = auth_app().await;
     let cookie = unverified_cookie(&app, "unverified-contrib@example.com").await;
     let (s, _) = get_c(&app, "/parking/new", Some(&cookie)).await;
@@ -1721,7 +1721,7 @@ async fn add_location_requires_verified(tx: &mut bikenest_test_support::TestTx) 
 }
 
 #[db_test]
-async fn verified_user_adds_a_location_and_sees_details(tx: &mut bikenest_test_support::TestTx) {
+async fn verified_user_adds_a_location_and_sees_details(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "contrib-add@example.com";
     let cookie = verified_cookie(&app, &email, EMAIL).await;
@@ -1778,7 +1778,7 @@ async fn verified_user_adds_a_location_and_sees_details(tx: &mut bikenest_test_s
 
 #[db_test]
 async fn favorite_toggle_and_list_work_for_authenticated_user(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     const MARK: &str = "fix-http-fav";
     sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
@@ -1834,7 +1834,7 @@ async fn favorite_toggle_and_list_work_for_authenticated_user(
 }
 
 // ---------------------------------------------------------------------------
-// M3: added coverage (plan §9) — edit prefill/data-loss, revision in C5,
+// Added coverage — edit prefill/data-loss, revision in C5,
 // pin-move→PENDING, review aggregate, rate-limit→429, identity absence.
 // ---------------------------------------------------------------------------
 
@@ -1884,7 +1884,7 @@ async fn add_location(
 }
 
 #[db_test]
-async fn edit_preserves_cost_security_and_hours(tx: &mut bikenest_test_support::TestTx) {
+async fn edit_preserves_cost_security_and_hours(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "edit-prefill@example.com";
     let cookie = verified_cookie(&app, &email, EMAIL).await;
@@ -1981,7 +1981,7 @@ async fn edit_preserves_cost_security_and_hours(tx: &mut bikenest_test_support::
 }
 
 #[db_test]
-async fn edit_writes_revision_visible_in_contributions(tx: &mut bikenest_test_support::TestTx) {
+async fn edit_writes_revision_visible_in_contributions(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "edit-c5@example.com";
     let cookie = verified_cookie(&app, &email, EMAIL).await;
@@ -2026,7 +2026,7 @@ async fn edit_writes_revision_visible_in_contributions(tx: &mut bikenest_test_su
 }
 
 #[db_test]
-async fn proposing_a_move_creates_pending_proposal(tx: &mut bikenest_test_support::TestTx) {
+async fn proposing_a_move_creates_pending_proposal(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "proposal@example.com";
     let cookie = verified_cookie(&app, &email, EMAIL).await;
@@ -2081,7 +2081,7 @@ async fn proposing_a_move_creates_pending_proposal(tx: &mut bikenest_test_suppor
 }
 
 #[db_test]
-async fn review_create_updates_aggregate(tx: &mut bikenest_test_support::TestTx) {
+async fn review_create_updates_aggregate(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "review-agg@example.com";
     let cookie = verified_cookie(&app, &email, EMAIL).await;
@@ -2091,7 +2091,7 @@ async fn review_create_updates_aggregate(tx: &mut bikenest_test_support::TestTx)
 
     let (_, review_form) = get_c(&app, &format!("/parking/{id}/review"), Some(&cookie)).await;
     let rcsrf = extract_csrf(&review_form);
-    let rbody = multipart_review("4", "Great rack", "----bikenestphoto");
+    let rbody = multipart_review("4", "Great rack", "----bikesnestphoto");
     let (s, _) = post_multipart(
         &app,
         &format!("/parking/{id}/review"),
@@ -2123,14 +2123,14 @@ async fn review_create_updates_aggregate(tx: &mut bikenest_test_support::TestTx)
 }
 
 #[db_test]
-async fn parking_create_is_rate_limited(tx: &mut bikenest_test_support::TestTx) {
+async fn parking_create_is_rate_limited(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "ratelimit@example.com";
     let cookie = verified_cookie(&app, &email, EMAIL).await;
     let (_, form) = get_c(&app, "/parking/new", Some(&cookie)).await;
     let csrf = extract_csrf(&form);
 
-    // parking-create: 5/day per user (Ledger #6). Post 5, then the 6th → 429.
+    // parking-create: 5/day per user. Post 5, then the 6th → 429.
     // Each add carries `confirm=1`, so the pre-create duplicate interstitial
     // never stands in for the redirect (or for the 429).
     for i in 0..5 {
@@ -2179,7 +2179,7 @@ async fn parking_create_is_rate_limited(tx: &mut bikenest_test_support::TestTx) 
 }
 
 #[db_test]
-async fn no_identity_leak_in_rendered_html(tx: &mut bikenest_test_support::TestTx) {
+async fn no_identity_leak_in_rendered_html(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "identity@example.com";
     let cookie = verified_cookie(&app, &email, EMAIL).await;
@@ -2215,7 +2215,7 @@ async fn no_identity_leak_in_rendered_html(tx: &mut bikenest_test_support::TestT
 }
 
 #[db_test]
-async fn multiple_security_values_and_major_unit_price(tx: &mut bikenest_test_support::TestTx) {
+async fn multiple_security_values_and_major_unit_price(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "multi-sec@example.com";
     const MARK: &str = "fix-http-multisec";
@@ -2301,14 +2301,14 @@ async fn multiple_security_values_and_major_unit_price(tx: &mut bikenest_test_su
 }
 
 // ---------------------------------------------------------------------------
-// M4 photos — upload → queue → moderate → publish (§30/§44/§80)
+// M4 photos — upload → queue → moderate → publish (//)
 // ---------------------------------------------------------------------------
 
 /// The origin `TestObjectStorage::presigned_get` signs every URL under (see
-/// `bikenest_infrastructure::TEST_MEDIA_ORIGIN`) — the same origin
+/// `bikesnest_infrastructure::TEST_MEDIA_ORIGIN`) — the same origin
 /// `Config::for_tests` puts in `security.media_hosts`, so a gallery `<img
 /// src>` found here and the CSP's `img-src` allowlist agree by construction.
-const MEDIA_ORIGIN: &str = bikenest_infrastructure::TEST_MEDIA_ORIGIN;
+const MEDIA_ORIGIN: &str = bikesnest_infrastructure::TEST_MEDIA_ORIGIN;
 
 fn tiny_jpeg() -> Vec<u8> {
     let img = image::RgbImage::from_pixel(32, 32, image::Rgb([20, 40, 60]));
@@ -2390,7 +2390,7 @@ async fn post_multipart_h(
         .header("Accept-Language", "en")
         .header(
             "content-type",
-            "multipart/form-data; boundary=----bikenestphoto",
+            "multipart/form-data; boundary=----bikesnestphoto",
         )
         .header("cookie", cookie);
     for (k, v) in extra_headers {
@@ -2440,7 +2440,7 @@ fn has_exif_marker(bytes: &[u8]) -> bool {
 }
 
 /// A committed fixture location (no photos) for photo tests.
-async fn fixture_location(tx: &mut bikenest_test_support::TestTx, mark: &str, name: &str) -> i64 {
+async fn fixture_location(tx: &mut bikesnest_test_support::TestTx, mark: &str, name: &str) -> i64 {
     sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
         .bind(mark)
         .execute(&pool().await)
@@ -2458,7 +2458,7 @@ async fn fixture_location(tx: &mut bikenest_test_support::TestTx, mark: &str, na
 
 async fn moderator_cookie(
     app: &axum::Router,
-    email: &bikenest_infrastructure::FakeEmailProvider,
+    email: &bikesnest_infrastructure::FakeEmailProvider,
     addr: &str,
 ) -> String {
     cleanup_user_contributions(addr).await;
@@ -2493,7 +2493,7 @@ async fn moderator_cookie(
 }
 
 #[db_test]
-async fn photo_upload_requires_verified(tx: &mut bikenest_test_support::TestTx) {
+async fn photo_upload_requires_verified(tx: &mut bikesnest_test_support::TestTx) {
     let (app, _) = auth_app().await;
     let loc = fixture_location(tx, "photo-verify-gate", "Photo Verify Gate").await;
     let cookie = unverified_cookie(&app, "photo-unverified@example.com").await;
@@ -2501,7 +2501,7 @@ async fn photo_upload_requires_verified(tx: &mut bikenest_test_support::TestTx) 
     assert_eq!(s, StatusCode::OK);
     let csrf = extract_csrf(&page);
 
-    let (ctype, body) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
+    let (ctype, body) = multipart_upload(&tiny_jpeg(), None, "----bikesnestphoto");
     let _ = ctype;
     let (s, _) = post_multipart_hx(
         &app,
@@ -2521,13 +2521,13 @@ async fn photo_upload_requires_verified(tx: &mut bikenest_test_support::TestTx) 
 }
 
 #[db_test]
-async fn photo_upload_missing_csrf_header_is_forbidden(tx: &mut bikenest_test_support::TestTx) {
+async fn photo_upload_missing_csrf_header_is_forbidden(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     let loc = fixture_location(tx, "photo-csrf-gate", "Photo Csrf Gate").await;
     let cookie = verified_cookie(&app, &email, "photo-csrf@example.com").await;
     // No X-CSRF-Token header on a multipart POST → the middleware cannot read a
     // body csrf field and rejects with 403.
-    let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
+    let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikesnestphoto");
     let (s, _) = post_multipart(&app, &format!("/parking/{loc}/photo"), body, &cookie, None).await;
     assert_eq!(
         s,
@@ -2543,7 +2543,7 @@ async fn photo_upload_missing_csrf_header_is_forbidden(tx: &mut bikenest_test_su
 }
 
 #[db_test]
-async fn verified_upload_enters_queue_not_gallery(tx: &mut bikenest_test_support::TestTx) {
+async fn verified_upload_enters_queue_not_gallery(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     let loc = fixture_location(tx, "photo-queue-gate", "Photo Queue Gate").await;
     let cookie = verified_cookie(&app, &email, "photo-uploader@example.com").await;
@@ -2551,7 +2551,7 @@ async fn verified_upload_enters_queue_not_gallery(tx: &mut bikenest_test_support
     assert_eq!(s, StatusCode::OK);
     let csrf = extract_csrf(&page);
 
-    let (_, body) = multipart_upload(&tiny_jpeg(), Some("A first photo"), "----bikenestphoto");
+    let (_, body) = multipart_upload(&tiny_jpeg(), Some("A first photo"), "----bikesnestphoto");
     let (s, _) = post_multipart_hx(
         &app,
         &format!("/parking/{loc}/photo"),
@@ -2589,7 +2589,7 @@ async fn verified_upload_enters_queue_not_gallery(tx: &mut bikenest_test_support
 }
 
 #[db_test]
-async fn moderation_routes_require_moderator_role(tx: &mut bikenest_test_support::TestTx) {
+async fn moderation_routes_require_moderator_role(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     // Anonymous is redirected to login (require_role → require_user → redirect).
     let (s, _) = get_c(&app, "/moderation/photos", None).await;
@@ -2615,13 +2615,13 @@ async fn moderation_routes_require_moderator_role(tx: &mut bikenest_test_support
 }
 
 #[db_test]
-async fn moderator_approve_publishes_to_gallery(tx: &mut bikenest_test_support::TestTx) {
+async fn moderator_approve_publishes_to_gallery(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     let loc = fixture_location(tx, "photo-approve", "Photo Approve").await;
     let uploader = verified_cookie(&app, &email, "photo-approve-up@example.com").await;
     let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
     let csrf = extract_csrf(&page);
-    let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
+    let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikesnestphoto");
     post_multipart(
         &app,
         &format!("/parking/{loc}/photo"),
@@ -2674,13 +2674,13 @@ async fn moderator_approve_publishes_to_gallery(tx: &mut bikenest_test_support::
 }
 
 #[db_test]
-async fn moderator_reject_deletes_object_and_hides(tx: &mut bikenest_test_support::TestTx) {
+async fn moderator_reject_deletes_object_and_hides(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email, storage) = auth_app_with_storage().await;
     let loc = fixture_location(tx, "photo-reject", "Photo Reject").await;
     let uploader = verified_cookie(&app, &email, "photo-reject-up@example.com").await;
     let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
     let csrf = extract_csrf(&page);
-    let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
+    let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikesnestphoto");
     post_multipart(
         &app,
         &format!("/parking/{loc}/photo"),
@@ -2737,14 +2737,14 @@ async fn moderator_reject_deletes_object_and_hides(tx: &mut bikenest_test_suppor
 }
 
 #[db_test]
-async fn moderation_queue_hides_uploader_identity(tx: &mut bikenest_test_support::TestTx) {
+async fn moderation_queue_hides_uploader_identity(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     let loc = fixture_location(tx, "photo-ident", "Photo Identity").await;
     const EMAIL: &str = "photo-ident-up@example.com";
     let uploader = verified_cookie(&app, &email, EMAIL).await;
     let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
     let csrf = extract_csrf(&page);
-    let (_, body) = multipart_upload(&tiny_jpeg(), Some("ident photo"), "----bikenestphoto");
+    let (_, body) = multipart_upload(&tiny_jpeg(), Some("ident photo"), "----bikesnestphoto");
     post_multipart_hx(
         &app,
         &format!("/parking/{loc}/photo"),
@@ -2757,7 +2757,7 @@ async fn moderation_queue_hides_uploader_identity(tx: &mut bikenest_test_support
     let mod_cookie = moderator_cookie(&app, &email, "photo-ident-mod@example.com").await;
     let (s, queue) = get_c(&app, "/moderation/photos", Some(&mod_cookie)).await;
     assert_eq!(s, StatusCode::OK);
-    // "Contributor #id" is shown; the uploader's email / OAuth subject is not (§80).
+    // "Contributor #id" is shown; the uploader's email / OAuth subject is not.
     assert!(
         queue.contains("Contributor"),
         "queue anonymizes the uploader"
@@ -2774,13 +2774,13 @@ async fn moderation_queue_hides_uploader_identity(tx: &mut bikenest_test_support
 }
 
 #[db_test]
-async fn served_derivative_has_no_exif(tx: &mut bikenest_test_support::TestTx) {
+async fn served_derivative_has_no_exif(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email, storage) = auth_app_with_storage().await;
     let loc = fixture_location(tx, "photo-exif", "Photo Exif").await;
     let uploader = verified_cookie(&app, &email, "photo-exif-up@example.com").await;
     let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
     let csrf = extract_csrf(&page);
-    let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
+    let (_, body) = multipart_upload(&tiny_jpeg(), None, "----bikesnestphoto");
     post_multipart_hx(
         &app,
         &format!("/parking/{loc}/photo"),
@@ -2838,7 +2838,7 @@ async fn served_derivative_has_no_exif(tx: &mut bikenest_test_support::TestTx) {
 }
 
 #[db_test]
-async fn photo_upload_is_rate_limited(tx: &mut bikenest_test_support::TestTx) {
+async fn photo_upload_is_rate_limited(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     let loc = fixture_location(tx, "photo-rl", "Photo Rate Limit").await;
     let cookie = verified_cookie(&app, &email, "photo-rl-up@example.com").await;
@@ -2846,7 +2846,7 @@ async fn photo_upload_is_rate_limited(tx: &mut bikenest_test_support::TestTx) {
     let csrf = extract_csrf(&page);
     let jpeg = tiny_jpeg();
     for _ in 0..10 {
-        let (_, body) = multipart_upload(&jpeg, None, "----bikenestphoto");
+        let (_, body) = multipart_upload(&jpeg, None, "----bikesnestphoto");
         let (s, _) = post_multipart_hx(
             &app,
             &format!("/parking/{loc}/photo"),
@@ -2857,7 +2857,7 @@ async fn photo_upload_is_rate_limited(tx: &mut bikenest_test_support::TestTx) {
         .await;
         assert_eq!(s, StatusCode::OK, "day-1 upload allowed: {s}");
     }
-    let (_, body) = multipart_upload(&jpeg, None, "----bikenestphoto");
+    let (_, body) = multipart_upload(&jpeg, None, "----bikesnestphoto");
     let (s, _) = post_multipart_hx(
         &app,
         &format!("/parking/{loc}/photo"),
@@ -2881,7 +2881,7 @@ async fn photo_upload_is_rate_limited(tx: &mut bikenest_test_support::TestTx) {
 
 async fn admin_cookie(
     app: &axum::Router,
-    email: &bikenest_infrastructure::FakeEmailProvider,
+    email: &bikesnest_infrastructure::FakeEmailProvider,
     addr: &str,
 ) -> String {
     cleanup_user_contributions(addr).await;
@@ -2903,7 +2903,7 @@ async fn admin_cookie(
         .unwrap();
     // See the note in `hold_admin_set_lock_for_process`: the ADMIN set is
     // shared with the tests that assert on "never zero admins".
-    bikenest_test_support::hold_admin_set_lock_for_process(&pool().await).await;
+    bikesnest_test_support::hold_admin_set_lock_for_process(&pool().await).await;
     sqlx::query(
         "INSERT INTO user_roles (user_id, role, granted_by) VALUES ($1, 'ADMIN', NULL) ON CONFLICT DO NOTHING",
     )
@@ -2919,7 +2919,7 @@ async fn admin_cookie(
 }
 
 #[db_test]
-async fn admin_can_access_moderation_queue(tx: &mut bikenest_test_support::TestTx) {
+async fn admin_can_access_moderation_queue(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     let admin = admin_cookie(&app, &email, "photo-admin@example.com").await;
     let (s, body) = get_c(&app, "/moderation/photos", Some(&admin)).await;
@@ -2943,7 +2943,7 @@ async fn admin_can_access_moderation_queue(tx: &mut bikenest_test_support::TestT
 /// `queue_counts_on_reflects_an_exact_delta_race_free`, which takes both
 /// reads on one isolated connection instead.
 #[db_test]
-async fn moderation_dashboard_renders_four_numeric_tiles(tx: &mut bikenest_test_support::TestTx) {
+async fn moderation_dashboard_renders_four_numeric_tiles(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     let moderator = moderator_cookie(&app, &email, "dash-tiles-mod@example.com").await;
 
@@ -2980,7 +2980,7 @@ async fn moderation_dashboard_renders_four_numeric_tiles(tx: &mut bikenest_test_
 /// control; a fixture of `limit + 1` rows guarantees the first page is full.
 #[db_test]
 async fn moderation_reports_queue_shows_load_more_when_full(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let (app, email) = auth_app().await;
     let moderator = moderator_cookie(&app, &email, "reports-more-mod@example.com").await;
@@ -3029,14 +3029,14 @@ async fn moderation_reports_queue_shows_load_more_when_full(
 }
 
 #[db_test]
-async fn photo_upload_alt_too_long_is_bad_request(tx: &mut bikenest_test_support::TestTx) {
+async fn photo_upload_alt_too_long_is_bad_request(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     let loc = fixture_location(tx, "photo-alt-long", "Photo Alt Long").await;
     let cookie = verified_cookie(&app, &email, "photo-alt-long-up@example.com").await;
     let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&cookie)).await;
     let csrf = extract_csrf(&page);
     let long_alt = "a".repeat(501);
-    let (_, body) = multipart_upload(&tiny_jpeg(), Some(&long_alt), "----bikenestphoto");
+    let (_, body) = multipart_upload(&tiny_jpeg(), Some(&long_alt), "----bikesnestphoto");
     let (s, _) = post_multipart_hx(
         &app,
         &format!("/parking/{loc}/photo"),
@@ -3079,7 +3079,9 @@ async fn last_report_id(reporter_email: &str, target_type: &str, target_id: i64)
 }
 
 #[db_test]
-async fn report_review_flow_claim_resolve_hides_and_audits(tx: &mut bikenest_test_support::TestTx) {
+async fn report_review_flow_claim_resolve_hides_and_audits(
+    tx: &mut bikesnest_test_support::TestTx,
+) {
     let (app, email) = auth_app().await;
     const UPLOADER: &str = "m5-up@example.com";
     const REPORTER: &str = "m5-reporter@example.com";
@@ -3090,7 +3092,7 @@ async fn report_review_flow_claim_resolve_hides_and_audits(tx: &mut bikenest_tes
     let uploader = verified_cookie(&app, &email, UPLOADER).await;
     let (_, rev_form) = get_c(&app, &format!("/parking/{loc}/review"), Some(&uploader)).await;
     let rcsrf = extract_csrf(&rev_form);
-    let rbody = multipart_review("5", "Great secured rack", "----bikenestphoto");
+    let rbody = multipart_review("5", "Great secured rack", "----bikesnestphoto");
     let (s, _) = post_multipart(
         &app,
         &format!("/parking/{loc}/review"),
@@ -3212,7 +3214,7 @@ async fn report_review_flow_claim_resolve_hides_and_audits(tx: &mut bikenest_tes
 }
 
 #[db_test]
-async fn moderator_cannot_resolve_own_report(tx: &mut bikenest_test_support::TestTx) {
+async fn moderator_cannot_resolve_own_report(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const MOD: &str = "m5-selfmod@example.com";
     let loc = fixture_location(tx, "m5-self-loc", "M5 Self Loc").await;
@@ -3279,7 +3281,7 @@ async fn moderator_cannot_resolve_own_report(tx: &mut bikenest_test_support::Tes
 
 #[db_test]
 async fn invalidate_parking_public_404_moderator_banner_and_restore(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let (app, email) = auth_app().await;
     const MOD: &str = "m5-inv-mod@example.com";
@@ -3342,7 +3344,9 @@ async fn invalidate_parking_public_404_moderator_banner_and_restore(
 }
 
 #[db_test]
-async fn admin_suspend_revokes_sessions_blocks_and_restore(tx: &mut bikenest_test_support::TestTx) {
+async fn admin_suspend_revokes_sessions_blocks_and_restore(
+    tx: &mut bikesnest_test_support::TestTx,
+) {
     let (app, email) = auth_app().await;
     const USER: &str = "m5-suspend@example.com";
     const ADMIN: &str = "m5-admin@example.com";
@@ -3438,7 +3442,7 @@ async fn admin_suspend_revokes_sessions_blocks_and_restore(tx: &mut bikenest_tes
 }
 
 #[db_test]
-async fn moderation_and_audit_routes_are_gated(tx: &mut bikenest_test_support::TestTx) {
+async fn moderation_and_audit_routes_are_gated(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     // Anonymous → redirected to login.
     for uri in [
@@ -3476,7 +3480,7 @@ async fn moderation_and_audit_routes_are_gated(tx: &mut bikenest_test_support::T
 }
 
 #[db_test]
-async fn d3_review_photos_held_pending_until_approved(tx: &mut bikenest_test_support::TestTx) {
+async fn d3_review_photos_held_pending_until_approved(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const AUTHOR: &str = "m5-review-photo@example.com";
     let loc = fixture_location(tx, "m5-rp-loc", "M5 Review Photo Loc").await;
@@ -3488,12 +3492,12 @@ async fn d3_review_photos_held_pending_until_approved(tx: &mut bikenest_test_sup
     let jpeg = tiny_jpeg();
     let mut body = Vec::new();
     body.extend_from_slice(
-        b"------bikenestphoto\r\nContent-Disposition: form-data; name=\"rating\"\r\n\r\n4\r\n",
+        b"------bikesnestphoto\r\nContent-Disposition: form-data; name=\"rating\"\r\n\r\n4\r\n",
     );
-    body.extend_from_slice(b"------bikenestphoto\r\nContent-Disposition: form-data; name=\"body\"\r\n\r\nNice locker\r\n");
-    body.extend_from_slice(b"------bikenestphoto\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"r.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n");
+    body.extend_from_slice(b"------bikesnestphoto\r\nContent-Disposition: form-data; name=\"body\"\r\n\r\nNice locker\r\n");
+    body.extend_from_slice(b"------bikesnestphoto\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"r.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n");
     body.extend_from_slice(&jpeg);
-    body.extend_from_slice(b"\r\n------bikenestphoto--\r\n");
+    body.extend_from_slice(b"\r\n------bikesnestphoto--\r\n");
     let (s, _) = post_multipart(
         &app,
         &format!("/parking/{loc}/review"),
@@ -3535,7 +3539,7 @@ async fn d3_review_photos_held_pending_until_approved(tx: &mut bikenest_test_sup
 }
 
 #[db_test]
-async fn approved_review_photo_renders_on_p3(tx: &mut bikenest_test_support::TestTx) {
+async fn approved_review_photo_renders_on_p3(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const AUTHOR: &str = "m5-rp-render@example.com";
     const MOD: &str = "m5-rp-mod@example.com";
@@ -3548,12 +3552,12 @@ async fn approved_review_photo_renders_on_p3(tx: &mut bikenest_test_support::Tes
     let jpeg = tiny_jpeg();
     let mut body = Vec::new();
     body.extend_from_slice(
-        b"------bikenestphoto\r\nContent-Disposition: form-data; name=\"rating\"\r\n\r\n5\r\n",
+        b"------bikesnestphoto\r\nContent-Disposition: form-data; name=\"rating\"\r\n\r\n5\r\n",
     );
-    body.extend_from_slice(b"------bikenestphoto\r\nContent-Disposition: form-data; name=\"body\"\r\n\r\nGreat locker\r\n");
-    body.extend_from_slice(b"------bikenestphoto\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"r.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n");
+    body.extend_from_slice(b"------bikesnestphoto\r\nContent-Disposition: form-data; name=\"body\"\r\n\r\nGreat locker\r\n");
+    body.extend_from_slice(b"------bikesnestphoto\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"r.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n");
     body.extend_from_slice(&jpeg);
-    body.extend_from_slice(b"\r\n------bikenestphoto--\r\n");
+    body.extend_from_slice(b"\r\n------bikesnestphoto--\r\n");
     let (s, _) = post_multipart(
         &app,
         &format!("/parking/{loc}/review"),
@@ -3750,7 +3754,7 @@ fn route_handlers_never_reach_for_infrastructure() {
     ];
     const FORBIDDEN: &[&str] = &["Sqlx", "sqlx::", "S3ObjectStorage", "Db::", "db.pool()"];
 
-    let infra = regex::Regex::new(r"bikenest_infrastructure::\{?([A-Za-z_0-9]+)").unwrap();
+    let infra = regex::Regex::new(r"bikesnest_infrastructure::\{?([A-Za-z_0-9]+)").unwrap();
     let mut offenders = Vec::new();
     for (path, contents) in web_sources() {
         if !path.components().any(|c| c.as_os_str() == "routes") {
@@ -3766,7 +3770,7 @@ fn route_handlers_never_reach_for_infrastructure() {
                 let name = caps.get(1).unwrap().as_str();
                 if !ALLOWED_INFRA_TYPES.contains(&name) {
                     offenders.push(format!(
-                        "{}:{}: bikenest_infrastructure::{name}",
+                        "{}:{}: bikesnest_infrastructure::{name}",
                         path.display(),
                         n + 1
                     ));
@@ -3900,7 +3904,7 @@ async fn a_spoofed_forwarded_for_cannot_dodge_the_rate_limit(_tx: &mut TestTx) {
 #[db_test]
 async fn a_trusted_proxys_forwarded_for_does_key_the_bucket(_tx: &mut TestTx) {
     let db = Db::from_pool(pool().await);
-    let config = bikenest_infrastructure::Config {
+    let config = bikesnest_infrastructure::Config {
         trusted_proxy_hops: 1,
         ..test_config()
     };
@@ -3911,8 +3915,8 @@ async fn a_trusted_proxys_forwarded_for_does_key_the_bucket(_tx: &mut TestTx) {
             email: std::sync::Arc::new(FakeEmailProvider::with_root(None)),
             oauth: None,
             hasher: TestPasswordHasher,
-            rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
-            storage: std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
+            rate_limiter: Box::new(bikesnest_infrastructure::InMemoryRateLimiter::new()),
+            storage: std::sync::Arc::new(bikesnest_test_support::TestObjectStorage::new()),
         },
     );
 
@@ -3940,7 +3944,7 @@ async fn a_trusted_proxys_forwarded_for_does_key_the_bucket(_tx: &mut TestTx) {
 /// exception: a private bookmark is not a contribution.
 #[db_test]
 async fn contribution_routes_refuse_a_location_that_is_not_active(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "wp8-not-active@example.com";
@@ -4011,7 +4015,7 @@ async fn contribution_routes_refuse_a_location_that_is_not_active(
         let (s, body) = post_multipart(
             &app,
             &format!("/parking/{id}/review"),
-            multipart_review("5", "still great", "----bikenestphoto"),
+            multipart_review("5", "still great", "----bikesnestphoto"),
             &cookie,
             Some(&csrf),
         )
@@ -4087,7 +4091,7 @@ async fn location_write_state(
 
 /// A second identical report is not a new signal — it is the same complaint.
 #[db_test]
-async fn duplicate_report_is_refused_with_a_conflict(tx: &mut bikenest_test_support::TestTx) {
+async fn duplicate_report_is_refused_with_a_conflict(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "wp8-dupe-reporter@example.com";
     let cookie = verified_cookie(&app, &email, EMAIL).await;
@@ -4270,7 +4274,7 @@ async fn html_pages_vary_by_locale_and_session(_tx: &mut TestTx) {
 
 #[db_test]
 async fn p3_fragment_endpoints_redirect_a_whole_document_request(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "wp10-p3@example.com";
@@ -4359,7 +4363,7 @@ async fn p3_fragment_endpoints_redirect_a_whole_document_request(
     let (_, body) = post_multipart(
         &app,
         &format!("/parking/{id}/photo?csrf={csrf}"),
-        multipart_upload(&tiny_jpeg(), None, "----bikenestphoto").1,
+        multipart_upload(&tiny_jpeg(), None, "----bikesnestphoto").1,
         &cookie,
         None,
     )
@@ -4377,7 +4381,7 @@ async fn p3_fragment_endpoints_redirect_a_whole_document_request(
 
 #[db_test]
 async fn p3_fragment_endpoints_send_a_no_js_caller_to_the_page(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "wp10-p3-loc@example.com";
@@ -4448,7 +4452,7 @@ async fn p3_fragment_endpoints_send_a_no_js_caller_to_the_page(
 
 #[db_test]
 async fn moderation_fragment_endpoints_redirect_to_their_queue(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let (app, email) = auth_app().await;
     const UPLOADER: &str = "wp10-uploader@example.com";
@@ -4461,7 +4465,7 @@ async fn moderation_fragment_endpoints_redirect_to_their_queue(
     let (s, _) = post_multipart_hx(
         &app,
         &format!("/parking/{loc}/photo"),
-        multipart_upload(&tiny_jpeg(), None, "----bikenestphoto").1,
+        multipart_upload(&tiny_jpeg(), None, "----bikesnestphoto").1,
         &uploader,
         Some(&ucsrf),
     )
@@ -4676,7 +4680,7 @@ async fn anonymous_page_request_carries_its_own_path_as_next(_tx: &mut TestTx) {
 // --- `next` after login -----------------------------------------------------
 
 #[db_test]
-async fn login_honours_a_local_next(tx: &mut bikenest_test_support::TestTx) {
+async fn login_honours_a_local_next(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "wp10-next@example.com";
     let _ = verified_cookie(&app, &email, EMAIL).await;
@@ -4712,7 +4716,7 @@ async fn login_honours_a_local_next(tx: &mut bikenest_test_support::TestTx) {
 }
 
 #[db_test]
-async fn login_refuses_an_off_site_next(tx: &mut bikenest_test_support::TestTx) {
+async fn login_refuses_an_off_site_next(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "wp10-next-evil@example.com";
     let _ = verified_cookie(&app, &email, EMAIL).await;
@@ -4781,7 +4785,9 @@ async fn head_requests_are_safe_and_not_csrf_checked(_tx: &mut TestTx) {
 }
 
 #[db_test]
-async fn multipart_review_accepts_the_token_from_the_query(tx: &mut bikenest_test_support::TestTx) {
+async fn multipart_review_accepts_the_token_from_the_query(
+    tx: &mut bikesnest_test_support::TestTx,
+) {
     // The middleware must not drain a multipart body (the handler's `Multipart`
     // extractor needs it), so the form carries the token on its action.
     let (app, email) = auth_app().await;
@@ -4794,7 +4800,7 @@ async fn multipart_review_accepts_the_token_from_the_query(tx: &mut bikenest_tes
     let (s, _) = post_multipart(
         &app,
         &format!("/parking/{loc}/review?csrf={csrf}"),
-        multipart_review("4", "Query-string token, no header.", "----bikenestphoto"),
+        multipart_review("4", "Query-string token, no header.", "----bikesnestphoto"),
         &cookie,
         None,
     )
@@ -4806,7 +4812,7 @@ async fn multipart_review_accepts_the_token_from_the_query(tx: &mut bikenest_tes
 
 #[db_test]
 async fn multipart_review_without_any_token_is_the_styled_error_page(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "wp10-review-nocsrf@example.com";
@@ -4816,7 +4822,7 @@ async fn multipart_review_without_any_token_is_the_styled_error_page(
     let (s, body) = post_multipart(
         &app,
         &format!("/parking/{loc}/review"),
-        multipart_review("4", "No token anywhere.", "----bikenestphoto"),
+        multipart_review("4", "No token anywhere.", "----bikesnestphoto"),
         &cookie,
         None,
     )
@@ -4831,7 +4837,7 @@ async fn multipart_review_without_any_token_is_the_styled_error_page(
 
 #[db_test]
 async fn an_axum_rejection_is_rendered_as_the_styled_error_page(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     // A urlencoded body to a multipart endpoint: axum's `Multipart` rejects it
     // with plain English text, which used to reach the user verbatim.
@@ -4927,17 +4933,17 @@ fn the_search_map_is_built_lazily_and_resized_on_reveal() {
     // A map built inside a hidden panel measures 0×0 and renders blank.
     assert!(js.contains("resize("), "the map is resized: {js}");
     assert!(
-        js.contains("bikenest:map-toggle"),
+        js.contains("bikesnest:map-toggle"),
         "the reveal is announced"
     );
     assert!(
         js.contains("ResizeObserver"),
         "belt and braces for the reveal"
     );
-    assert!(js.contains("bikenest:map-moved"), "moves offer a new area");
+    assert!(js.contains("bikesnest:map-moved"), "moves offer a new area");
     let app = read_static("js/app.js");
     assert!(
-        app.contains("bikenest:map-toggle") && app.contains("bikenest:map-moved"),
+        app.contains("bikesnest:map-toggle") && app.contains("bikesnest:map-moved"),
         "the Alpine side of both events: {app}"
     );
     assert!(
@@ -5098,7 +5104,7 @@ async fn a_404_for_a_boosted_request_is_the_styled_page(_tx: &mut TestTx) {
 
 #[db_test]
 async fn a_missing_parking_page_answers_in_the_requests_shape(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     // `parking_details` used to emit a whole document for every caller.
     let app = test_app().await;
@@ -5190,7 +5196,7 @@ async fn anonymous_login_page_header_has_no_signed_in_links(_tx: &mut TestTx) {
 
 #[db_test]
 async fn signed_in_user_sees_account_links_on_policy_and_error_pages(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let (app, email) = auth_app().await;
     let cookie = verified_cookie(&app, &email, "wp12-header-privacy@example.com").await;
@@ -5226,7 +5232,7 @@ async fn signed_in_user_sees_account_links_on_policy_and_error_pages(
 }
 
 #[db_test]
-async fn header_shows_moderation_and_admin_links_by_role(tx: &mut bikenest_test_support::TestTx) {
+async fn header_shows_moderation_and_admin_links_by_role(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
 
     let moderator = moderator_cookie(&app, &email, "wp12-header-mod@example.com").await;
@@ -5270,7 +5276,7 @@ async fn header_shows_moderation_and_admin_links_by_role(tx: &mut bikenest_test_
 
 #[db_test]
 async fn add_spot_entry_points_are_gated_by_verification_status(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     const MARK: &str = "wp12-add-spot-cta";
     const Q: &str = "/search?q=Rua%20XV%20de%20Novembro";
@@ -5381,7 +5387,7 @@ async fn about_page_links_entry_points_and_uses_present_tense_copy(_tx: &mut Tes
 }
 
 #[db_test]
-async fn moderation_dashboard_tiles_have_distinct_titles(tx: &mut bikenest_test_support::TestTx) {
+async fn moderation_dashboard_tiles_have_distinct_titles(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     let admin = admin_cookie(&app, &email, "wp12-mod-tiles@example.com").await;
     let (s, body) = get_c(&app, "/moderation", Some(&admin)).await;
@@ -5395,7 +5401,7 @@ async fn moderation_dashboard_tiles_have_distinct_titles(tx: &mut bikenest_test_
 
 #[db_test]
 async fn contributions_history_labels_parked_here_distinct_from_verified(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     const MARK: &str = "wp12-parked-here";
     sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")
@@ -5452,7 +5458,7 @@ async fn contributions_history_labels_parked_here_distinct_from_verified(
 // ---------------------------------------------------------------------------
 
 /// Insert a PENDING proposal directly, the way M3 wrote them: a JSONB payload
-/// whose shape the typed [`bikenest_domain::ProposedChange`] has to keep
+/// whose shape the typed [`bikesnest_domain::ProposedChange`] has to keep
 /// reading unchanged.
 async fn seed_proposal(
     location_id: i64,
@@ -5487,7 +5493,7 @@ async fn user_id_for(email: &str) -> i64 {
 
 #[db_test]
 async fn wp13_proposal_queue_prefills_the_move_and_links_the_location(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     const MOD: &str = "wp13-prop-mod@example.com";
     const PROPOSER: &str = "wp13-prop-author@example.com";
@@ -5596,7 +5602,7 @@ async fn wp13_proposal_queue_prefills_the_move_and_links_the_location(
 
 #[db_test]
 async fn wp13_proposal_queue_flags_stale_and_unreadable_proposals(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     const MOD: &str = "wp13-stale-mod@example.com";
     let (app, email) = auth_app().await;
@@ -5692,7 +5698,7 @@ async fn wp13_proposal_queue_flags_stale_and_unreadable_proposals(
 }
 
 #[db_test]
-async fn wp13_report_queue_previews_and_links_its_targets(tx: &mut bikenest_test_support::TestTx) {
+async fn wp13_report_queue_previews_and_links_its_targets(tx: &mut bikesnest_test_support::TestTx) {
     const MOD: &str = "wp13-rep-mod@example.com";
     const AUTHOR: &str = "wp13-rep-author@example.com";
     let (app, email) = auth_app().await;
@@ -5810,7 +5816,7 @@ async fn wp13_report_queue_previews_and_links_its_targets(tx: &mut bikenest_test
 
 #[db_test]
 async fn wp13_photo_queue_refuses_to_approve_an_image_it_cannot_show(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     const MOD: &str = "wp13-photo-mod@example.com";
     const UPLOADER: &str = "wp13-photo-up@example.com";
@@ -5878,7 +5884,9 @@ async fn wp13_photo_queue_refuses_to_approve_an_image_it_cannot_show(
 }
 
 #[db_test]
-async fn wp13_audit_log_shows_exact_times_and_named_actors(tx: &mut bikenest_test_support::TestTx) {
+async fn wp13_audit_log_shows_exact_times_and_named_actors(
+    tx: &mut bikesnest_test_support::TestTx,
+) {
     const ADMIN: &str = "wp13-audit-admin@example.com";
     let (app, email) = auth_app().await;
     let admin = admin_cookie(&app, &email, ADMIN).await;
@@ -5951,7 +5959,7 @@ async fn wp13_audit_log_shows_exact_times_and_named_actors(tx: &mut bikenest_tes
     );
 
     let _ = tx;
-    let mut audit_tx = bikenest_test_support::audit_mutation_tx(&pool().await).await;
+    let mut audit_tx = bikesnest_test_support::audit_mutation_tx(&pool().await).await;
     sqlx::query("DELETE FROM audit_events WHERE action = 'wp13.audit.probe'")
         .execute(&mut *audit_tx)
         .await
@@ -5986,7 +5994,7 @@ fn regex_lite_date(html: &str) -> Option<&str> {
 
 #[db_test]
 async fn wp13_privacy_queue_shows_the_subject_and_what_they_asked(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     const ADMIN: &str = "wp13-priv-admin@example.com";
     const SUBJECT: &str = "wp13-priv-subject@example.com";
@@ -6043,7 +6051,7 @@ async fn wp13_privacy_queue_shows_the_subject_and_what_they_asked(
 }
 
 #[db_test]
-async fn wp13_admin_user_list_searches_masks_and_confirms(tx: &mut bikenest_test_support::TestTx) {
+async fn wp13_admin_user_list_searches_masks_and_confirms(tx: &mut bikesnest_test_support::TestTx) {
     const ADMIN: &str = "wp13-users-admin@example.com";
     const NEEDLE: &str = "wp13-findme@example.com";
     const OTHER: &str = "wp13-other@example.com";
@@ -6459,7 +6467,7 @@ async fn the_verification_email_is_written_in_the_signup_language(_tx: &mut Test
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(
         mail.subject_for_kind("verify").as_deref(),
-        Some("Confirme seu e-mail no BikeNest"),
+        Some("Confirme seu e-mail no BikesNest"),
         "a pt-BR signup must be greeted in Portuguese"
     );
     assert_eq!(stored_locale(PT).await, "pt-BR");
@@ -6472,7 +6480,7 @@ async fn the_verification_email_is_written_in_the_signup_language(_tx: &mut Test
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(
         mail_en.subject_for_kind("verify").as_deref(),
-        Some("Confirm your BikeNest email")
+        Some("Confirm your BikesNest email")
     );
     assert_eq!(stored_locale(EN).await, "en");
     cleanup_user(EN).await;
@@ -6548,8 +6556,8 @@ async fn the_language_toggle_persists_for_a_signed_in_user(_tx: &mut TestTx) {
     assert_eq!(
         subjects,
         vec![
-            "Confirme seu e-mail no BikeNest".to_string(),
-            "Confirm your BikeNest email".to_string()
+            "Confirme seu e-mail no BikesNest".to_string(),
+            "Confirm your BikesNest email".to_string()
         ],
         "the signup mail stays Portuguese; the one after the toggle is English"
     );
@@ -6563,12 +6571,12 @@ async fn the_language_toggle_persists_for_a_signed_in_user(_tx: &mut TestTx) {
 /// message.
 #[db_test]
 async fn with_the_worker_enabled_registration_queues_the_email(_tx: &mut TestTx) {
-    use bikenest_infrastructure::{JobConfig, SendEmailHandler};
+    use bikesnest_infrastructure::{JobConfig, SendEmailHandler};
 
     const EMAIL: &str = "locale-queued@example.com";
     let mail = FakeEmailProvider::with_root(None);
     let db = Db::from_pool(pool().await);
-    let config = bikenest_infrastructure::Config {
+    let config = bikesnest_infrastructure::Config {
         jobs: JobConfig {
             enabled: true,
             ..JobConfig::default()
@@ -6582,8 +6590,8 @@ async fn with_the_worker_enabled_registration_queues_the_email(_tx: &mut TestTx)
             email: std::sync::Arc::new(mail.clone()),
             oauth: None,
             hasher: TestPasswordHasher,
-            rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
-            storage: std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
+            rate_limiter: Box::new(bikesnest_infrastructure::InMemoryRateLimiter::new()),
+            storage: std::sync::Arc::new(bikesnest_test_support::TestObjectStorage::new()),
         },
     );
     cleanup_user(EMAIL).await;
@@ -6607,7 +6615,7 @@ async fn with_the_worker_enabled_registration_queues_the_email(_tx: &mut TestTx)
     assert_eq!(payload["kind"], "verify_email");
 
     // Drain it the way the worker would.
-    bikenest_application::JobHandler::run(
+    bikesnest_application::JobHandler::run(
         &SendEmailHandler::new(std::sync::Arc::new(mail.clone())),
         &payload,
     )
@@ -6615,7 +6623,7 @@ async fn with_the_worker_enabled_registration_queues_the_email(_tx: &mut TestTx)
     .expect("the handler delivers the queued message");
     assert_eq!(
         mail.subject_for_kind("verify").as_deref(),
-        Some("Confirme seu e-mail no BikeNest")
+        Some("Confirme seu e-mail no BikesNest")
     );
 
     sqlx::query("DELETE FROM background_job WHERE id = $1")
@@ -6635,14 +6643,14 @@ async fn with_the_worker_enabled_registration_queues_the_email(_tx: &mut TestTx)
 /// made through this instance shares one bucket (`ClientIp` resolves to a
 /// single test peer when there is no `ConnectInfo`).
 async fn app_with_geocode_budget(per_ip: u32) -> axum::Router {
-    let config = bikenest_infrastructure::Config {
-        geocode: bikenest_infrastructure::GeocodeLimits {
+    let config = bikesnest_infrastructure::Config {
+        geocode: bikesnest_infrastructure::GeocodeLimits {
             per_ip,
             window: std::time::Duration::from_secs(900),
         },
         ..test_config()
     };
-    bikenest_web::app_router(std::sync::Arc::new(config), Db::from_pool(pool().await))
+    bikesnest_web::app_router(std::sync::Arc::new(config), Db::from_pool(pool().await))
         .expect("test config builds every provider")
 }
 
@@ -6650,8 +6658,8 @@ async fn app_with_geocode_budget(per_ip: u32) -> axum::Router {
 /// and verify a session against the same limiter bucket.
 async fn auth_app_with_geocode_budget(per_ip: u32) -> (axum::Router, FakeEmailProvider) {
     let email = FakeEmailProvider::with_root(None);
-    let config = bikenest_infrastructure::Config {
-        geocode: bikenest_infrastructure::GeocodeLimits {
+    let config = bikesnest_infrastructure::Config {
+        geocode: bikesnest_infrastructure::GeocodeLimits {
             per_ip,
             window: std::time::Duration::from_secs(900),
         },
@@ -6661,8 +6669,8 @@ async fn auth_app_with_geocode_budget(per_ip: u32) -> (axum::Router, FakeEmailPr
         email: std::sync::Arc::new(email.clone()),
         oauth: None,
         hasher: TestPasswordHasher,
-        rate_limiter: Box::new(bikenest_infrastructure::InMemoryRateLimiter::new()),
-        storage: std::sync::Arc::new(bikenest_test_support::TestObjectStorage::new()),
+        rate_limiter: Box::new(bikesnest_infrastructure::InMemoryRateLimiter::new()),
+        storage: std::sync::Arc::new(bikesnest_test_support::TestObjectStorage::new()),
     };
     (
         app_router_with(
@@ -7170,7 +7178,7 @@ fn opening_tag_containing<'a>(body: &'a str, marker: &str) -> &'a str {
 }
 
 #[db_test]
-async fn login_wrong_password_banner_is_an_alert(tx: &mut bikenest_test_support::TestTx) {
+async fn login_wrong_password_banner_is_an_alert(tx: &mut bikesnest_test_support::TestTx) {
     let (app, _) = auth_app().await;
     const EMAIL: &str = "wp21-login-alert@example.com";
     cleanup_user(EMAIL).await;
@@ -7221,7 +7229,7 @@ async fn login_wrong_password_banner_is_an_alert(tx: &mut bikenest_test_support:
 /// `AuthError::EmailTaken` is defined but `AuthService::register` never
 /// returns it: a taken email is deliberately answered exactly like a fresh
 /// one (`Ok(())`, no mail sent) so the response cannot be used to enumerate
-/// registered addresses (§45 — see the comment in
+/// registered addresses ( — see the comment in
 /// `crates/application/src/auth.rs`'s `register`). `register_field_error`'s
 /// `EmailTaken => Some("email")` arm therefore has no live producer through
 /// this form; the same field association is exercised here through
@@ -7229,7 +7237,7 @@ async fn login_wrong_password_banner_is_an_alert(tx: &mut bikenest_test_support:
 /// malformed address fails `UserEmail::parse` before any lookup).
 #[db_test]
 async fn register_with_an_invalid_email_flags_the_email_field(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let (app, _email) = auth_app().await;
     let (s, body, _) = post_form(
@@ -7257,7 +7265,7 @@ async fn register_with_an_invalid_email_flags_the_email_field(
 
 #[db_test]
 async fn parking_new_bad_currency_code_flags_the_price_field(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     // `cost_from_form` never rejects an unparsable numeric amount — a price
     // that fails to parse just falls back to "paid, amount unknown" — so the
@@ -7311,7 +7319,7 @@ async fn parking_new_bad_currency_code_flags_the_price_field(
 }
 
 #[db_test]
-async fn review_with_an_empty_body_flags_the_body_field(tx: &mut bikenest_test_support::TestTx) {
+async fn review_with_an_empty_body_flags_the_body_field(tx: &mut bikesnest_test_support::TestTx) {
     let (app, email) = auth_app().await;
     const EMAIL: &str = "wp21-review-body@example.com";
     let cookie = verified_cookie(&app, &email, EMAIL).await;
@@ -7321,7 +7329,7 @@ async fn review_with_an_empty_body_flags_the_body_field(tx: &mut bikenest_test_s
 
     let (_, review_form) = get_c(&app, &format!("/parking/{id}/review"), Some(&cookie)).await;
     let rcsrf = extract_csrf(&review_form);
-    let rbody = multipart_review("4", "", "----bikenestphoto");
+    let rbody = multipart_review("4", "", "----bikesnestphoto");
     let (s, body) = post_multipart(
         &app,
         &format!("/parking/{id}/review"),
@@ -7348,7 +7356,7 @@ async fn review_with_an_empty_body_flags_the_body_field(tx: &mut bikenest_test_s
 
 #[db_test]
 async fn parking_details_dialogs_and_swap_targets_are_accessible(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     let (app, email) = auth_app().await;
     let loc = fixture_location(tx, "wp21-dialogs", "WP21 Dialogs Spot").await;
@@ -7359,7 +7367,7 @@ async fn parking_details_dialogs_and_swap_targets_are_accessible(
     // A photo, approved, so the gallery — and the lightbox it feeds — renders.
     let (_, page) = get_c(&app, &format!("/parking/{loc}"), Some(&uploader)).await;
     let csrf = extract_csrf(&page);
-    let (_, mbody) = multipart_upload(&tiny_jpeg(), None, "----bikenestphoto");
+    let (_, mbody) = multipart_upload(&tiny_jpeg(), None, "----bikesnestphoto");
     post_multipart(
         &app,
         &format!("/parking/{loc}/photo"),
@@ -7438,7 +7446,7 @@ async fn parking_details_dialogs_and_swap_targets_are_accessible(
 
 #[db_test]
 async fn search_results_list_has_no_script_child_and_listitems_are_direct_children(
-    tx: &mut bikenest_test_support::TestTx,
+    tx: &mut bikesnest_test_support::TestTx,
 ) {
     const MARK: &str = "wp21-search-list";
     sqlx::query("DELETE FROM parking_location WHERE seed_key = $1")

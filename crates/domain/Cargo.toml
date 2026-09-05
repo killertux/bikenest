@@ -1,5 +1,5 @@
 [package]
-name = "bikenest-domain"
+name = "bikesnest-domain"
 version.workspace = true
 edition.workspace = true
 
